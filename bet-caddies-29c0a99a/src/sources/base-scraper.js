@@ -1,6 +1,6 @@
 import axios from 'axios'
 import * as cheerio from 'cheerio'
-import { logger } from '../../observability/logger.js'
+import { logger } from '../observability/logger.js'
 
 export class BaseScraper {
   constructor(userAgent = process.env.USER_AGENT) {
