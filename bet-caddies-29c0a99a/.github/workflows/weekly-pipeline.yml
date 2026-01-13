@@ -1,0 +1,47 @@
+name: Weekly Pipeline
+
+on:
+  schedule:
+    # Run every Monday at 06:00 UTC (which is 07:00 BST during BST, 06:00 GMT during GMT)
+    - cron: '0 6 * * 1'
+  workflow_dispatch: # Allow manual runs
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Generate Prisma client
+      run: npx prisma generate
+
+    - name: Run database migrations
+      run: npx prisma db push
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    - name: Run weekly pipeline
+      run: npm run pipeline:weekly
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+        LOG_LEVEL: info
+
+    - name: Upload pipeline logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: pipeline-logs
+        path: logs/
+        retention-days: 30

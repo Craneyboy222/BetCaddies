@@ -1,0 +1,256 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Run {
+  id            String   @id @default(cuid())
+  runKey        String   @unique
+  weekStart     DateTime
+  weekEnd       DateTime
+  status        String   // 'pending', 'running', 'completed', 'failed'
+  createdAt     DateTime @default(now())
+  completedAt   DateTime?
+
+  // Relations
+  tourEvents         TourEvent[]
+  fieldEntries       FieldEntry[]
+  weatherForecasts   WeatherForecast[]
+  leaderboardSnapshots LeaderboardSnapshot[]
+  oddsEvents         OddsEvent[]
+  betRecommendations BetRecommendation[]
+  dataIssues         DataIssue[]
+
+  @@map("runs")
+}
+
+model TourEvent {
+  id          String   @id @default(cuid())
+  runId       String
+  tour        String   // 'PGA', 'DPWT', 'LPGA', 'LIV', 'KFT'
+  eventName   String
+  startDate   DateTime
+  endDate     DateTime
+  location    String
+  courseName  String
+  courseLat   Float?
+  courseLng   Float?
+  sourceUrls  Json     // JSON array of source URLs
+  createdAt   DateTime @default(now())
+
+  // Relations
+  run         Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  fieldEntries FieldEntry[]
+  teeTimes    TeeTime[]
+  weatherForecasts WeatherForecast[]
+  leaderboardSnapshots LeaderboardSnapshot[]
+  oddsEvents  OddsEvent[]
+  predictions Prediction[]
+  betRecommendations BetRecommendation[]
+
+  @@unique([runId, tour])
+  @@map("tour_events")
+}
+
+model Player {
+  id            String   @id @default(cuid())
+  canonicalName String   @unique
+  aliases       Json     // JSON array of string aliases
+  country       String?
+  tourIds       Json     // JSON array of tour IDs
+  createdAt     DateTime @default(now())
+
+  // Relations
+  fieldEntries FieldEntry[]
+  teeTimes     TeeTime[]
+  predictions  Prediction[]
+
+  @@map("players")
+}
+
+model FieldEntry {
+  id          String   @id @default(cuid())
+  runId       String
+  tourEventId String
+  playerId    String
+  status      String   // 'active', 'withdrawn', 'unknown'
+  createdAt   DateTime @default(now())
+
+  // Relations
+  run         Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  tourEvent   TourEvent @relation(fields: [tourEventId], references: [id], onDelete: Cascade)
+  player      Player    @relation(fields: [playerId], references: [id])
+
+  @@unique([tourEventId, playerId])
+  @@map("field_entries")
+}
+
+model TeeTime {
+  id          String   @id @default(cuid())
+  tourEventId String
+  round       Int
+  playerId    String?
+  teeTimeUtc  DateTime
+  tee         String
+  groupMeta   Json     // JSON object with group information
+  createdAt   DateTime @default(now())
+
+  // Relations
+  tourEvent   TourEvent @relation(fields: [tourEventId], references: [id], onDelete: Cascade)
+  player      Player?   @relation(fields: [playerId], references: [id])
+
+  @@map("tee_times")
+}
+
+model Course {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  lat         Float?
+  lng         Float?
+  par         Int?
+  yardage     Int?
+  typeTags    Json     // JSON array of course type tags
+  notes       String?
+  sources     Json     // JSON object with source information
+  createdAt   DateTime @default(now())
+
+  @@map("courses")
+}
+
+model WeatherForecast {
+  id            String   @id @default(cuid())
+  runId         String
+  tourEventId   String
+  forecastJson  Json     // JSON object with weather data
+  provider      String
+  fetchedAt     DateTime @default(now())
+
+  // Relations
+  run           Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  tourEvent     TourEvent @relation(fields: [tourEventId], references: [id], onDelete: Cascade)
+
+  @@map("weather_forecasts")
+}
+
+model LeaderboardSnapshot {
+  id          String   @id @default(cuid())
+  runId       String
+  tourEventId String
+  round       Int
+  leaderboardJson Json  // JSON object with leaderboard data
+  fetchedAt   DateTime @default(now())
+
+  // Relations
+  run         Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  tourEvent   TourEvent @relation(fields: [tourEventId], references: [id], onDelete: Cascade)
+
+  @@map("leaderboard_snapshots")
+}
+
+model OddsEvent {
+  id              String   @id @default(cuid())
+  runId           String
+  tourEventId     String
+  oddsProvider    String   // 'the_odds_api'
+  externalEventId String
+  raw             Json     // Raw API response
+  fetchedAt       DateTime @default(now())
+
+  // Relations
+  run             Run         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  tourEvent       TourEvent   @relation(fields: [tourEventId], references: [id], onDelete: Cascade)
+  oddsMarkets     OddsMarket[]
+
+  @@map("odds_events")
+}
+
+model OddsMarket {
+  id          String   @id @default(cuid())
+  oddsEventId String
+  marketKey   String   // 'outright_winner', 'top_5', etc.
+  raw         Json     // Raw market data
+  fetchedAt   DateTime @default(now())
+
+  // Relations
+  oddsEvent   OddsEvent @relation(fields: [oddsEventId], references: [id], onDelete: Cascade)
+  oddsOffers  OddsOffer[]
+
+  @@map("odds_markets")
+}
+
+model OddsOffer {
+  id            String   @id @default(cuid())
+  oddsMarketId  String
+  selectionName String
+  bookmaker     String
+  oddsDecimal   Float
+  oddsDisplay   String
+  deepLink      String?
+  fetchedAt     DateTime @default(now())
+
+  // Relations
+  oddsMarket    OddsMarket @relation(fields: [oddsMarketId], references: [id], onDelete: Cascade)
+
+  @@unique([oddsMarketId, selectionName, bookmaker])
+  @@map("odds_offers")
+}
+
+model Prediction {
+  id            String   @id @default(cuid())
+  tourEventId   String
+  playerId      String
+  probsJson     Json     // JSON object with probability data
+  modelVersion  String
+  createdAt     DateTime @default(now())
+
+  // Relations
+  tourEvent     TourEvent @relation(fields: [tourEventId], references: [id], onDelete: Cascade)
+  player        Player    @relation(fields: [playerId], references: [id])
+
+  @@map("predictions")
+}
+
+model BetRecommendation {
+  id                String   @id @default(cuid())
+  runId             String
+  tier              String   // 'PAR', 'BIRDIE', 'EAGLE'
+  tourEventId       String
+  marketKey         String
+  selection         String   // Player name or outcome
+  confidence1To5    Int
+  bestBookmaker     String
+  bestOdds          Float
+  altOffersJson     Json     // JSON array of alternative offers (exactly 5)
+  analysisParagraph String
+  analysisBullets   Json     // JSON array of bullet points
+  createdAt         DateTime @default(now())
+
+  // Relations
+  run               Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  tourEvent         TourEvent @relation(fields: [tourEventId], references: [id], onDelete: Cascade)
+
+  @@map("bet_recommendations")
+}
+
+model DataIssue {
+  id          String   @id @default(cuid())
+  runId       String
+  tour        String?
+  severity    String   // 'info', 'warning', 'error'
+  step        String
+  message     String
+  evidenceJson Json?   // JSON object with evidence data
+  createdAt   DateTime @default(now())
+
+  // Relations
+  run         Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@map("data_issues")
+}
