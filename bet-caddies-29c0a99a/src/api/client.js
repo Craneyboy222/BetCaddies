@@ -1,31 +1,35 @@
 // Frontend API client for BetCaddies
-// This would normally connect to a backend API, but for now uses mock data
+// Connects to Railway backend API
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://bet-caddies-29c0a99a-production.up.railway.app'
 
 export class BetCaddiesApi {
   constructor() {
     this.client = {
       get: async (endpoint) => {
-        // Mock implementation - in production this would fetch from backend
-        return this.getMockData(endpoint)
+        const url = `${API_BASE_URL}${endpoint}`
+        const response = await fetch(url)
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+        return await response.json()
       }
     }
   }
 
   async getLatestBets() {
-    const response = await this.client.get('/bets/latest')
-    return response.data
+    const response = await this.client.get('/api/bets/latest')
+    return response.data || response
   }
 
   async getBetsByTier(tier) {
-    const response = await this.client.get(`/bets/tier/${tier}`)
-    return response.data
+    const response = await this.client.get(`/api/bets/tier/${tier}`)
+    return response.data || response
   }
 
   async getTournaments() {
-    const response = await this.client.get('/tournaments')
-    return response.data
+    const response = await this.client.get('/api/tournaments')
+    return response.data || response
   }
 
   // Mock data for development
