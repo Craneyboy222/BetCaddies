@@ -119,10 +119,19 @@ export class BetCaddiesApi {
 
   functions = {
     invoke: async (functionName, params) => {
-      // Mock function invocation for now
+      console.log(`API function invoked: ${functionName}`, params)
+      
       if (functionName === 'weeklyResearchPipeline') {
-        return { success: true, message: 'Pipeline started successfully' }
+        try {
+          const response = await this.client.post('/api/pipeline/run', params || {})
+          console.log('Pipeline response:', response.data)
+          return response.data
+        } catch (error) {
+          console.error('Pipeline execution failed:', error)
+          throw error
+        }
       }
+      
       return { success: false, message: 'Function not implemented' }
     }
   }

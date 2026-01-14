@@ -2,6 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
+import { WeeklyPipeline } from '../pipeline/weekly-pipeline.js'
 
 const app = express()
 const PORT = process.env.PORT || 3000
@@ -263,6 +264,34 @@ app.get('/api/entities/membership-packages', async (req, res) => {
   } catch (error) {
     logger.error('Error fetching membership packages:', error)
     res.status(500).json({ error: 'Failed to fetch membership packages' })
+  }
+})
+
+// Pipeline endpoint
+app.post('/api/pipeline/run', async (req, res) => {
+  try {
+    logger.info('Pipeline run requested', { params: req.body })
+    const dryRun = req.body?.dryRun || false
+    
+    // Create the pipeline instance and run it
+    const pipeline = new WeeklyPipeline()
+    const runKey = pipeline.generateRunKey()
+    
+    // Start the pipeline asynchronously to avoid timeout
+    // We will return immediately while pipeline runs in the background
+    pipeline.run(runKey).catch(err => {
+      logger.error('Pipeline execution failed', { error: err.message, runKey })
+    })
+    
+    res.json({ 
+      success: true, 
+      message: 'Pipeline started successfully', 
+      runKey,
+      dryRun
+    })
+  } catch (error) {
+    logger.error('Failed to start pipeline', { error: error.message })
+    res.status(500).json({ error: 'Failed to start pipeline: ' + error.message })
   }
 })
 
