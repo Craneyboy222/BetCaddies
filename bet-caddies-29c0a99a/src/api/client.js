@@ -8,11 +8,15 @@ export class BetCaddiesApi {
     this.client = {
       get: async (endpoint) => {
         const url = `${API_BASE_URL}${endpoint}`
+        console.log('API: Fetching', url)
         const response = await fetch(url)
+        console.log('API: Response status:', response.status)
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`)
         }
-        return await response.json()
+        const data = await response.json()
+        console.log('API: Response data:', data)
+        return data
       }
     }
   }
@@ -35,7 +39,9 @@ export class BetCaddiesApi {
   // Admin API methods
   auth = {
     me: async () => {
+      console.log('API: Calling auth.me')
       const response = await this.client.get('/api/auth/me')
+      console.log('API: auth.me response:', response)
       return response
     },
     redirectToLogin: () => {

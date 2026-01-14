@@ -56,14 +56,20 @@ export default function Admin() {
 
   useEffect(() => {
     const loadUser = async () => {
+      console.log('Loading admin user...')
       try {
+        console.log('Calling api.auth.me()...')
         const userData = await api.auth.me();
+        console.log('Auth response:', userData)
         if (userData.role !== 'admin') {
+          console.log('User is not admin, redirecting to home')
           window.location.href = '/';
           return;
         }
+        console.log('Setting user data:', userData)
         setUser(userData);
       } catch (e) {
+        console.error('Auth error:', e)
         api.auth.redirectToLogin();
       }
     };
