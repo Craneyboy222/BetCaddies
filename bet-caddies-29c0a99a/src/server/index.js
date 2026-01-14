@@ -1,5 +1,6 @@
 import express from 'express'
 import cors from 'cors'
+import fs from 'fs';
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
 
@@ -11,8 +12,8 @@ try {
   WeeklyPipeline = pipelineModule.WeeklyPipeline;
   console.log('WeeklyPipeline loaded successfully');
 } catch (error) {
-  console.error('Failed to load WeeklyPipeline:', error.message);
-  if (logger && logger.error) logger.error('Failed to load WeeklyPipeline', { error: error.message });
+  console.error('Failed to load WeeklyPipeline:', error);
+  if (logger && logger.error) logger.error('Failed to load WeeklyPipeline', { error });
 }
 
 const app = express()
@@ -397,8 +398,8 @@ try {
     logger.info(`BetCaddies API server running on port ${PORT}`);
     console.log(`BetCaddies API server running on port ${PORT}`);
     console.log('cwd:', process.cwd());
-    console.log('Dist exists:', require('fs').existsSync(path.join(__dirname, '../../dist')));
-    console.log('Index.html exists:', require('fs').existsSync(path.join(__dirname, '../../dist/index.html')));
+    console.log('Dist exists:', fs.existsSync(path.join(__dirname, '../../dist')));
+    console.log('Index.html exists:', fs.existsSync(path.join(__dirname, '../../dist/index.html')));
   });
 } catch (error) {
   logger.error('Failed to start server', { error: error.message });
