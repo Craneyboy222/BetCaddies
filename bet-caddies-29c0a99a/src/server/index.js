@@ -393,17 +393,16 @@ process.on('unhandledRejection', (reason, promise) => {
 })
 
 // Start server with robust error handling
+const HOST = process.env.HOST || '0.0.0.0';
 try {
-  app.listen(PORT, () => {
-    logger.info(`BetCaddies API server running on port ${PORT}`);
-    console.log(`BetCaddies API server running on port ${PORT}`);
+  app.listen(PORT, HOST, () => {
+    logger.info(`BetCaddies API server running on http://${HOST}:${PORT}`);
+    console.log(`BetCaddies API server running on http://${HOST}:${PORT}`);
     console.log('cwd:', process.cwd());
-    console.log('Dist exists:', fs.existsSync(path.join(__dirname, '../../dist')));
-    console.log('Index.html exists:', fs.existsSync(path.join(__dirname, '../../dist/index.html')));
+    // For Railway: You may remove "dist exists" checks if not needed
   });
 } catch (error) {
   logger.error('Failed to start server', { error: error.message });
   console.error('Failed to start server:', error);
-  // Exit with error code to trigger container restart
   process.exit(1);
 }
