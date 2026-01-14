@@ -2,7 +2,17 @@ import express from 'express'
 import cors from 'cors'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
-import { WeeklyPipeline } from '../pipeline/weekly-pipeline.js'
+
+// Import WeeklyPipeline with error handling
+let WeeklyPipeline = null
+try {
+  const pipelineModule = await import('../pipeline/weekly-pipeline.js')
+  WeeklyPipeline = pipelineModule.WeeklyPipeline
+  console.log('WeeklyPipeline loaded successfully')
+} catch (error) {
+  console.error('Failed to load WeeklyPipeline:', error.message)
+  logger.error('Failed to load WeeklyPipeline', { error: error.message })
+}
 
 const app = express()
 const PORT = process.env.PORT || 3000
@@ -11,9 +21,21 @@ const PORT = process.env.PORT || 3000
 app.use(cors())
 app.use(express.json())
 
-// Health check
+// Track server status
+const serverStatus = {
+  isHealthy: true,
+  startTime: new Date().toISOString(),
+  errors: []
+};
+
+// Health check - independent of database connection
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+  // Always return a 200 response for Railway healthchecks
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: `${Math.floor((Date.now() - new Date(serverStatus.startTime).getTime()) / 1000)}s`
+  });
 })
 
 // Get latest bets
@@ -273,9 +295,19 @@ app.post('/api/pipeline/run', async (req, res) => {
     logger.info('Pipeline run requested', { params: req.body })
     const dryRun = req.body?.dryRun || false
     
+    // Check if WeeklyPipeline was successfully loaded
+    if (!WeeklyPipeline) {
+      logger.error('Cannot run pipeline: WeeklyPipeline module failed to load')
+      return res.status(503).json({ 
+        success: false, 
+        message: 'Pipeline module is not available',
+        error: 'Configuration issue - please check server logs' 
+      })
+    }
+    
     // Create the pipeline instance and run it
     const pipeline = new WeeklyPipeline()
-    const runKey = pipeline.generateRunKey()
+    const runKey = req.body?.run_key || pipeline.generateRunKey()
     
     // Start the pipeline asynchronously to avoid timeout
     // We will return immediately while pipeline runs in the background
@@ -291,7 +323,10 @@ app.post('/api/pipeline/run', async (req, res) => {
     })
   } catch (error) {
     logger.error('Failed to start pipeline', { error: error.message })
-    res.status(500).json({ error: 'Failed to start pipeline: ' + error.message })
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to start pipeline: ' + error.message 
+    })
   }
 })
 
@@ -316,10 +351,54 @@ app.get('*', (req, res) => {
   if (req.path.startsWith('/api/') || req.path === '/health') {
     return res.status(404).json({ error: 'API endpoint not found' })
   }
-  res.sendFile(path.join(__dirname, '../../dist/index.html'))
+  
+  try {
+    res.sendFile(path.join(__dirname, '../../dist/index.html'))
+  } catch (error) {
+    logger.error('Failed to serve static file', { error: error.message, path: req.path })
+    res.status(500).send('Error loading application. Please try again later.')
+  }
+})
+
+// Graceful shutdown handling
+const gracefulShutdown = (signal) => {
+  logger.info(`${signal} received. Shutting down gracefully...`)
+  
+  // Close database connections
+  if (prisma.$disconnect) {
+    try {
+      prisma.$disconnect()
+      logger.info('Database connections closed')
+    } catch (err) {
+      logger.error('Error disconnecting from database', { error: err.message })
+    }
+  }
+  
+  process.exit(0)
+}
+
+// Listen for termination signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection at:', {
+    promise: promise,
+    reason: reason
+  })
+  // Don't exit the process, just log the error
 })
 
 // Start server
-app.listen(PORT, () => {
-  logger.info(`BetCaddies API server running on port ${PORT}`)
-})
+try {
+  app.listen(PORT, () => {
+    logger.info(`BetCaddies API server running on port ${PORT}`)
+    console.log(`Server running on port ${PORT}`)
+  })
+} catch (error) {
+  logger.error('Failed to start server', { error: error.message })
+  console.error('Failed to start server:', error)
+  // Exit with error code to trigger container restart
+  process.exit(1)
+}
