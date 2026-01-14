@@ -10,7 +10,10 @@
     "preview": "vite preview",
     "pipeline:weekly": "node src/pipeline/index.js",
     "pipeline:smoke": "node src/pipeline/smoke-test.js",
-    "server": "node src/server/index.js",
+    "server": "prisma migrate deploy && node src/server/index.js",
+      "migrate:deploy": "prisma migrate deploy",
+      ,
+      "postinstall": "prisma generate"
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
