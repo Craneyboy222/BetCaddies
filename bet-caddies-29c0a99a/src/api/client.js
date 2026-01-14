@@ -32,6 +32,104 @@ export class BetCaddiesApi {
     return response.data || response
   }
 
+  // Admin API methods
+  auth = {
+    me: async () => {
+      const response = await this.client.get('/api/auth/me')
+      return response
+    },
+    redirectToLogin: () => {
+      window.location.href = '/'
+    }
+  }
+
+  entities = {
+    ResearchRun: {
+      list: async (order, limit) => {
+        const response = await this.client.get('/api/entities/research-runs')
+        return response.data || []
+      }
+    },
+    GolfBet: {
+      list: async (order, limit) => {
+        const response = await this.client.get('/api/entities/golf-bets')
+        return response.data || []
+      },
+      update: async (id, data) => {
+        // For now, return mock success
+        return { id, ...data }
+      },
+      delete: async (id) => {
+        // For now, return mock success
+        return { id }
+      }
+    },
+    BettingProvider: {
+      list: async (order, limit) => {
+        const response = await this.client.get('/api/entities/betting-providers')
+        return response.data || []
+      },
+      update: async (id, data) => {
+        return { id, ...data }
+      },
+      create: async (data) => {
+        return { id: Date.now(), ...data }
+      },
+      delete: async (id) => {
+        return { id }
+      }
+    },
+    DataQualityIssue: {
+      filter: async (filters, order, limit) => {
+        const response = await this.client.get('/api/entities/data-quality-issues')
+        return response.data || []
+      },
+      update: async (id, data) => {
+        return { id, ...data }
+      }
+    },
+    User: {
+      list: async (order, limit) => {
+        const response = await this.client.get('/api/entities/users')
+        return response.data || []
+      }
+    },
+    MembershipPackage: {
+      list: async (order, limit) => {
+        const response = await this.client.get('/api/entities/membership-packages')
+        return response.data || []
+      },
+      update: async (id, data) => {
+        return { id, ...data }
+      },
+      create: async (data) => {
+        return { id: Date.now(), ...data }
+      },
+      delete: async (id) => {
+        return { id }
+      }
+    }
+  }
+
+  functions = {
+    invoke: async (functionName, params) => {
+      // Mock function invocation for now
+      if (functionName === 'weeklyResearchPipeline') {
+        return { success: true, message: 'Pipeline started successfully' }
+      }
+      return { success: false, message: 'Function not implemented' }
+    }
+  }
+
+  integrations = {
+    Core: {
+      InvokeLLM: async (params) => {
+        // Mock LLM invocation for now
+        return { response: 'Mock LLM response' }
+      }
+    }
+  }
+
   // Mock data for development
   getMockData(endpoint) {
     if (endpoint === '/bets/latest') {

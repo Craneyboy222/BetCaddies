@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { 
@@ -57,14 +57,14 @@ export default function Admin() {
   useEffect(() => {
     const loadUser = async () => {
       try {
-        const userData = await base44.auth.me();
+        const userData = await api.auth.me();
         if (userData.role !== 'admin') {
           window.location.href = '/';
           return;
         }
         setUser(userData);
       } catch (e) {
-        base44.auth.redirectToLogin();
+        api.auth.redirectToLogin();
       }
     };
     loadUser();
@@ -73,37 +73,37 @@ export default function Admin() {
   // Queries
   const { data: runs = [], isLoading: runsLoading } = useQuery({
     queryKey: ['researchRuns'],
-    queryFn: () => base44.entities.ResearchRun.list('-created_date', 20)
+    queryFn: () => api.entities.ResearchRun.list('-created_date', 20)
   });
 
   const { data: bets = [], isLoading: betsLoading } = useQuery({
     queryKey: ['allBets'],
-    queryFn: () => base44.entities.GolfBet.list('-created_date', 100)
+    queryFn: () => api.entities.GolfBet.list('-created_date', 100)
   });
 
   const { data: providers = [] } = useQuery({
     queryKey: ['allProviders'],
-    queryFn: () => base44.entities.BettingProvider.list('priority', 50)
+    queryFn: () => api.entities.BettingProvider.list('priority', 50)
   });
 
   const { data: issues = [] } = useQuery({
     queryKey: ['dataQualityIssues'],
-    queryFn: () => base44.entities.DataQualityIssue.filter({ resolved: false }, '-created_date', 50)
+    queryFn: () => api.entities.DataQualityIssue.filter({ resolved: false }, '-created_date', 50)
   });
 
   const { data: users = [] } = useQuery({
     queryKey: ['allUsers'],
-    queryFn: () => base44.entities.User.list('-created_date', 100)
+    queryFn: () => api.entities.User.list('-created_date', 100)
   });
 
   const { data: memberships = [] } = useQuery({
     queryKey: ['memberships'],
-    queryFn: () => base44.entities.MembershipPackage.list('price', 50)
+    queryFn: () => api.entities.MembershipPackage.list('price', 50)
   });
 
   // Mutations
   const updateBetMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.GolfBet.update(id, data),
+    mutationFn: ({ id, data }) => api.entities.GolfBet.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['allBets'] });
       setEditingBet(null);
@@ -111,12 +111,12 @@ export default function Admin() {
   });
 
   const deleteBetMutation = useMutation({
-    mutationFn: (id) => base44.entities.GolfBet.delete(id),
+    mutationFn: (id) => api.entities.GolfBet.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['allBets'] })
   });
 
   const updateProviderMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.BettingProvider.update(id, data),
+    mutationFn: ({ id, data }) => api.entities.BettingProvider.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['allProviders'] });
       setEditingProvider(null);
@@ -124,7 +124,7 @@ export default function Admin() {
   });
 
   const createProviderMutation = useMutation({
-    mutationFn: (data) => base44.entities.BettingProvider.create(data),
+    mutationFn: (data) => api.entities.BettingProvider.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['allProviders'] });
       setEditingProvider(null);
@@ -132,18 +132,18 @@ export default function Admin() {
   });
 
   const deleteProviderMutation = useMutation({
-    mutationFn: (id) => base44.entities.BettingProvider.delete(id),
+    mutationFn: (id) => api.entities.BettingProvider.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['allProviders'] })
   });
 
   const resolveIssueMutation = useMutation({
-    mutationFn: (id) => base44.entities.DataQualityIssue.update(id, { resolved: true }),
+    mutationFn: (id) => api.entities.DataQualityIssue.update(id, { resolved: true }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dataQualityIssues'] })
   });
 
   const triggerRunMutation = useMutation({
     mutationFn: async () => {
-      const response = await base44.functions.invoke('weeklyResearchPipeline', { dryRun: false });
+      const response = await api.functions.invoke('weeklyResearchPipeline', { dryRun: false });
       return response.data;
     },
     onSuccess: () => {
@@ -153,7 +153,7 @@ export default function Admin() {
   });
 
   const updateMembershipMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.MembershipPackage.update(id, data),
+    mutationFn: ({ id, data }) => api.entities.MembershipPackage.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['memberships'] });
       setEditingMembership(null);
@@ -161,7 +161,7 @@ export default function Admin() {
   });
 
   const createMembershipMutation = useMutation({
-    mutationFn: (data) => base44.entities.MembershipPackage.create(data),
+    mutationFn: (data) => api.entities.MembershipPackage.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['memberships'] });
       setEditingMembership(null);
@@ -169,7 +169,7 @@ export default function Admin() {
   });
 
   const deleteMembershipMutation = useMutation({
-    mutationFn: (id) => base44.entities.MembershipPackage.delete(id),
+    mutationFn: (id) => api.entities.MembershipPackage.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['memberships'] })
   });
 
@@ -989,7 +989,7 @@ function MembershipEditForm({ membership, onSave, onCancel }) {
   const generateDescription = async () => {
     setGeneratingDescription(true);
     try {
-      const response = await base44.integrations.Core.InvokeLLM({
+      const response = await api.integrations.Core.InvokeLLM({
         prompt: `Write a compelling 1-2 sentence description for a golf betting membership package called "${form.name}" that costs £${form.price}/${form.billing_period}. 
         
 Features included: ${form.features.join(', ')}
