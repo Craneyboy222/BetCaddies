@@ -3,15 +3,16 @@ import cors from 'cors'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
 
+console.log('==== Starting BetCaddies server ====');
 // Import WeeklyPipeline with error handling
-let WeeklyPipeline = null
+let WeeklyPipeline = null;
 try {
-  const pipelineModule = await import('../pipeline/weekly-pipeline.js')
-  WeeklyPipeline = pipelineModule.WeeklyPipeline
-  console.log('WeeklyPipeline loaded successfully')
+  const pipelineModule = await import('../pipeline/weekly-pipeline.js');
+  WeeklyPipeline = pipelineModule.WeeklyPipeline;
+  console.log('WeeklyPipeline loaded successfully');
 } catch (error) {
-  console.error('Failed to load WeeklyPipeline:', error.message)
-  logger.error('Failed to load WeeklyPipeline', { error: error.message })
+  console.error('Failed to load WeeklyPipeline:', error.message);
+  if (logger && logger.error) logger.error('Failed to load WeeklyPipeline', { error: error.message });
 }
 
 const app = express()
@@ -390,15 +391,18 @@ process.on('unhandledRejection', (reason, promise) => {
   // Don't exit the process, just log the error
 })
 
-// Start server
+// Start server with robust error handling
 try {
   app.listen(PORT, () => {
-    logger.info(`BetCaddies API server running on port ${PORT}`)
-    console.log(`Server running on port ${PORT}`)
-  })
+    logger.info(`BetCaddies API server running on port ${PORT}`);
+    console.log(`BetCaddies API server running on port ${PORT}`);
+    console.log('cwd:', process.cwd());
+    console.log('Dist exists:', require('fs').existsSync(path.join(__dirname, '../../dist')));
+    console.log('Index.html exists:', require('fs').existsSync(path.join(__dirname, '../../dist/index.html')));
+  });
 } catch (error) {
-  logger.error('Failed to start server', { error: error.message })
-  console.error('Failed to start server:', error)
+  logger.error('Failed to start server', { error: error.message });
+  console.error('Failed to start server:', error);
   // Exit with error code to trigger container restart
-  process.exit(1)
+  process.exit(1);
 }
