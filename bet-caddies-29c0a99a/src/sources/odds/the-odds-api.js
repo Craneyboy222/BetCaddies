@@ -104,14 +104,14 @@ export class TheOddsApiClient extends BaseScraper {
     return b === 0 ? a : this.greatestCommonDivisor(b, a % b)
   }
 
-  groupOffersBySelection(offers) {
+  groupOffersByMarket(offers) {
     const grouped = {}
 
     for (const offer of offers) {
-      if (!grouped[offer.selectionName]) {
-        grouped[offer.selectionName] = []
+      if (!grouped[offer.marketKey]) {
+        grouped[offer.marketKey] = []
       }
-      grouped[offer.selectionName].push(offer)
+      grouped[offer.marketKey].push(offer)
     }
 
     return grouped

@@ -150,7 +150,7 @@ export default function Admin() {
   const triggerRunMutation = useMutation({
     mutationFn: async () => {
       const response = await api.functions.invoke('weeklyResearchPipeline', { dryRun: false });
-      return response.data;
+      return response;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['researchRuns'] });

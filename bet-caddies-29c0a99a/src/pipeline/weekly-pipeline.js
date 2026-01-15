@@ -168,8 +168,23 @@ export class WeeklyPipeline {
         const event = await scraper.discoverEvent(weekWindow)
 
         if (event) {
-          const tourEvent = await prisma.tourEvent.create({
-            data: {
+          // Use upsert for deduplication on (runId, tour)
+          const tourEvent = await prisma.tourEvent.upsert({
+            where: {
+              runId_tour: {
+                runId: run.id,
+                tour: event.tour
+              },
+            },
+            update: {
+              eventName: event.eventName,
+              startDate: event.startDate,
+              endDate: event.endDate,
+              location: event.location,
+              courseName: event.courseName,
+              sourceUrls: event.sourceUrls
+            },
+            create: {
               runId: run.id,
               tour: event.tour,
               eventName: event.eventName,
@@ -244,6 +259,7 @@ export class WeeklyPipeline {
         if (oddsEvent) {
           const savedEvent = await prisma.oddsEvent.create({
             data: {
+              runId: tourEvent.runId,
               tourEventId: tourEvent.id,
               oddsProvider: 'the_odds_api',
               externalEventId: oddsEvent.id,
@@ -252,7 +268,7 @@ export class WeeklyPipeline {
           })
 
           const offers = this.oddsClient.extractOffersFromEvent(oddsEvent)
-          const groupedOffers = this.oddsClient.groupOffersBySelection(offers)
+          const groupedOffers = this.oddsClient.groupOffersByMarket(offers)
 
           for (const [marketKey, marketOffers] of Object.entries(groupedOffers)) {
             const market = await prisma.oddsMarket.create({

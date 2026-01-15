@@ -1,15 +1,74 @@
 // Frontend API client for BetCaddies
 // Connects to Railway backend API
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://bet-caddies-29c0a99a-production.up.railway.app'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (
+  import.meta.env.DEV
+    ? 'http://localhost:3000'
+    : 'https://bet-caddies-29c0a99a-production.up.railway.app'
+)
 
 export class BetCaddiesApi {
   constructor() {
+    this.tokenKey = 'betcaddies_token'
+    this.token = window?.localStorage?.getItem(this.tokenKey) || null
     this.client = {
       get: async (endpoint) => {
         const url = `${API_BASE_URL}${endpoint}`
         console.log('API: Fetching', url)
-        const response = await fetch(url)
+        const response = await fetch(url, {
+          headers: this.buildHeaders()
+        })
+        console.log('API: Response status:', response.status)
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+        const data = await response.json()
+        console.log('API: Response data:', data)
+        return data
+      },
+      post: async (endpoint, body) => {
+        const url = `${API_BASE_URL}${endpoint}`
+        console.log('API: Posting', url)
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: this.buildHeaders({
+            'Content-Type': 'application/json'
+          }),
+          body: JSON.stringify(body || {})
+        })
+        console.log('API: Response status:', response.status)
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+        const data = await response.json()
+        console.log('API: Response data:', data)
+        return data
+      },
+      put: async (endpoint, body) => {
+        const url = `${API_BASE_URL}${endpoint}`
+        console.log('API: Putting', url)
+        const response = await fetch(url, {
+          method: 'PUT',
+          headers: this.buildHeaders({
+            'Content-Type': 'application/json'
+          }),
+          body: JSON.stringify(body || {})
+        })
+        console.log('API: Response status:', response.status)
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+        const data = await response.json()
+        console.log('API: Response data:', data)
+        return data
+      },
+      delete: async (endpoint) => {
+        const url = `${API_BASE_URL}${endpoint}`
+        console.log('API: Deleting', url)
+        const response = await fetch(url, {
+          method: 'DELETE',
+          headers: this.buildHeaders()
+        })
         console.log('API: Response status:', response.status)
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`)
@@ -18,6 +77,23 @@ export class BetCaddiesApi {
         console.log('API: Response data:', data)
         return data
       }
+    }
+  }
+
+  buildHeaders(extra = {}) {
+    const headers = { ...extra }
+    if (this.token) {
+      headers.Authorization = `Bearer ${this.token}`
+    }
+    return headers
+  }
+
+  setToken(token) {
+    this.token = token
+    if (token) {
+      window?.localStorage?.setItem(this.tokenKey, token)
+    } else {
+      window?.localStorage?.removeItem(this.tokenKey)
     }
   }
 
@@ -43,6 +119,16 @@ export class BetCaddiesApi {
       const response = await this.client.get('/api/auth/me')
       console.log('API: auth.me response:', response)
       return response
+    },
+    login: async (email, password) => {
+      const response = await this.client.post('/api/auth/login', { email, password })
+      if (response?.token) {
+        this.setToken(response.token)
+      }
+      return response
+    },
+    logout: () => {
+      this.setToken(null)
     },
     redirectToLogin: () => {
       window.location.href = '/'
@@ -76,13 +162,16 @@ export class BetCaddiesApi {
         return response.data || []
       },
       update: async (id, data) => {
-        return { id, ...data }
+        const response = await this.client.put(`/api/entities/betting-providers/${id}`, data)
+        return response.data || response
       },
       create: async (data) => {
-        return { id: Date.now(), ...data }
+        const response = await this.client.post('/api/entities/betting-providers', data)
+        return response.data || response
       },
       delete: async (id) => {
-        return { id }
+        const response = await this.client.delete(`/api/entities/betting-providers/${id}`)
+        return response.data || response
       }
     },
     DataQualityIssue: {
@@ -91,7 +180,8 @@ export class BetCaddiesApi {
         return response.data || []
       },
       update: async (id, data) => {
-        return { id, ...data }
+        const response = await this.client.put(`/api/entities/data-quality-issues/${id}`, data)
+        return response.data || response
       }
     },
     User: {
@@ -106,13 +196,26 @@ export class BetCaddiesApi {
         return response.data || []
       },
       update: async (id, data) => {
-        return { id, ...data }
+        const response = await this.client.put(`/api/entities/membership-packages/${id}`, data)
+        return response.data || response
       },
       create: async (data) => {
-        return { id: Date.now(), ...data }
+        const response = await this.client.post('/api/entities/membership-packages', data)
+        return response.data || response
       },
       delete: async (id) => {
-        return { id }
+        const response = await this.client.delete(`/api/entities/membership-packages/${id}`)
+        return response.data || response
+      }
+    },
+    MembershipSubscription: {
+      list: async (order, limit) => {
+        const response = await this.client.get('/api/entities/membership-subscriptions')
+        return response.data || []
+      },
+      update: async (id, data) => {
+        const response = await this.client.put(`/api/entities/membership-subscriptions/${id}`, data)
+        return response.data || response
       }
     }
   }
@@ -124,8 +227,8 @@ export class BetCaddiesApi {
       if (functionName === 'weeklyResearchPipeline') {
         try {
           const response = await this.client.post('/api/pipeline/run', params || {})
-          console.log('Pipeline response:', response.data)
-          return response.data
+          console.log('Pipeline response:', response)
+          return response
         } catch (error) {
           console.error('Pipeline execution failed:', error)
           throw error

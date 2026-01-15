@@ -9,25 +9,49 @@ export class LPGAScraper extends BaseScraper {
 
   async discoverEvent(weekWindow) {
     try {
-      const scheduleUrl = `${this.baseUrl}/tournaments/schedule`
-      const $ = await this.fetchHtml(scheduleUrl)
+      const scheduleUrl = 'https://www.lpga.com/tournaments';
+      const $ = await this.fetchHtml(scheduleUrl);
 
-      const currentTournament = this.extractCurrentTournament($, weekWindow)
+      // Each tournament is in .tournament-list__tournament
+      let event = null;
+      const weekStart = new Date(weekWindow.start);
+      const weekEnd = new Date(weekWindow.end);
 
-      if (!currentTournament) {
-        logger.warn('No current LPGA tournament found')
-        return null
+      $('.tournament-list__tournament').each((i, el) => {
+        const name = $(el).find('.tournament-list__name').text().trim();
+        const dateText = $(el).find('.tournament-list__date').text().trim();
+        const loc = $(el).find('.tournament-list__location').text().trim();
+        const link = $(el).find('a.tournament-list__tournament').attr('href');
+
+        // Example: "Feb 29 - Mar 3, 2024"
+        const dateMatch = dateText.match(/(\w+ \d{1,2}) - (\w+ \d{1,2}, \d{4})/);
+        let startDate = null, endDate = null;
+        if (dateMatch) {
+          // guess year from end date
+          endDate = new Date(dateMatch[2]);
+          // get start with end's year
+          startDate = new Date(`${dateMatch[1]}, ${endDate.getFullYear()}`);
+        }
+        if (startDate && startDate <= weekEnd && endDate && endDate >= weekStart) {
+          event = {
+            tour: 'LPGA',
+            eventName: name,
+            startDate,
+            endDate,
+            location: loc,
+            courseName: loc,
+            sourceUrls: [link ? `https://www.lpga.com${link}` : scheduleUrl]
+          };
+          return false;
+        }
+      });
+
+      if (!event) {
+        logger.warn('No current LPGA tournament found');
+        return null;
       }
 
-      return {
-        tour: 'LPGA',
-        eventName: currentTournament.name,
-        startDate: currentTournament.startDate,
-        endDate: currentTournament.endDate,
-        location: currentTournament.location,
-        courseName: currentTournament.course,
-        sourceUrls: [currentTournament.url]
-      }
+      return event;
     } catch (error) {
       logger.error('Failed to discover LPGA event', { error: error.message })
       throw error

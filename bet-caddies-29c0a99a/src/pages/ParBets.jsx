@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
+import { api } from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Target, SlidersHorizontal } from 'lucide-react';
@@ -24,7 +25,7 @@ export default function ParBets() {
   useEffect(() => {
     const loadUser = async () => {
       try {
-        const userData = await base44.auth.me();
+        const userData = await api.auth.me();
         setUser(userData);
       } catch (e) {}
     };

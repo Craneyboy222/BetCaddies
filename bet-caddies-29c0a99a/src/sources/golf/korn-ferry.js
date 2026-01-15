@@ -10,25 +10,45 @@ export class KornFerryScraper extends BaseScraper {
 
   async discoverEvent(weekWindow) {
     try {
-      const scheduleUrl = `${this.baseUrl}${this.kftPath}/tournaments/schedule`
-      const $ = await this.fetchHtml(scheduleUrl)
+      const scheduleUrl = 'https://www.pgatour.com/korn-ferry-tour/schedule.html';
+      const $ = await this.fetchHtml(scheduleUrl);
 
-      const currentTournament = this.extractCurrentTournament($, weekWindow)
+      let event = null;
+      const weekStart = new Date(weekWindow.start);
+      const weekEnd = new Date(weekWindow.end);
+      // Guess selector, since site may change: .schedule-tournament
+      $('.schedule-tournament').each((i, el) => {
+        const name = $(el).find('.tournament-title').text().trim();
+        const dateText = $(el).find('.tournament-dates').text().trim();
+        const loc = $(el).find('.tournament-location').text().trim();
+        const link = $(el).find('a').attr('href');
+        // Date parsing could need adapting to actual format!
+        const dateMatch = dateText.match(/(\w+ \d{1,2})-(\d{1,2}, \d{4})/);
+        let startDate = null, endDate = null;
+        if (dateMatch) {
+          endDate = new Date(dateMatch[2]);
+          startDate = new Date(`${dateMatch[1]}, ${endDate.getFullYear()}`);
+        }
+        if (startDate && startDate <= weekEnd && endDate && endDate >= weekStart) {
+          event = {
+            tour: 'KFT',
+            eventName: name,
+            startDate,
+            endDate,
+            location: loc,
+            courseName: loc,
+            sourceUrls: [link ? `https://www.pgatour.com${link}` : scheduleUrl]
+          };
+          return false;
+        }
+      });
 
-      if (!currentTournament) {
-        logger.warn('No current Korn Ferry tournament found')
-        return null
+      if (!event) {
+        logger.warn('No current Korn Ferry tournament found');
+        return null;
       }
 
-      return {
-        tour: 'KFT',
-        eventName: currentTournament.name,
-        startDate: currentTournament.startDate,
-        endDate: currentTournament.endDate,
-        location: currentTournament.location,
-        courseName: currentTournament.course,
-        sourceUrls: [currentTournament.url]
-      }
+      return event;
     } catch (error) {
       logger.error('Failed to discover Korn Ferry event', { error: error.message })
       throw error

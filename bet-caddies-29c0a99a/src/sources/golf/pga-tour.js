@@ -9,30 +9,36 @@ export class PGATourScraper extends BaseScraper {
 
   async discoverEvent(weekWindow) {
     try {
-      // PGA Tour schedule endpoint
-      const scheduleUrl = `${this.baseUrl}/tournaments/schedule`
-      const $ = await this.fetchHtml(scheduleUrl)
+      const scheduleUrl = 'https://statdata.pgatour.com/r/current/schedule-v2.json';
+      const data = await this.fetchJson(scheduleUrl);
 
-      // Find current week's tournament
-      const currentTournament = this.extractCurrentTournament($, weekWindow)
+      const tournaments = data.schedule || [];
+      const weekStart = new Date(weekWindow.start);
+      const weekEnd = new Date(weekWindow.end);
 
-      if (!currentTournament) {
-        logger.warn('No current PGA tournament found')
-        return null
+      const event = tournaments.find(tourEvent => {
+        const start = new Date(tourEvent.startDate);
+        const end = new Date(tourEvent.endDate || tourEvent.startDate);
+        return start <= weekEnd && end >= weekStart;
+      });
+
+      if (!event) {
+        logger.warn('No current PGA tournament found');
+        return null;
       }
 
       return {
         tour: 'PGA',
-        eventName: currentTournament.name,
-        startDate: currentTournament.startDate,
-        endDate: currentTournament.endDate,
-        location: currentTournament.location,
-        courseName: currentTournament.course,
-        sourceUrls: [currentTournament.url]
-      }
+        eventName: event.tournamentName,
+        startDate: new Date(event.startDate),
+        endDate: new Date(event.endDate || event.startDate),
+        location: event.venue || event.location || '',
+        courseName: event.course || '',
+        sourceUrls: [event.tournamentPermalink ? `https://www.pgatour.com${event.tournamentPermalink}` : this.baseUrl]
+      };
     } catch (error) {
-      logger.error('Failed to discover PGA event', { error: error.message })
-      throw error
+      logger.error('Failed to discover PGA event', { error: error.message });
+      throw error;
     }
   }
 

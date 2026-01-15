@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { api } from '@/api/client';
 import { createPageUrl } from '../utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -43,6 +44,16 @@ export default function Layout({ children, currentPageName }) {
         if (authData?.isLoggedIn && authData?.user) {
           setUser(authData.user);
           setIsAdmin(authData.user?.role === 'admin');
+          return;
+        }
+        const userData = await api.auth.me();
+        if (userData?.email) {
+          localStorage.setItem('betcaddies_auth', JSON.stringify({
+            isLoggedIn: true,
+            user: userData
+          }));
+          setUser(userData);
+          setIsAdmin(userData?.role === 'admin');
         }
       } catch (e) {
         // Not logged in
@@ -54,26 +65,22 @@ export default function Layout({ children, currentPageName }) {
   const handleLogin = async (e) => {
     e.preventDefault();
     try {
-      // Simple auth check
-      if (loginEmail === 'chriscjcrane@gmail.com' && loginPassword === 'RicksWaglers1!') {
-        const userData = {
-          email: 'chriscjcrane@gmail.com',
-          name: 'Chris Crane',
-          role: 'admin'
-        };
-        localStorage.setItem('betcaddies_auth', JSON.stringify({
-          isLoggedIn: true,
-          user: userData
-        }));
-        setUser(userData);
-        setIsAdmin(true);
-        setShowLoginModal(false);
-        setLoginEmail('');
-        setLoginPassword('');
-        setLoginError('');
-      } else {
+      const response = await api.auth.login(loginEmail, loginPassword);
+      const userData = response?.user;
+      if (!userData) {
         setLoginError('Invalid email or password');
+        return;
       }
+      localStorage.setItem('betcaddies_auth', JSON.stringify({
+        isLoggedIn: true,
+        user: userData
+      }));
+      setUser(userData);
+      setIsAdmin(userData?.role === 'admin');
+      setShowLoginModal(false);
+      setLoginEmail('');
+      setLoginPassword('');
+      setLoginError('');
     } catch (error) {
       setLoginError('Login failed');
     }
@@ -81,6 +88,7 @@ export default function Layout({ children, currentPageName }) {
 
   const handleLogout = async () => {
     localStorage.removeItem('betcaddies_auth');
+    api.auth.logout();
     setUser(null);
     setIsAdmin(false);
   };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/client';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '../utils';
@@ -43,10 +43,10 @@ export default function Profile() {
   useEffect(() => {
     const loadUser = async () => {
       try {
-        const userData = await base44.auth.me();
+        const userData = await api.auth.me();
         setUser(userData);
       } catch (e) {
-        base44.auth.redirectToLogin();
+        api.auth.redirectToLogin();
       } finally {
         setLoading(false);
       }
@@ -54,8 +54,17 @@ export default function Profile() {
     loadUser();
   }, []);
 
+  const updateUserLocal = (updates) => {
+    const updatedUser = { ...user, ...updates }
+    localStorage.setItem('betcaddies_auth', JSON.stringify({
+      isLoggedIn: true,
+      user: updatedUser
+    }))
+    return Promise.resolve(updatedUser)
+  }
+
   const updateMutation = useMutation({
-    mutationFn: (data) => base44.auth.updateMe(data),
+    mutationFn: (data) => updateUserLocal(data),
     onSuccess: (updatedUser) => {
       setUser(prev => ({ ...prev, ...updatedUser }));
     }
@@ -70,7 +79,9 @@ export default function Profile() {
   };
 
   const handleLogout = () => {
-    base44.auth.logout();
+    localStorage.removeItem('betcaddies_auth');
+    api.auth.logout();
+    setUser(null);
   };
 
   if (loading) {

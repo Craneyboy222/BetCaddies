@@ -17,8 +17,36 @@ export class BetSelectionEngine {
       if (!eventOdds) continue
 
       for (const market of eventOdds.markets) {
-        for (const offer of market.offers) {
-          const candidate = this.createCandidate(tourEvent, market, offer, playerNormalizer)
+        const marketKey = market.marketKey || market.key
+        const offers = market.oddsOffers || market.offers || []
+
+        const offersBySelection = offers.reduce((acc, offer) => {
+          const selectionName = offer.selectionName || offer.selection
+          if (!selectionName) return acc
+          if (!acc[selectionName]) acc[selectionName] = []
+          acc[selectionName].push(offer)
+          return acc
+        }, {})
+
+        for (const selectionOffers of Object.values(offersBySelection)) {
+          const bestOffer = selectionOffers.reduce((best, current) => {
+            return (current.oddsDecimal || 0) > (best?.oddsDecimal || 0) ? current : best
+          }, null)
+
+          if (!bestOffer) continue
+
+          const altOffers = selectionOffers
+            .filter(offer => offer.bookmaker !== bestOffer.bookmaker)
+            .slice(0, 5)
+
+          const candidate = this.createCandidate(
+            tourEvent,
+            marketKey,
+            bestOffer,
+            altOffers,
+            playerNormalizer
+          )
+
           if (candidate) {
             candidates.push(candidate)
           }
@@ -32,7 +60,7 @@ export class BetSelectionEngine {
     return this.selectPortfolio(candidates)
   }
 
-  createCandidate(tourEvent, market, offer, playerNormalizer) {
+  createCandidate(tourEvent, marketKey, offer, altOffers, playerNormalizer) {
     try {
       // Calculate model probability (simplified - would use ML model)
       const modelProb = this.calculateModelProbability(tourEvent, offer.selectionName)
@@ -47,14 +75,14 @@ export class BetSelectionEngine {
 
       return {
         tourEvent,
-        marketKey: market.key,
+        marketKey,
         selection: offer.selectionName,
         modelProb,
         impliedProb,
         edge,
         bestBookmaker: offer.bookmaker,
         bestOdds: offer.oddsDecimal,
-        altOffers: offer.altOffers || [],
+        altOffers: altOffers || [],
         tour: tourEvent.tour
       }
     } catch (error) {

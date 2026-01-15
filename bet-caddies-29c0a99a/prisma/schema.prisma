@@ -247,10 +247,79 @@ model DataIssue {
   step        String
   message     String
   evidenceJson Json?   // JSON object with evidence data
+  resolved    Boolean  @default(false)
   createdAt   DateTime @default(now())
 
   // Relations
   run         Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   @@map("data_issues")
+}
+
+model User {
+  id                    String   @id @default(cuid())
+  email                 String   @unique
+  fullName              String?
+  role                  String   @default("user")
+  favoriteTours         Json?
+  riskAppetite          String?
+  notificationsEnabled  Boolean  @default(true)
+  emailNotifications    Boolean  @default(true)
+  onboardingCompleted   Boolean  @default(false)
+  totalBetsPlaced       Int      @default(0)
+  totalWins             Int      @default(0)
+  hioTotalPoints        Int      @default(0)
+  createdAt             DateTime @default(now())
+
+  @@map("users")
+}
+
+model BettingProvider {
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique
+  logoUrl          String?
+  affiliateBaseUrl String?
+  priority         Int      @default(10)
+  enabled          Boolean  @default(true)
+  createdAt        DateTime @default(now())
+
+  @@map("betting_providers")
+}
+
+model MembershipPackage {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  price         Float
+  billingPeriod String
+  features      Json
+  badges        Json
+  stripePriceId String?
+  displayOrder  Int      @default(0)
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  subscriptions MembershipSubscription[]
+
+  @@map("membership_packages")
+}
+
+model MembershipSubscription {
+  id               String   @id @default(cuid())
+  userEmail        String
+  packageId        String
+  packageName      String
+  status           String
+  billingPeriod    String
+  pricePaid        Float
+  lifetimeValue    Float?
+  nextPaymentDate  DateTime?
+  createdDate      DateTime @default(now())
+  cancelledAt      DateTime?
+  cancelAtPeriodEnd Boolean?
+
+  package          MembershipPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@map("membership_subscriptions")
 }

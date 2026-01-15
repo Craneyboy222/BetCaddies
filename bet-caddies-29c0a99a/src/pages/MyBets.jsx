@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
+import { api } from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
@@ -54,10 +55,10 @@ export default function MyBets() {
   useEffect(() => {
     const loadUser = async () => {
       try {
-        const userData = await base44.auth.me();
+        const userData = await api.auth.me();
         setUser(userData);
       } catch (e) {
-        base44.auth.redirectToLogin();
+        api.auth.redirectToLogin();
       }
     };
     loadUser();

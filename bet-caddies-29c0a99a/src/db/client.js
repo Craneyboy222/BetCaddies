@@ -17,7 +17,10 @@ try {
   }
 } catch (error) {
   console.error('Failed to initialize Prisma client:', error.message)
-  // Create a mock client to prevent application crashes
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DB_MOCK !== 'true') {
+    throw error
+  }
+  // Create a mock client to prevent application crashes in non-prod
   prismaInstance = createMockPrismaClient()
 }
 

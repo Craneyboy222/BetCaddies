@@ -9,25 +9,46 @@ export class DPWTScraper extends BaseScraper {
 
   async discoverEvent(weekWindow) {
     try {
-      const scheduleUrl = `${this.baseUrl}/tournaments/schedule`
-      const $ = await this.fetchHtml(scheduleUrl)
+      const scheduleUrl = 'https://www.europeantour.com/dpworld-tour/schedule/';
+      const $ = await this.fetchHtml(scheduleUrl);
 
-      const currentTournament = this.extractCurrentTournament($, weekWindow)
+      // Each event is under .o-card-schedule-event
+      let event = null;
+      const weekStart = new Date(weekWindow.start);
+      const weekEnd = new Date(weekWindow.end);
 
-      if (!currentTournament) {
-        logger.warn('No current DPWT tournament found')
-        return null
+      $('.o-card-schedule-event').each((i, el) => {
+        const name = $(el).find('.o-card-schedule-event__title').text().trim();
+        const dateText = $(el).find('.o-card-schedule-event__date').text().trim();
+        const location = $(el).find('.o-card-schedule-event__venue').text().trim();
+        const link = $(el).find('a.o-card-schedule-event__link').attr('href');
+        // Simplified date parsing!
+        const dateMatch = dateText.match(/(\d{1,2} \w+ \d{4})/g);
+        let startDate = null, endDate = null;
+        if (dateMatch && dateMatch.length > 0) startDate = new Date(dateMatch[0]);
+        if (dateMatch && dateMatch.length > 1) endDate = new Date(dateMatch[1]);
+        else endDate = startDate;
+
+        if (startDate && startDate <= weekEnd && endDate && endDate >= weekStart) {
+          event = {
+            tour: 'DPWT',
+            eventName: name,
+            startDate,
+            endDate,
+            location,
+            courseName: location,
+            sourceUrls: [link ? `https://www.europeantour.com${link}` : scheduleUrl]
+          };
+          return false;
+        }
+      });
+
+      if (!event) {
+        logger.warn('No current DPWT tournament found');
+        return null;
       }
 
-      return {
-        tour: 'DPWT',
-        eventName: currentTournament.name,
-        startDate: currentTournament.startDate,
-        endDate: currentTournament.endDate,
-        location: currentTournament.location,
-        courseName: currentTournament.course,
-        sourceUrls: [currentTournament.url]
-      }
+      return event;
     } catch (error) {
       logger.error('Failed to discover DPWT event', { error: error.message })
       throw error

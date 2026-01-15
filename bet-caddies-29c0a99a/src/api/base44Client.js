@@ -7,19 +7,8 @@ const STORAGE_KEYS = {
   BETTING_PROVIDERS: 'bettingProviders',
   HIO_CHALLENGES: 'hioChallenges',
   HIO_ENTRIES: 'hioEntries',
-  USER: 'user',
-  AUTH: 'auth'
-};
-
-// Admin user credentials
-const ADMIN_CREDENTIALS = {
-  email: 'chriscjcrane@gmail.com',
-  password: 'RicksWaglers1!',
-  user: {
-    email: 'chriscjcrane@gmail.com',
-    name: 'Chris Crane',
-    role: 'admin'
-  }
+  USER: 'betcaddies_user',
+  AUTH: 'betcaddies_auth'
 };
 
 // Initial sample data
@@ -223,18 +212,7 @@ class EntityManager {
 const authManager = {
   login: (email, password) => {
     return new Promise((resolve, reject) => {
-      // Check admin credentials
-      if (email === ADMIN_CREDENTIALS.email && password === ADMIN_CREDENTIALS.password) {
-        const authData = {
-          isLoggedIn: true,
-          user: ADMIN_CREDENTIALS.user
-        };
-        setStorageData(STORAGE_KEYS.AUTH, authData);
-        setStorageData(STORAGE_KEYS.USER, ADMIN_CREDENTIALS.user);
-        resolve(ADMIN_CREDENTIALS.user);
-      } else {
-        reject(new Error('Invalid credentials'));
-      }
+      reject(new Error('Login is handled by the server.'));
     });
   },
 

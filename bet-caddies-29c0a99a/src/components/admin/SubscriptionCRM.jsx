@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/client';
 import { motion } from 'framer-motion';
 import {
   DollarSign,
@@ -47,17 +47,17 @@ export default function SubscriptionCRM() {
   // Fetch all subscriptions
   const { data: allSubscriptions = [], isLoading } = useQuery({
     queryKey: ['allSubscriptions'],
-    queryFn: () => base44.entities.MembershipSubscription.list('-created_date', 500)
+    queryFn: () => api.entities.MembershipSubscription.list('-created_date', 500)
   });
 
   const { data: packages = [] } = useQuery({
     queryKey: ['allPackages'],
-    queryFn: () => base44.entities.MembershipPackage.list('display_order', 50)
+    queryFn: () => api.entities.MembershipPackage.list('display_order', 50)
   });
 
   // Mutations
   const updateSubscriptionMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.MembershipSubscription.update(id, data),
+    mutationFn: ({ id, data }) => api.entities.MembershipSubscription.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['allSubscriptions'] });
       setSelectedSubscription(null);

@@ -9,25 +9,46 @@ export class LIVScraper extends BaseScraper {
 
   async discoverEvent(weekWindow) {
     try {
-      const scheduleUrl = `${this.baseUrl}/schedule`
-      const $ = await this.fetchHtml(scheduleUrl)
+      const scheduleUrl = 'https://www.livgolf.com/schedule';
+      const $ = await this.fetchHtml(scheduleUrl);
 
-      const currentTournament = this.extractCurrentTournament($, weekWindow)
+      // Try to grab event from .event-card or embedded JSON
+      let event = null;
+      const weekStart = new Date(weekWindow.start);
+      const weekEnd = new Date(weekWindow.end);
 
-      if (!currentTournament) {
-        logger.warn('No current LIV tournament found')
-        return null
+      $('.event-card').each((i, el) => {
+        const name = $(el).find('.event-title').text().trim();
+        const dateText = $(el).find('.event-dates').text().trim();
+        const loc = $(el).find('.event-location').text().trim();
+        const link = $(el).find('a.event-card').attr('href');
+        // Example: "Jul 21-23, 2026"
+        const dateMatch = dateText.match(/(\w+ \d{1,2})-(\d{1,2}, \d{4})/);
+        let startDate = null, endDate = null;
+        if (dateMatch) {
+          endDate = new Date(dateMatch[2]);
+          startDate = new Date(`${dateMatch[1]}, ${endDate.getFullYear()}`);
+        }
+        if (startDate && startDate <= weekEnd && endDate && endDate >= weekStart) {
+          event = {
+            tour: 'LIV',
+            eventName: name,
+            startDate,
+            endDate,
+            location: loc,
+            courseName: loc,
+            sourceUrls: [link ? `https://www.livgolf.com${link}` : scheduleUrl]
+          };
+          return false;
+        }
+      });
+
+      if (!event) {
+        logger.warn('No current LIV tournament found');
+        return null;
       }
 
-      return {
-        tour: 'LIV',
-        eventName: currentTournament.name,
-        startDate: currentTournament.startDate,
-        endDate: currentTournament.endDate,
-        location: currentTournament.location,
-        courseName: currentTournament.course,
-        sourceUrls: [currentTournament.url]
-      }
+      return event;
     } catch (error) {
       logger.error('Failed to discover LIV event', { error: error.message })
       throw error

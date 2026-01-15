@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
+import { api } from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Trophy, Clock, CheckCircle, AlertCircle, Calendar } from 'lucide-react';
@@ -15,7 +16,7 @@ export default function HIOChallenge() {
   useEffect(() => {
     const loadUser = async () => {
       try {
-        const userData = await base44.auth.me();
+        const userData = await api.auth.me();
         setUser(userData);
       } catch (e) {
         // Not logged in
@@ -49,7 +50,7 @@ export default function HIOChallenge() {
   const submitMutation = useMutation({
     mutationFn: async (answers) => {
       if (!user) {
-        base44.auth.redirectToLogin();
+        api.auth.redirectToLogin();
         return;
       }
 

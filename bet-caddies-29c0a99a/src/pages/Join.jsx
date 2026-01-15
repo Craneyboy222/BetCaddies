@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/client';
 import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '../utils';
 import { motion } from 'framer-motion';
@@ -40,7 +40,7 @@ export default function Join() {
   useEffect(() => {
     const checkUser = async () => {
       try {
-        const userData = await base44.auth.me();
+        const userData = await api.auth.me();
         setUser(userData);
         if (userData.onboarding_completed) {
           navigate(createPageUrl('Home'));
@@ -60,16 +60,22 @@ export default function Join() {
 
   const handleComplete = async () => {
     if (!user) {
-      base44.auth.redirectToLogin(window.location.href);
+      api.auth.redirectToLogin();
       return;
     }
 
-    await base44.auth.updateMe({
+    const updatedUser = {
+      ...user,
       favorite_tours: selectedTours,
       risk_appetite: riskAppetite,
       responsible_gambling_acknowledged: gamblingAck,
       onboarding_completed: true
-    });
+    }
+    localStorage.setItem('betcaddies_auth', JSON.stringify({
+      isLoggedIn: true,
+      user: updatedUser
+    }))
+    setUser(updatedUser)
 
     navigate(createPageUrl('Home'));
   };

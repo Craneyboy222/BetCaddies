@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
+import { api } from '@/api/client';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Crown, Check, Zap, Star, ArrowRight } from 'lucide-react';
@@ -13,7 +14,7 @@ export default function Memberships() {
   useEffect(() => {
     const loadUser = async () => {
       try {
-        const userData = await base44.auth.me();
+        const userData = await api.auth.me();
         setUser(userData);
       } catch (e) {
         // Not logged in
@@ -40,7 +41,7 @@ export default function Memberships() {
 
   const handleSelectPlan = async (pkg) => {
     if (!user) {
-      base44.auth.redirectToLogin();
+      api.auth.redirectToLogin();
       return;
     }
 

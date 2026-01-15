@@ -1,4 +1,5 @@
 import winston from 'winston'
+import DailyRotateFile from 'winston-daily-rotate-file'
 
 const logFormat = winston.format.combine(
   winston.format.timestamp(),
@@ -16,8 +17,12 @@ export const logger = winston.createLogger({
         winston.format.simple()
       )
     }),
-    new winston.transports.File({
-      filename: 'logs/pipeline.log',
+    new DailyRotateFile({
+      filename: 'logs/pipeline-%DATE%.log',
+      datePattern: 'YYYY-MM-DD',
+      zippedArchive: true,
+      maxSize: '10m',
+      maxFiles: '14d',
       format: logFormat
     })
   ]
