@@ -9,8 +9,21 @@ export class LPGAScraper extends BaseScraper {
 
   async discoverEvent(weekWindow) {
     try {
-      const scheduleUrl = 'https://www.lpga.com/tournaments';
-      const $ = await this.fetchHtml(scheduleUrl);
+      const scheduleUrls = [
+        'https://www.lpga.com/tournaments',
+        'https://www.lpga.com/tournaments?year=' + new Date().getFullYear()
+      ]
+
+      let $ = null
+      for (const url of scheduleUrls) {
+        $ = await this.fetchHtmlSafe(url)
+        if ($) break
+      }
+
+      if (!$) {
+        logger.warn('LPGA schedule page not available')
+        return null
+      }
 
       // Each tournament is in .tournament-list__tournament
       let event = null;

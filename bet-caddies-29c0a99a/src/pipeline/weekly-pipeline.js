@@ -169,32 +169,63 @@ export class WeeklyPipeline {
 
         if (event) {
           // Use upsert for deduplication on (runId, tour)
-          const tourEvent = await prisma.tourEvent.upsert({
-            where: {
-              runId_tour: {
-                runId: run.id,
-                tour: event.tour
+          let tourEvent
+          try {
+            tourEvent = await prisma.tourEvent.upsert({
+              where: {
+                runId_tour: {
+                  runId: run.id,
+                  tour: event.tour
+                },
               },
-            },
-            update: {
-              eventName: event.eventName,
-              startDate: event.startDate,
-              endDate: event.endDate,
-              location: event.location,
-              courseName: event.courseName,
-              sourceUrls: event.sourceUrls
-            },
-            create: {
-              runId: run.id,
-              tour: event.tour,
-              eventName: event.eventName,
-              startDate: event.startDate,
-              endDate: event.endDate,
-              location: event.location,
-              courseName: event.courseName,
-              sourceUrls: event.sourceUrls
+              update: {
+                eventName: event.eventName,
+                startDate: event.startDate,
+                endDate: event.endDate,
+                location: event.location,
+                courseName: event.courseName,
+                sourceUrls: event.sourceUrls
+              },
+              create: {
+                runId: run.id,
+                tour: event.tour,
+                eventName: event.eventName,
+                startDate: event.startDate,
+                endDate: event.endDate,
+                location: event.location,
+                courseName: event.courseName,
+                sourceUrls: event.sourceUrls
+              }
+            })
+          } catch (error) {
+            if (error.code === 'P2002') {
+              const existing = await prisma.tourEvent.findUnique({
+                where: {
+                  runId_tour: {
+                    runId: run.id,
+                    tour: event.tour
+                  }
+                }
+              })
+              if (existing) {
+                tourEvent = await prisma.tourEvent.update({
+                  where: { id: existing.id },
+                  data: {
+                    eventName: event.eventName,
+                    startDate: event.startDate,
+                    endDate: event.endDate,
+                    location: event.location,
+                    courseName: event.courseName,
+                    sourceUrls: event.sourceUrls
+                  }
+                })
+              } else {
+                throw error
+              }
+            } else {
+              throw error
             }
-          })
+          }
 
           tourEvents.push(tourEvent)
           logStep('discover', `Found ${tour} event: ${event.eventName}`)

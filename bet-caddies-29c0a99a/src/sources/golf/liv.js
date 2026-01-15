@@ -9,8 +9,21 @@ export class LIVScraper extends BaseScraper {
 
   async discoverEvent(weekWindow) {
     try {
-      const scheduleUrl = 'https://www.livgolf.com/schedule';
-      const $ = await this.fetchHtml(scheduleUrl);
+      const scheduleUrls = [
+        'https://www.livgolf.com/schedule',
+        'https://www.livgolf.com/events'
+      ]
+
+      let $ = null
+      for (const url of scheduleUrls) {
+        $ = await this.fetchHtmlSafe(url)
+        if ($) break
+      }
+
+      if (!$) {
+        logger.warn('LIV schedule page not available')
+        return null
+      }
 
       // Try to grab event from .event-card or embedded JSON
       let event = null;

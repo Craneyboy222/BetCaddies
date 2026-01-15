@@ -9,8 +9,22 @@ export class PGATourScraper extends BaseScraper {
 
   async discoverEvent(weekWindow) {
     try {
-      const scheduleUrl = 'https://statdata.pgatour.com/r/current/schedule-v2.json';
-      const data = await this.fetchJson(scheduleUrl);
+      const scheduleUrls = [
+        'https://statdata.pgatour.com/r/current/schedule-v2.json',
+        'https://statdata.pgatour.com/r/current/schedule.json',
+        'https://statdata.pgatour.com/r/current/schedule-v3.json'
+      ]
+
+      let data = null
+      for (const url of scheduleUrls) {
+        data = await this.fetchJsonSafe(url)
+        if (data) break
+      }
+
+      if (!data) {
+        logger.warn('PGA schedule feed not available')
+        return null
+      }
 
       const tournaments = data.schedule || [];
       const weekStart = new Date(weekWindow.start);

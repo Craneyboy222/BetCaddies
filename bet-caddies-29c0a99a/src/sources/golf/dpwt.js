@@ -9,8 +9,22 @@ export class DPWTScraper extends BaseScraper {
 
   async discoverEvent(weekWindow) {
     try {
-      const scheduleUrl = 'https://www.europeantour.com/dpworld-tour/schedule/';
-      const $ = await this.fetchHtml(scheduleUrl);
+      const scheduleUrls = [
+        'https://www.europeantour.com/dpworld-tour/schedule/',
+        'https://www.europeantour.com/dpworld-tour/schedule',
+        `https://www.europeantour.com/dpworld-tour/schedule?year=${new Date().getFullYear()}`
+      ]
+
+      let $ = null
+      for (const url of scheduleUrls) {
+        $ = await this.fetchHtmlSafe(url)
+        if ($) break
+      }
+
+      if (!$) {
+        logger.warn('DPWT schedule page not available')
+        return null
+      }
 
       // Each event is under .o-card-schedule-event
       let event = null;

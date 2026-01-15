@@ -10,8 +10,22 @@ export class KornFerryScraper extends BaseScraper {
 
   async discoverEvent(weekWindow) {
     try {
-      const scheduleUrl = 'https://www.pgatour.com/korn-ferry-tour/schedule.html';
-      const $ = await this.fetchHtml(scheduleUrl);
+      const scheduleUrls = [
+        'https://www.pgatour.com/korn-ferry-tour/schedule.html',
+        'https://www.pgatour.com/korn-ferry-tour/schedule',
+        `https://www.pgatour.com/korn-ferry-tour/schedule/${new Date().getFullYear()}`
+      ]
+
+      let $ = null
+      for (const url of scheduleUrls) {
+        $ = await this.fetchHtmlSafe(url)
+        if ($) break
+      }
+
+      if (!$) {
+        logger.warn('Korn Ferry schedule page not available')
+        return null
+      }
 
       let event = null;
       const weekStart = new Date(weekWindow.start);

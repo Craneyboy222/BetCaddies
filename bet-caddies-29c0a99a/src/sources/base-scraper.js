@@ -29,9 +29,35 @@ export class BaseScraper {
     return typeof data === 'object' ? data : JSON.parse(data)
   }
 
+  async fetchJsonSafe(url, options = {}) {
+    try {
+      return await this.fetchJson(url, options)
+    } catch (error) {
+      if (error.response?.status === 404) {
+        logger.warn(`Optional JSON not found (404): ${url}`)
+        return null
+      }
+      throw error
+    }
+  }
+
   async fetchHtml(url, options = {}) {
     const html = await this.fetch(url, options)
     return cheerio.load(html)
+  }
+
+  async fetchHtmlSafe(url, options = {}) {
+    try {
+      const html = await this.fetch(url, options)
+      if (!html) return null
+      return cheerio.load(html)
+    } catch (error) {
+      if (error.response?.status === 404) {
+        logger.warn(`Optional HTML not found (404): ${url}`)
+        return null
+      }
+      throw error
+    }
   }
 
   // Override in subclasses that need Playwright
