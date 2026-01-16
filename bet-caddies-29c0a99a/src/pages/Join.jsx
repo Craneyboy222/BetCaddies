@@ -32,6 +32,10 @@ export default function Join() {
   const [riskAppetite, setRiskAppetite] = useState('balanced');
   const [gamblingAck, setGamblingAck] = useState(false);
   const [user, setUser] = useState(null);
+  const [hero, setHero] = useState({
+    title: 'Welcome to Bet Caddies',
+    subtitle: 'Your premium golf betting companion'
+  });
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -46,6 +50,22 @@ export default function Join() {
     };
     checkUser();
   }, [navigate]);
+
+  useEffect(() => {
+    let mounted = true;
+    api.siteContent.get('join')
+      .then((data) => {
+        if (!mounted) return;
+        const title = data?.json?.hero?.title;
+        const subtitle = data?.json?.hero?.subtitle;
+        setHero({
+          title: title || 'Welcome to Bet Caddies',
+          subtitle: subtitle || 'Your premium golf betting companion'
+        });
+      })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, []);
 
   const handleTourToggle = (tourId) => {
     setSelectedTours(prev => 
@@ -93,8 +113,8 @@ export default function Join() {
               className="w-12 h-12 object-contain"
             />
           </div>
-          <h1 className="text-3xl font-bold text-white">Welcome to Bet Caddies</h1>
-          <p className="text-slate-400 mt-2">Your premium golf betting companion</p>
+          <h1 className="text-3xl font-bold text-white">{hero.title}</h1>
+          <p className="text-slate-400 mt-2">{hero.subtitle}</p>
         </div>
 
         {/* Progress */}

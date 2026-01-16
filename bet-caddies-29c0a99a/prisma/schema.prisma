@@ -256,6 +256,10 @@ model BetOverride {
   formLabel             String?
   weatherLabel          String?
 
+  tierOverride          String?
+  pinned                Boolean  @default(false)
+  pinOrder              Int?
+
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -286,6 +290,10 @@ model User {
   email                 String   @unique
   fullName              String?
   role                  String   @default("user")
+
+  disabledAt            DateTime?
+  disabledReason        String?
+
   favoriteTours         Json?
   riskAppetite          String?
   notificationsEnabled  Boolean  @default(true)
@@ -297,6 +305,40 @@ model User {
   createdAt             DateTime @default(now())
 
   @@map("users")
+}
+
+model SiteContent {
+  key       String   @id
+  json      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("site_contents")
+}
+
+model AuditLog {
+  id              String   @id @default(cuid())
+  action          String
+
+  entityType      String?
+  entityId        String?
+
+  actorSub        String?
+  actorEmail      String?
+  actorRole       String?
+  impersonatedSub String?
+
+  beforeJson      Json?
+  afterJson       Json?
+
+  ip              String?
+  userAgent       String?
+
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
 }
 
 model BettingProvider {

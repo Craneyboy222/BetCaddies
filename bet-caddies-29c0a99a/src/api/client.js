@@ -100,6 +100,17 @@ export class BetCaddiesApi {
     return response.data || response
   }
 
+  siteContent = {
+    list: async () => {
+      const response = await this.client.get('/api/site-content')
+      return response.data || []
+    },
+    get: async (key) => {
+      const response = await this.client.get(`/api/site-content/${encodeURIComponent(key)}`)
+      return response.data || response
+    }
+  }
+
   // Admin API methods
   auth = {
     me: async () => {
@@ -142,6 +153,51 @@ export class BetCaddiesApi {
         return response.data || response
       }
     },
+
+    TourEvent: {
+      list: async (order, limit) => {
+        const response = await this.client.get('/api/entities/tour-events')
+        return response.data || []
+      },
+      update: async (id, data) => {
+        const response = await this.client.put(`/api/entities/tour-events/${id}`, data)
+        return response.data || response
+      },
+      delete: async (id) => {
+        const response = await this.client.delete(`/api/entities/tour-events/${id}`)
+        return response.data || response
+      }
+    },
+
+    OddsEvent: {
+      list: async (order, limit) => {
+        const response = await this.client.get('/api/entities/odds-events')
+        return response.data || []
+      },
+      get: async (id) => {
+        const response = await this.client.get(`/api/entities/odds-events/${id}`)
+        return response.data || response
+      }
+    },
+
+    OddsOffer: {
+      list: async (params = {}) => {
+        const qs = new URLSearchParams()
+        if (params.odds_market_id) qs.set('odds_market_id', params.odds_market_id)
+        if (params.limit) qs.set('limit', String(params.limit))
+        const suffix = qs.toString() ? `?${qs.toString()}` : ''
+        const response = await this.client.get(`/api/entities/odds-offers${suffix}`)
+        return response.data || []
+      },
+      update: async (id, data) => {
+        const response = await this.client.put(`/api/entities/odds-offers/${id}`, data)
+        return response.data || response
+      },
+      delete: async (id) => {
+        const response = await this.client.delete(`/api/entities/odds-offers/${id}`)
+        return response.data || response
+      }
+    },
     BettingProvider: {
       list: async (order, limit) => {
         const response = await this.client.get('/api/entities/betting-providers')
@@ -175,9 +231,40 @@ export class BetCaddiesApi {
         const response = await this.client.get('/api/entities/users')
         return response.data || []
       },
+      create: async (data) => {
+        const response = await this.client.post('/api/entities/users', data)
+        return response.data || response
+      },
       update: async (id, data) => {
         const response = await this.client.put(`/api/entities/users/${id}`, data)
         return response.data || response
+      },
+      impersonate: async (id) => {
+        const response = await this.client.post(`/api/entities/users/${id}/impersonate`, {})
+        return response
+      }
+    },
+    SiteContent: {
+      list: async () => {
+        const response = await this.client.get('/api/entities/site-content')
+        return response.data || []
+      },
+      upsert: async (key, json) => {
+        const response = await this.client.put(`/api/entities/site-content/${encodeURIComponent(key)}`, { json })
+        return response.data || response
+      },
+      delete: async (key) => {
+        const response = await this.client.delete(`/api/entities/site-content/${encodeURIComponent(key)}`)
+        return response
+      }
+    },
+    AuditLog: {
+      list: async (limit = 100) => {
+        const qs = new URLSearchParams()
+        if (limit) qs.set('limit', String(limit))
+        const suffix = qs.toString() ? `?${qs.toString()}` : ''
+        const response = await this.client.get(`/api/entities/audit-logs${suffix}`)
+        return response.data || []
       }
     },
     MembershipPackage: {

@@ -28,6 +28,15 @@ export default function Memberships() {
     queryFn: () => base44.entities.MembershipPackage.filter({ enabled: true }, 'display_order', 50)
   });
 
+  const { data: membershipsContent } = useQuery({
+    queryKey: ['siteContent', 'memberships'],
+    queryFn: () => api.siteContent.get('memberships'),
+    retry: false
+  });
+
+  const heroTitle = membershipsContent?.json?.hero?.title || 'Premium Membership';
+  const heroSubtitle = membershipsContent?.json?.hero?.subtitle || 'Unlock exclusive features and maximize your betting success';
+
   const { data: subscription } = useQuery({
     queryKey: ['mySubscription', user?.email],
     queryFn: () => base44.entities.MembershipSubscription.filter({ 
@@ -93,8 +102,8 @@ export default function Memberships() {
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500/30 to-amber-600/20 border border-amber-500/30 mb-4">
           <Crown className="w-8 h-8 text-amber-400" />
         </div>
-        <h1 className="text-4xl font-bold text-white mb-3">Premium Membership</h1>
-        <p className="text-xl text-slate-400">Unlock exclusive features and maximize your betting success</p>
+        <h1 className="text-4xl font-bold text-white mb-3">{heroTitle}</h1>
+        <p className="text-xl text-slate-400">{heroSubtitle}</p>
       </motion.div>
 
       {/* Active Subscription Banner */}

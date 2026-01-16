@@ -53,6 +53,19 @@ export default function Admin() {
   const [editingProvider, setEditingProvider] = useState(null);
   const [editingMembership, setEditingMembership] = useState(null);
   const [editingUser, setEditingUser] = useState(null);
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [impersonationResult, setImpersonationResult] = useState(null);
+
+  const [editingTourEvent, setEditingTourEvent] = useState(null);
+  const [viewingOddsEventId, setViewingOddsEventId] = useState(null);
+  const [editingOddsOffer, setEditingOddsOffer] = useState(null);
+  const [oddsMarketIdFilter, setOddsMarketIdFilter] = useState('');
+  const [oddsOffersLimit, setOddsOffersLimit] = useState(200);
+
+  const [contentKey, setContentKey] = useState('home');
+  const [contentDraft, setContentDraft] = useState(null);
+  const [viewingAuditLog, setViewingAuditLog] = useState(null);
+
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -103,9 +116,43 @@ export default function Admin() {
     queryFn: () => api.entities.User.list('-created_date', 100)
   });
 
+  const { data: siteContentItems = [], isLoading: siteContentLoading } = useQuery({
+    queryKey: ['siteContentAdmin'],
+    queryFn: () => api.entities.SiteContent.list()
+  });
+
+  const { data: auditLogs = [], isLoading: auditLogsLoading } = useQuery({
+    queryKey: ['auditLogs'],
+    queryFn: () => api.entities.AuditLog.list(200)
+  });
+
   const { data: memberships = [] } = useQuery({
     queryKey: ['memberships'],
     queryFn: () => api.entities.MembershipPackage.list('price', 50)
+  });
+
+  const { data: tourEvents = [], isLoading: tourEventsLoading } = useQuery({
+    queryKey: ['tourEvents'],
+    queryFn: () => api.entities.TourEvent.list('-start_date', 50)
+  });
+
+  const { data: oddsEvents = [], isLoading: oddsEventsLoading } = useQuery({
+    queryKey: ['oddsEvents'],
+    queryFn: () => api.entities.OddsEvent.list('-fetched_at', 50)
+  });
+
+  const { data: oddsOffers = [], isLoading: oddsOffersLoading } = useQuery({
+    queryKey: ['oddsOffers', oddsMarketIdFilter, oddsOffersLimit],
+    queryFn: () => api.entities.OddsOffer.list({
+      odds_market_id: oddsMarketIdFilter?.trim() ? oddsMarketIdFilter.trim() : undefined,
+      limit: oddsOffersLimit
+    })
+  });
+
+  const { data: oddsEventDetails, isLoading: oddsEventDetailsLoading } = useQuery({
+    queryKey: ['oddsEventDetails', viewingOddsEventId],
+    enabled: !!viewingOddsEventId,
+    queryFn: () => api.entities.OddsEvent.get(viewingOddsEventId)
   });
 
   // Mutations
@@ -175,6 +222,64 @@ export default function Admin() {
     }
   });
 
+  const createUserMutation = useMutation({
+    mutationFn: (data) => api.entities.User.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allUsers'] });
+      setCreatingUser(false);
+    }
+  });
+
+  const impersonateUserMutation = useMutation({
+    mutationFn: (id) => api.entities.User.impersonate(id),
+    onSuccess: (result) => {
+      setImpersonationResult(result);
+      queryClient.invalidateQueries({ queryKey: ['auditLogs'] });
+    }
+  });
+
+  const upsertSiteContentMutation = useMutation({
+    mutationFn: ({ key, json }) => api.entities.SiteContent.upsert(key, json),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['siteContentAdmin'] });
+    }
+  });
+
+  useEffect(() => {
+    const defaultsByKey = {
+      home: {
+        hero: {
+          title: 'Your Weekly Golf Picks',
+          subtitle: '30 curated bets across 5 tours. Data-driven selections with transparent analysis and real value.'
+        },
+        features: [
+          { title: 'Curated, weekly', body: 'Fresh picks every week across multiple tours.' },
+          { title: 'Transparent analysis', body: 'Clear reasoning behind every recommendation.' },
+          { title: 'Editorial control', body: 'Pinned picks and tier overrides for curation.' }
+        ],
+        faqs: [
+          { q: 'Are these guaranteed winners?', a: 'No. We provide analysis and information — not guarantees.' },
+          { q: 'How often do picks update?', a: 'Weekly (and occasionally mid-week if markets change).' }
+        ]
+      },
+      join: {
+        hero: {
+          title: 'Welcome to Bet Caddies',
+          subtitle: 'Your premium golf betting companion'
+        }
+      },
+      memberships: {
+        hero: {
+          title: 'Premium Membership',
+          subtitle: 'Unlock exclusive features and maximize your betting success'
+        }
+      }
+    };
+
+    const found = siteContentItems.find((i) => i.key === contentKey);
+    setContentDraft(found?.json ?? defaultsByKey[contentKey] ?? {});
+  }, [contentKey, siteContentItems]);
+
   const createMembershipMutation = useMutation({
     mutationFn: (data) => api.entities.MembershipPackage.create(data),
     onSuccess: () => {
@@ -186,6 +291,32 @@ export default function Admin() {
   const deleteMembershipMutation = useMutation({
     mutationFn: (id) => api.entities.MembershipPackage.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['memberships'] })
+  });
+
+  const updateTourEventMutation = useMutation({
+    mutationFn: ({ id, data }) => api.entities.TourEvent.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tourEvents'] });
+      setEditingTourEvent(null);
+    }
+  });
+
+  const deleteTourEventMutation = useMutation({
+    mutationFn: (id) => api.entities.TourEvent.delete(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tourEvents'] })
+  });
+
+  const updateOddsOfferMutation = useMutation({
+    mutationFn: ({ id, data }) => api.entities.OddsOffer.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['oddsOffers'] });
+      setEditingOddsOffer(null);
+    }
+  });
+
+  const deleteOddsOfferMutation = useMutation({
+    mutationFn: (id) => api.entities.OddsOffer.delete(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['oddsOffers'] })
   });
 
   if (!user) return <LoadingSpinner text="Loading admin..." />;
@@ -244,6 +375,14 @@ export default function Admin() {
             <Target className="w-4 h-4 mr-2" />
             Bets
           </TabsTrigger>
+          <TabsTrigger value="tour" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+            <Trophy className="w-4 h-4 mr-2" />
+            Tour Events
+          </TabsTrigger>
+          <TabsTrigger value="odds" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+            <Eye className="w-4 h-4 mr-2" />
+            Odds
+          </TabsTrigger>
           <TabsTrigger value="providers" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
             <Building2 className="w-4 h-4 mr-2" />
             Providers
@@ -252,9 +391,17 @@ export default function Admin() {
             <AlertTriangle className="w-4 h-4 mr-2" />
             Issues
           </TabsTrigger>
+          <TabsTrigger value="content" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+            <FileText className="w-4 h-4 mr-2" />
+            Content
+          </TabsTrigger>
           <TabsTrigger value="users" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
             <Users className="w-4 h-4 mr-2" />
             Users
+          </TabsTrigger>
+          <TabsTrigger value="audit" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+            <Clock className="w-4 h-4 mr-2" />
+            Audit
           </TabsTrigger>
           <TabsTrigger value="memberships" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
             <BarChart3 className="w-4 h-4 mr-2" />
@@ -340,6 +487,255 @@ export default function Admin() {
           </div>
         </TabsContent>
 
+        {/* Content Tab */}
+        <TabsContent value="content">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <h2 className="text-xl font-bold text-white">Site Content</h2>
+                <p className="text-sm text-slate-400">Edit marketing copy, feature bullets, and FAQs.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Select value={contentKey} onValueChange={setContentKey}>
+                  <SelectTrigger className="bg-slate-800 border-slate-700 w-[220px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="home">home</SelectItem>
+                    <SelectItem value="join">join</SelectItem>
+                    <SelectItem value="memberships">memberships</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  onClick={() => upsertSiteContentMutation.mutate({ key: contentKey, json: contentDraft })}
+                  disabled={upsertSiteContentMutation.isPending || !contentDraft}
+                  className="bg-emerald-500 hover:bg-emerald-600"
+                >
+                  {upsertSiteContentMutation.isPending ? 'Saving…' : 'Save'}
+                </Button>
+              </div>
+            </div>
+
+            {siteContentLoading ? (
+              <LoadingSpinner />
+            ) : (
+              <SiteContentEditor
+                contentKey={contentKey}
+                value={contentDraft}
+                onChange={setContentDraft}
+              />
+            )}
+          </div>
+        </TabsContent>
+
+        {/* Tour Events Tab */}
+        <TabsContent value="tour">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-white">Tour Events ({tourEvents.length})</h2>
+            </div>
+
+            {tourEventsLoading ? (
+              <LoadingSpinner />
+            ) : tourEvents.length === 0 ? (
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-8 text-center">
+                <p className="text-slate-400">No tour events found.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {tourEvents.map(ev => (
+                  <div
+                    key={ev.id}
+                    className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
+                          <Badge variant="outline" className="bg-slate-700/50 text-slate-300 border-slate-600">
+                            {ev.tour}
+                          </Badge>
+                          {ev.start_date && (
+                            <span className="text-xs text-slate-500">
+                              {new Date(ev.start_date).toLocaleDateString()} → {ev.end_date ? new Date(ev.end_date).toLocaleDateString() : '-'}
+                            </span>
+                          )}
+                          {ev.run_id && (
+                            <Badge variant="outline" className="bg-slate-700/50 text-slate-400 border-slate-600">
+                              Run: {ev.run_id}
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="font-semibold text-white">{ev.event_name}</div>
+                        <div className="text-sm text-slate-400">
+                          {ev.location || '—'}{ev.course_name ? ` • ${ev.course_name}` : ''}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setEditingTourEvent(ev)}
+                          className="text-slate-400 hover:text-white"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => deleteTourEventMutation.mutate(ev.id)}
+                          className="text-slate-400 hover:text-red-400"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
+        {/* Odds Tab */}
+        <TabsContent value="odds">
+          <div className="space-y-8">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-white">Odds Events ({oddsEvents.length})</h2>
+              </div>
+
+              {oddsEventsLoading ? (
+                <LoadingSpinner />
+              ) : oddsEvents.length === 0 ? (
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-8 text-center">
+                  <p className="text-slate-400">No odds events found.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {oddsEvents.map(ev => (
+                    <div
+                      key={ev.id}
+                      className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-2 flex-wrap">
+                            <Badge variant="outline" className="bg-slate-700/50 text-slate-300 border-slate-600">
+                              {ev.odds_provider}
+                            </Badge>
+                            <span className="text-xs text-slate-500">Markets: {ev.markets_count || 0}</span>
+                            {ev.fetched_at && (
+                              <span className="text-xs text-slate-500">Fetched: {new Date(ev.fetched_at).toLocaleString()}</span>
+                            )}
+                          </div>
+                          <div className="font-semibold text-white">{ev.event_name || '—'}</div>
+                          <div className="text-sm text-slate-400">
+                            {ev.tour || '—'} • External ID: {ev.external_event_id || '—'}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setViewingOddsEventId(ev.id)}
+                            className="text-slate-400 hover:text-white"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <h2 className="text-xl font-bold text-white">Odds Offers ({oddsOffers.length})</h2>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Input
+                    value={oddsMarketIdFilter}
+                    onChange={(e) => setOddsMarketIdFilter(e.target.value)}
+                    placeholder="Filter by odds_market_id (optional)"
+                    className="w-80 bg-slate-800/50 border-slate-700 text-white"
+                  />
+                  <Input
+                    value={String(oddsOffersLimit)}
+                    onChange={(e) => setOddsOffersLimit(Number(e.target.value || 200))}
+                    placeholder="Limit"
+                    className="w-24 bg-slate-800/50 border-slate-700 text-white"
+                  />
+                </div>
+              </div>
+
+              {oddsOffersLoading ? (
+                <LoadingSpinner />
+              ) : oddsOffers.length === 0 ? (
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-8 text-center">
+                  <p className="text-slate-400">No odds offers found.</p>
+                </div>
+              ) : (
+                <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 overflow-hidden">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-slate-700/50">
+                        <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Selection</th>
+                        <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Book</th>
+                        <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Odds</th>
+                        <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Event</th>
+                        <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Fetched</th>
+                        <th className="text-right px-4 py-3 text-sm font-medium text-slate-400">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {oddsOffers.map((offer, idx) => (
+                        <tr key={offer.id} className={idx !== oddsOffers.length - 1 ? 'border-b border-slate-700/30' : ''}>
+                          <td className="px-4 py-3">
+                            <div className="font-medium text-white">{offer.selection_name}</div>
+                            <div className="text-xs text-slate-500">{offer.market_key || '—'}</div>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-slate-300">{offer.bookmaker || '—'}</td>
+                          <td className="px-4 py-3 text-sm text-slate-300">
+                            {offer.odds_display || offer.odds_decimal || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-slate-400">
+                            {offer.event_name || '—'}
+                            <div className="text-xs text-slate-500">{offer.tour || '—'}</div>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-500">
+                            {offer.fetched_at ? new Date(offer.fetched_at).toLocaleString() : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setEditingOddsOffer(offer)}
+                                className="text-slate-400 hover:text-white"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => deleteOddsOfferMutation.mutate(offer.id)}
+                                className="text-slate-400 hover:text-red-400"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </TabsContent>
+
         {/* Bets Tab */}
         <TabsContent value="bets">
           <div className="space-y-4">
@@ -365,6 +761,16 @@ export default function Admin() {
                           }>
                             {bet.status}
                           </Badge>
+                          {bet.pinned && (
+                            <Badge variant="outline" className="bg-amber-500/20 text-amber-400 border-amber-500/30">
+                              Pinned
+                            </Badge>
+                          )}
+                          {bet.tier_override && (
+                            <Badge variant="outline" className="bg-violet-500/20 text-violet-400 border-violet-500/30">
+                              Tier: {String(bet.tier_override).toUpperCase()}
+                            </Badge>
+                          )}
                           <Badge variant="outline" className="bg-slate-700/50 text-slate-300 border-slate-600">
                             {bet.tour}
                           </Badge>
@@ -534,7 +940,16 @@ export default function Admin() {
         {/* Users Tab */}
         <TabsContent value="users">
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white">Users ({users.length})</h2>
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <h2 className="text-xl font-bold text-white">Users ({users.length})</h2>
+              <Button
+                onClick={() => setCreatingUser(true)}
+                className="bg-emerald-500 hover:bg-emerald-600"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Create User
+              </Button>
+            </div>
             
             <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 overflow-hidden">
               <table className="w-full">
@@ -556,12 +971,19 @@ export default function Admin() {
                         <div className="text-sm text-slate-400">{u.email}</div>
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant="outline" className={
-                          u.role === 'admin' ? 'bg-violet-500/20 text-violet-400 border-violet-500/30' :
-                          'bg-slate-500/20 text-slate-400 border-slate-500/30'
-                        }>
-                          {u.role || 'user'}
-                        </Badge>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline" className={
+                            u.role === 'admin' ? 'bg-violet-500/20 text-violet-400 border-violet-500/30' :
+                            'bg-slate-500/20 text-slate-400 border-slate-500/30'
+                          }>
+                            {u.role || 'user'}
+                          </Badge>
+                          {u.disabled_at && (
+                            <Badge className="bg-red-500/20 text-red-400 border border-red-500/30">
+                              Disabled
+                            </Badge>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-center text-white">{u.total_bets_placed || 0}</td>
                       <td className="px-4 py-3 text-center text-amber-400">{u.hio_total_points || 0}</td>
@@ -569,20 +991,95 @@ export default function Admin() {
                         {u.created_date ? new Date(u.created_date).toLocaleDateString() : '-'}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditingUser(u)}
-                          className="text-slate-400 hover:text-white"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </Button>
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => impersonateUserMutation.mutate(u.id)}
+                            className="text-slate-400 hover:text-white"
+                            disabled={impersonateUserMutation.isPending || !!u.disabled_at}
+                          >
+                            Impersonate
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setEditingUser(u)}
+                            className="text-slate-400 hover:text-white"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+          </div>
+        </TabsContent>
+
+        {/* Audit Tab */}
+        <TabsContent value="audit">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-white">Audit Logs</h2>
+              <Button
+                variant="outline"
+                className="border-slate-600"
+                onClick={() => queryClient.invalidateQueries({ queryKey: ['auditLogs'] })}
+              >
+                Refresh
+              </Button>
+            </div>
+
+            {auditLogsLoading ? (
+              <LoadingSpinner />
+            ) : auditLogs.length === 0 ? (
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-8 text-center">
+                <p className="text-slate-400">No audit logs yet.</p>
+              </div>
+            ) : (
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 overflow-hidden">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-slate-700/50">
+                      <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Time</th>
+                      <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Action</th>
+                      <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Actor</th>
+                      <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Entity</th>
+                      <th className="text-right px-4 py-3 text-sm font-medium text-slate-400">Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {auditLogs.map((l, idx) => (
+                      <tr key={l.id} className={idx !== auditLogs.length - 1 ? 'border-b border-slate-700/30' : ''}>
+                        <td className="px-4 py-3 text-sm text-slate-400">
+                          {l.created_at ? new Date(l.created_at).toLocaleString() : '-'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-white">{l.action}</td>
+                        <td className="px-4 py-3 text-sm text-slate-300">
+                          {l.actor_email || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-slate-300">
+                          {l.entity_type || '—'}{l.entity_id ? ` • ${l.entity_id}` : ''}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-slate-400 hover:text-white"
+                            onClick={() => setViewingAuditLog(l)}
+                          >
+                            View
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </TabsContent>
 
@@ -770,8 +1267,373 @@ export default function Admin() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Create User Dialog */}
+      <Dialog open={!!creatingUser} onOpenChange={() => setCreatingUser(false)}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Create User</DialogTitle>
+          </DialogHeader>
+          {creatingUser && (
+            <CreateUserForm
+              isSaving={createUserMutation.isPending}
+              onCancel={() => setCreatingUser(false)}
+              onSave={(data) => createUserMutation.mutate(data)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Impersonation Token Dialog */}
+      <Dialog open={!!impersonationResult} onOpenChange={() => setImpersonationResult(null)}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Impersonation Token</DialogTitle>
+          </DialogHeader>
+          {impersonationResult && (
+            <div className="space-y-3 pt-2">
+              <div className="text-sm text-slate-300">
+                Token for: <span className="text-white">{impersonationResult.user?.email || '—'}</span>
+              </div>
+              <Textarea
+                readOnly
+                value={impersonationResult.token || ''}
+                className="bg-slate-800/50 border-slate-700 text-white min-h-[180px]"
+              />
+              <div className="text-xs text-slate-500">
+                This token is short-lived (1h). Switching your app token to this will replace your admin session.
+              </div>
+              <div className="flex justify-end">
+                <Button variant="outline" className="border-slate-600" onClick={() => setImpersonationResult(null)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* View Audit Log Dialog */}
+      <Dialog open={!!viewingAuditLog} onOpenChange={() => setViewingAuditLog(null)}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Audit Log Details</DialogTitle>
+          </DialogHeader>
+          {viewingAuditLog && (
+            <AuditLogDetailsView entry={viewingAuditLog} />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Tour Event Dialog */}
+      <Dialog open={!!editingTourEvent} onOpenChange={() => setEditingTourEvent(null)}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Tour Event</DialogTitle>
+          </DialogHeader>
+          {editingTourEvent && (
+            <TourEventEditForm
+              event={editingTourEvent}
+              onSave={(data) => updateTourEventMutation.mutate({ id: editingTourEvent.id, data })}
+              onCancel={() => setEditingTourEvent(null)}
+              isSaving={updateTourEventMutation.isPending}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* View Odds Event Dialog */}
+      <Dialog open={!!viewingOddsEventId} onOpenChange={() => setViewingOddsEventId(null)}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Odds Event Details</DialogTitle>
+          </DialogHeader>
+          {oddsEventDetailsLoading ? (
+            <LoadingSpinner />
+          ) : oddsEventDetails ? (
+            <OddsEventDetailsView oddsEvent={oddsEventDetails} />
+          ) : (
+            <div className="text-slate-400">No details found.</div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Odds Offer Dialog */}
+      <Dialog open={!!editingOddsOffer} onOpenChange={() => setEditingOddsOffer(null)}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Odds Offer</DialogTitle>
+          </DialogHeader>
+          {editingOddsOffer && (
+            <OddsOfferEditForm
+              offer={editingOddsOffer}
+              onSave={(data) => updateOddsOfferMutation.mutate({ id: editingOddsOffer.id, data })}
+              onCancel={() => setEditingOddsOffer(null)}
+              isSaving={updateOddsOfferMutation.isPending}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+function TourEventEditForm({ event, onSave, onCancel, isSaving }) {
+  const [form, setForm] = useState({
+    tour: event.tour || '',
+    event_name: event.event_name || '',
+    start_date: event.start_date ? new Date(event.start_date).toISOString().slice(0, 16) : '',
+    end_date: event.end_date ? new Date(event.end_date).toISOString().slice(0, 16) : '',
+    location: event.location || '',
+    course_name: event.course_name || '',
+    course_lat: event.course_lat ?? '',
+    course_lng: event.course_lng ?? '',
+    source_urls: Array.isArray(event.source_urls) ? event.source_urls.join('\n') : ''
+  });
+
+  const toIsoStringOrUndefined = (value) => {
+    if (!value) return undefined
+    const dt = new Date(value)
+    if (Number.isNaN(dt.getTime())) return undefined
+    return dt.toISOString()
+  }
+
+  const parseNumberOr = (value, fallback) => {
+    if (value === '' || value === undefined || value === null) return fallback
+    const n = Number(value)
+    return Number.isFinite(n) ? n : fallback
+  }
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const payload = {
+      tour: form.tour,
+      event_name: form.event_name,
+      start_date: toIsoStringOrUndefined(form.start_date),
+      end_date: toIsoStringOrUndefined(form.end_date),
+      location: form.location || undefined,
+      course_name: form.course_name || undefined,
+      course_lat: form.course_lat === '' ? null : parseNumberOr(form.course_lat, null),
+      course_lng: form.course_lng === '' ? null : parseNumberOr(form.course_lng, null),
+      source_urls: form.source_urls
+        ? form.source_urls.split('\n').map(s => s.trim()).filter(Boolean)
+        : []
+    }
+    onSave(payload);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm text-slate-300 mb-1">Tour</label>
+          <Input
+            value={form.tour}
+            onChange={(e) => setForm({ ...form, tour: e.target.value })}
+            className="bg-slate-800/50 border-slate-700 text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-sm text-slate-300 mb-1">Event Name</label>
+          <Input
+            value={form.event_name}
+            onChange={(e) => setForm({ ...form, event_name: e.target.value })}
+            className="bg-slate-800/50 border-slate-700 text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-sm text-slate-300 mb-1">Start (local)</label>
+          <Input
+            type="datetime-local"
+            value={form.start_date}
+            onChange={(e) => setForm({ ...form, start_date: e.target.value })}
+            className="bg-slate-800/50 border-slate-700 text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-sm text-slate-300 mb-1">End (local)</label>
+          <Input
+            type="datetime-local"
+            value={form.end_date}
+            onChange={(e) => setForm({ ...form, end_date: e.target.value })}
+            className="bg-slate-800/50 border-slate-700 text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-sm text-slate-300 mb-1">Location</label>
+          <Input
+            value={form.location}
+            onChange={(e) => setForm({ ...form, location: e.target.value })}
+            className="bg-slate-800/50 border-slate-700 text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-sm text-slate-300 mb-1">Course Name</label>
+          <Input
+            value={form.course_name}
+            onChange={(e) => setForm({ ...form, course_name: e.target.value })}
+            className="bg-slate-800/50 border-slate-700 text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-sm text-slate-300 mb-1">Course Lat</label>
+          <Input
+            value={String(form.course_lat)}
+            onChange={(e) => setForm({ ...form, course_lat: e.target.value })}
+            className="bg-slate-800/50 border-slate-700 text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-sm text-slate-300 mb-1">Course Lng</label>
+          <Input
+            value={String(form.course_lng)}
+            onChange={(e) => setForm({ ...form, course_lng: e.target.value })}
+            className="bg-slate-800/50 border-slate-700 text-white"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm text-slate-300 mb-1">Source URLs (one per line)</label>
+        <Textarea
+          value={form.source_urls}
+          onChange={(e) => setForm({ ...form, source_urls: e.target.value })}
+          className="bg-slate-800/50 border-slate-700 text-white min-h-[120px]"
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-2 pt-2">
+        <Button type="button" variant="ghost" onClick={onCancel} className="text-slate-300 hover:text-white">
+          Cancel
+        </Button>
+        <Button type="submit" disabled={isSaving} className="bg-emerald-500 hover:bg-emerald-600">
+          {isSaving ? 'Saving...' : 'Save'}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function OddsOfferEditForm({ offer, onSave, onCancel, isSaving }) {
+  const [form, setForm] = useState({
+    odds_decimal: offer.odds_decimal ?? '',
+    odds_display: offer.odds_display ?? '',
+    deep_link: offer.deep_link ?? ''
+  })
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    onSave({
+      odds_decimal: form.odds_decimal === '' ? undefined : Number(form.odds_decimal),
+      odds_display: form.odds_display === '' ? undefined : form.odds_display,
+      deep_link: form.deep_link === '' ? '' : form.deep_link
+    })
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4">
+        <div className="font-medium text-white">{offer.selection_name}</div>
+        <div className="text-sm text-slate-400">{offer.bookmaker || '—'} • {offer.market_key || '—'}</div>
+        <div className="text-xs text-slate-500">{offer.event_name || '—'}</div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm text-slate-300 mb-1">Odds (decimal)</label>
+          <Input
+            value={String(form.odds_decimal)}
+            onChange={(e) => setForm({ ...form, odds_decimal: e.target.value })}
+            className="bg-slate-800/50 border-slate-700 text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-sm text-slate-300 mb-1">Odds (display)</label>
+          <Input
+            value={form.odds_display}
+            onChange={(e) => setForm({ ...form, odds_display: e.target.value })}
+            className="bg-slate-800/50 border-slate-700 text-white"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm text-slate-300 mb-1">Deep Link (optional)</label>
+        <Input
+          value={form.deep_link}
+          onChange={(e) => setForm({ ...form, deep_link: e.target.value })}
+          className="bg-slate-800/50 border-slate-700 text-white"
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-2 pt-2">
+        <Button type="button" variant="ghost" onClick={onCancel} className="text-slate-300 hover:text-white">
+          Cancel
+        </Button>
+        <Button type="submit" disabled={isSaving} className="bg-emerald-500 hover:bg-emerald-600">
+          {isSaving ? 'Saving...' : 'Save'}
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+function OddsEventDetailsView({ oddsEvent }) {
+  const markets = Array.isArray(oddsEvent.markets) ? oddsEvent.markets : []
+  return (
+    <div className="space-y-4">
+      <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Badge variant="outline" className="bg-slate-700/50 text-slate-300 border-slate-600">
+            {oddsEvent.odds_provider}
+          </Badge>
+          <span className="text-xs text-slate-500">Markets: {markets.length}</span>
+          {oddsEvent.fetched_at && (
+            <span className="text-xs text-slate-500">Fetched: {new Date(oddsEvent.fetched_at).toLocaleString()}</span>
+          )}
+        </div>
+        <div className="mt-2 font-semibold text-white">{oddsEvent.event_name || '—'}</div>
+        <div className="text-sm text-slate-400">External ID: {oddsEvent.external_event_id || '—'}</div>
+      </div>
+
+      <div className="space-y-3">
+        {markets.map((m) => (
+          <div key={m.id} className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4">
+            <div className="flex items-center justify-between">
+              <div className="font-medium text-white">{m.market_key || 'Market'}</div>
+              <div className="text-xs text-slate-500">Offers: {(m.offers || []).length}</div>
+            </div>
+            {(m.offers || []).length > 0 && (
+              <div className="mt-3 space-y-2">
+                {(m.offers || []).slice(0, 20).map(o => (
+                  <div key={o.id} className="flex items-center justify-between text-sm">
+                    <div className="text-slate-300 truncate pr-3">{o.selection_name}</div>
+                    <div className="text-slate-400 flex-shrink-0">
+                      {o.bookmaker || '—'} • {o.odds_display || o.odds_decimal || '—'}
+                    </div>
+                  </div>
+                ))}
+                {(m.offers || []).length > 20 && (
+                  <div className="text-xs text-slate-500">Showing first 20 offers…</div>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {oddsEvent.raw && (
+        <div>
+          <div className="text-sm text-slate-300 mb-2">Raw JSON</div>
+          <Textarea
+            readOnly
+            value={JSON.stringify(oddsEvent.raw, null, 2)}
+            className="bg-slate-800/50 border-slate-700 text-white min-h-[220px]"
+          />
+        </div>
+      )}
+    </div>
+  )
 }
 
 function UserEditForm({ user, onSave, onCancel, isSaving }) {
@@ -779,6 +1641,8 @@ function UserEditForm({ user, onSave, onCancel, isSaving }) {
     email: user.email || '',
     full_name: user.full_name || '',
     role: user.role || 'user',
+    disabled: !!user.disabled_at,
+    disabled_reason: user.disabled_reason || '',
     favorite_tours: Array.isArray(user.favorite_tours) ? user.favorite_tours : [],
     risk_appetite: user.risk_appetite || '',
     notifications_enabled: user.notifications_enabled !== false,
@@ -832,6 +1696,26 @@ function UserEditForm({ user, onSave, onCancel, isSaving }) {
             onChange={(e) => setForm({ ...form, risk_appetite: e.target.value })}
             className="bg-slate-800 border-slate-700"
             placeholder="conservative / balanced / aggressive"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="flex items-center justify-between bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2">
+          <span className="text-sm text-slate-300">Disabled</span>
+          <Switch
+            checked={!!form.disabled}
+            onCheckedChange={(v) => setForm({ ...form, disabled: v })}
+          />
+        </div>
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">Disabled Reason</label>
+          <Input
+            value={form.disabled_reason}
+            onChange={(e) => setForm({ ...form, disabled_reason: e.target.value })}
+            className="bg-slate-800 border-slate-700"
+            placeholder="Optional"
+            disabled={!form.disabled}
           />
         </div>
       </div>
@@ -927,6 +1811,333 @@ function UserEditForm({ user, onSave, onCancel, isSaving }) {
   );
 }
 
+function CreateUserForm({ onSave, onCancel, isSaving }) {
+  const [form, setForm] = useState({
+    email: '',
+    full_name: '',
+    role: 'user',
+    disabled: false,
+    disabled_reason: ''
+  });
+
+  return (
+    <div className="space-y-4 pt-4">
+      <div>
+        <label className="text-sm text-slate-400 mb-2 block">Email</label>
+        <Input
+          value={form.email}
+          onChange={(e) => setForm({ ...form, email: e.target.value })}
+          className="bg-slate-800 border-slate-700"
+          placeholder="user@example.com"
+        />
+      </div>
+
+      <div>
+        <label className="text-sm text-slate-400 mb-2 block">Full Name</label>
+        <Input
+          value={form.full_name}
+          onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+          className="bg-slate-800 border-slate-700"
+          placeholder="Optional"
+        />
+      </div>
+
+      <div>
+        <label className="text-sm text-slate-400 mb-2 block">Role</label>
+        <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}>
+          <SelectTrigger className="bg-slate-800 border-slate-700">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="user">User</SelectItem>
+            <SelectItem value="admin">Admin</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="flex items-center justify-between bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2">
+          <span className="text-sm text-slate-300">Disabled</span>
+          <Switch checked={!!form.disabled} onCheckedChange={(v) => setForm({ ...form, disabled: v })} />
+        </div>
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">Disabled Reason</label>
+          <Input
+            value={form.disabled_reason}
+            onChange={(e) => setForm({ ...form, disabled_reason: e.target.value })}
+            className="bg-slate-800 border-slate-700"
+            placeholder="Optional"
+            disabled={!form.disabled}
+          />
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-3 pt-2">
+        <Button variant="outline" onClick={onCancel} className="border-slate-600" disabled={isSaving}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() => onSave({
+            ...form,
+            full_name: form.full_name?.trim() ? form.full_name : null,
+            disabled_reason: form.disabled_reason?.trim() ? form.disabled_reason : null
+          })}
+          className="bg-emerald-500 hover:bg-emerald-600"
+          disabled={isSaving || !form.email.trim()}
+        >
+          {isSaving ? 'Creating…' : 'Create'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function SiteContentEditor({ contentKey, value, onChange }) {
+  const [rawJson, setRawJson] = useState('');
+
+  useEffect(() => {
+    try {
+      setRawJson(JSON.stringify(value ?? {}, null, 2));
+    } catch (e) {
+      setRawJson('');
+    }
+  }, [value]);
+
+  const setHeroField = (field, nextValue) => {
+    onChange({
+      ...(value ?? {}),
+      hero: {
+        ...((value ?? {}).hero ?? {}),
+        [field]: nextValue
+      }
+    });
+  };
+
+  const features = Array.isArray(value?.features) ? value.features : [];
+  const faqs = Array.isArray(value?.faqs) ? value.faqs : [];
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4">
+        <div className="text-sm text-slate-300 font-medium mb-3">Hero</div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm text-slate-400 mb-2 block">Title</label>
+            <Input
+              value={value?.hero?.title || ''}
+              onChange={(e) => setHeroField('title', e.target.value)}
+              className="bg-slate-800 border-slate-700"
+            />
+          </div>
+          <div>
+            <label className="text-sm text-slate-400 mb-2 block">Subtitle</label>
+            <Input
+              value={value?.hero?.subtitle || ''}
+              onChange={(e) => setHeroField('subtitle', e.target.value)}
+              className="bg-slate-800 border-slate-700"
+            />
+          </div>
+        </div>
+      </div>
+
+      {contentKey === 'home' && (
+        <>
+          <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm text-slate-300 font-medium">Feature Bullets</div>
+              <Button
+                variant="outline"
+                className="border-slate-600"
+                onClick={() => onChange({
+                  ...(value ?? {}),
+                  features: [...features, { title: '', body: '' }]
+                })}
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Add
+              </Button>
+            </div>
+
+            <div className="space-y-3">
+              {features.length === 0 ? (
+                <div className="text-sm text-slate-500">No feature bullets yet.</div>
+              ) : (
+                features.map((f, idx) => (
+                  <div key={idx} className="grid grid-cols-12 gap-3 items-start">
+                    <div className="col-span-4">
+                      <Input
+                        value={f?.title || ''}
+                        onChange={(e) => {
+                          const next = [...features];
+                          next[idx] = { ...(next[idx] || {}), title: e.target.value };
+                          onChange({ ...(value ?? {}), features: next });
+                        }}
+                        className="bg-slate-800 border-slate-700"
+                        placeholder="Title"
+                      />
+                    </div>
+                    <div className="col-span-7">
+                      <Input
+                        value={f?.body || ''}
+                        onChange={(e) => {
+                          const next = [...features];
+                          next[idx] = { ...(next[idx] || {}), body: e.target.value };
+                          onChange({ ...(value ?? {}), features: next });
+                        }}
+                        className="bg-slate-800 border-slate-700"
+                        placeholder="Description"
+                      />
+                    </div>
+                    <div className="col-span-1 flex justify-end">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          const next = features.filter((_, i) => i !== idx);
+                          onChange({ ...(value ?? {}), features: next });
+                        }}
+                        className="text-slate-400 hover:text-red-400"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm text-slate-300 font-medium">FAQs</div>
+              <Button
+                variant="outline"
+                className="border-slate-600"
+                onClick={() => onChange({
+                  ...(value ?? {}),
+                  faqs: [...faqs, { q: '', a: '' }]
+                })}
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Add
+              </Button>
+            </div>
+
+            <div className="space-y-3">
+              {faqs.length === 0 ? (
+                <div className="text-sm text-slate-500">No FAQs yet.</div>
+              ) : (
+                faqs.map((f, idx) => (
+                  <div key={idx} className="space-y-2 border border-slate-700/50 rounded-lg p-3 bg-slate-900/30">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs text-slate-500">FAQ #{idx + 1}</div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          const next = faqs.filter((_, i) => i !== idx);
+                          onChange({ ...(value ?? {}), faqs: next });
+                        }}
+                        className="text-slate-400 hover:text-red-400"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                    <Input
+                      value={f?.q || ''}
+                      onChange={(e) => {
+                        const next = [...faqs];
+                        next[idx] = { ...(next[idx] || {}), q: e.target.value };
+                        onChange({ ...(value ?? {}), faqs: next });
+                      }}
+                      className="bg-slate-800 border-slate-700"
+                      placeholder="Question"
+                    />
+                    <Textarea
+                      value={f?.a || ''}
+                      onChange={(e) => {
+                        const next = [...faqs];
+                        next[idx] = { ...(next[idx] || {}), a: e.target.value };
+                        onChange({ ...(value ?? {}), faqs: next });
+                      }}
+                      className="bg-slate-800 border-slate-700 text-white min-h-[90px]"
+                      placeholder="Answer"
+                    />
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-sm text-slate-300 font-medium">Raw JSON</div>
+          <Button
+            variant="outline"
+            className="border-slate-600"
+            onClick={() => {
+              try {
+                const parsed = JSON.parse(rawJson || '{}');
+                onChange(parsed);
+              } catch (e) {
+                alert('Invalid JSON');
+              }
+            }}
+          >
+            Apply JSON
+          </Button>
+        </div>
+        <Textarea
+          value={rawJson}
+          onChange={(e) => setRawJson(e.target.value)}
+          className="bg-slate-800/50 border-slate-700 text-white min-h-[220px]"
+        />
+      </div>
+    </div>
+  );
+}
+
+function AuditLogDetailsView({ entry }) {
+  const before = entry.before_json ? JSON.stringify(entry.before_json, null, 2) : '';
+  const after = entry.after_json ? JSON.stringify(entry.after_json, null, 2) : '';
+
+  return (
+    <div className="space-y-4 pt-2">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <div className="text-xs text-slate-500">Time</div>
+          <div className="text-sm text-slate-200">{entry.created_at ? new Date(entry.created_at).toLocaleString() : '—'}</div>
+        </div>
+        <div>
+          <div className="text-xs text-slate-500">Actor</div>
+          <div className="text-sm text-slate-200">{entry.actor_email || '—'}</div>
+        </div>
+        <div>
+          <div className="text-xs text-slate-500">Action</div>
+          <div className="text-sm text-slate-200">{entry.action || '—'}</div>
+        </div>
+        <div>
+          <div className="text-xs text-slate-500">Entity</div>
+          <div className="text-sm text-slate-200">{entry.entity_type || '—'}{entry.entity_id ? ` • ${entry.entity_id}` : ''}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <div className="text-sm text-slate-300 mb-2">Before</div>
+          <Textarea readOnly value={before || '—'} className="bg-slate-800/50 border-slate-700 text-white min-h-[220px]" />
+        </div>
+        <div>
+          <div className="text-sm text-slate-300 mb-2">After</div>
+          <Textarea readOnly value={after || '—'} className="bg-slate-800/50 border-slate-700 text-white min-h-[220px]" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BetEditForm({ bet, onSave, onCancel }) {
   const [form, setForm] = useState({
     selection_name: bet.selection_name || '',
@@ -937,7 +2148,10 @@ function BetEditForm({ bet, onSave, onCancel }) {
     status: bet.status || 'active',
     course_fit_score: bet.course_fit_score || 5,
     form_label: bet.form_label || '',
-    weather_label: bet.weather_label || ''
+    weather_label: bet.weather_label || '',
+    pinned: !!bet.pinned,
+    pin_order: bet.pin_order ?? '',
+    tier_override: bet.tier_override || 'none'
   });
 
   return (
@@ -1009,6 +2223,44 @@ function BetEditForm({ bet, onSave, onCancel }) {
         </div>
       </div>
 
+      <div className="grid grid-cols-3 gap-4">
+        <div className="flex items-center justify-between bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2">
+          <span className="text-sm text-slate-300">Pinned</span>
+          <Switch
+            checked={!!form.pinned}
+            onCheckedChange={(v) => setForm({ ...form, pinned: v })}
+          />
+        </div>
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">Pin Order</label>
+          <Input
+            type="number"
+            min="0"
+            value={form.pin_order}
+            onChange={(e) => setForm({ ...form, pin_order: e.target.value })}
+            className="bg-slate-800 border-slate-700"
+            placeholder="(optional)"
+          />
+        </div>
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">Tier Override</label>
+          <Select
+            value={form.tier_override}
+            onValueChange={(v) => setForm({ ...form, tier_override: v })}
+          >
+            <SelectTrigger className="bg-slate-800 border-slate-700">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">None</SelectItem>
+              <SelectItem value="PAR">PAR</SelectItem>
+              <SelectItem value="BIRDIE">BIRDIE</SelectItem>
+              <SelectItem value="EAGLE">EAGLE</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="text-sm text-slate-400 mb-2 block">Form Label</label>
@@ -1053,7 +2305,14 @@ function BetEditForm({ bet, onSave, onCancel }) {
         <Button variant="outline" onClick={onCancel} className="border-slate-600">
           Cancel
         </Button>
-        <Button onClick={() => onSave(form)} className="bg-emerald-500 hover:bg-emerald-600">
+        <Button
+          onClick={() => onSave({
+            ...form,
+            tier_override: form.tier_override === 'none' ? null : form.tier_override,
+            pin_order: form.pin_order === '' ? null : Number(form.pin_order)
+          })}
+          className="bg-emerald-500 hover:bg-emerald-600"
+        >
           Save Changes
         </Button>
       </div>

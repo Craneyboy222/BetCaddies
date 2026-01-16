@@ -74,6 +74,21 @@ export default function Home() {
     queryFn: () => api.getLatestBets()
   });
 
+  const { data: homeContent } = useQuery({
+    queryKey: ['siteContent', 'home'],
+    queryFn: () => api.siteContent.get('home'),
+    retry: false
+  });
+
+  const heroTitleRaw = homeContent?.json?.hero?.title || 'Your Weekly Golf Picks';
+  const heroSubtitle = homeContent?.json?.hero?.subtitle || '30 curated bets across 5 tours. Data-driven selections with transparent analysis and real value.';
+  const heroParts = String(heroTitleRaw).split('|');
+  const heroTitlePlain = heroParts[0] || '';
+  const heroTitleAccent = heroParts.length > 1 ? heroParts.slice(1).join('|') : null;
+
+  const features = Array.isArray(homeContent?.json?.features) ? homeContent.json.features : [];
+  const faqs = Array.isArray(homeContent?.json?.faqs) ? homeContent.json.faqs : [];
+
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
     queryFn: () => Promise.resolve([]) // Mock for now
@@ -122,11 +137,17 @@ export default function Home() {
           <span>Week of {currentWeek}</span>
         </div>
         <h1 className="text-4xl md:text-5xl font-bold text-white mb-3">
-          Your Weekly
-          <span className="bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent"> Golf Picks</span>
+          {heroTitleAccent ? (
+            <>
+              {heroTitlePlain}
+              <span className="bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">{heroTitleAccent}</span>
+            </>
+          ) : (
+            <span className="bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">{heroTitlePlain}</span>
+          )}
         </h1>
         <p className="text-slate-400 text-lg max-w-2xl">
-          30 curated bets across 5 tours. Data-driven selections with transparent analysis and real value.
+          {heroSubtitle}
         </p>
       </motion.div>
 
@@ -241,6 +262,38 @@ export default function Home() {
             </div>
           </div>
         </motion.div>
+      )}
+
+      {(features.length > 0 || faqs.length > 0) && (
+        <div className="mt-10 space-y-10">
+          {features.length > 0 && (
+            <div>
+              <h2 className="text-2xl font-bold text-white mb-4">Why Bet Caddies</h2>
+              <div className="grid md:grid-cols-3 gap-4">
+                {features.slice(0, 9).map((f, idx) => (
+                  <div key={idx} className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
+                    <div className="font-semibold text-white mb-1">{f.title || '—'}</div>
+                    <div className="text-sm text-slate-400">{f.body || ''}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {faqs.length > 0 && (
+            <div>
+              <h2 className="text-2xl font-bold text-white mb-4">FAQs</h2>
+              <div className="space-y-3">
+                {faqs.slice(0, 12).map((f, idx) => (
+                  <div key={idx} className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
+                    <div className="font-medium text-white">{f.q || '—'}</div>
+                    <div className="text-sm text-slate-400 mt-2">{f.a || ''}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Responsible Gambling Notice */}

@@ -110,6 +110,36 @@ const validateBody = (schema) => (req, res, next) => {
   return next()
 }
 
+const getRequestIp = (req) => {
+  const xff = req.headers['x-forwarded-for']
+  if (typeof xff === 'string' && xff.trim()) {
+    return xff.split(',')[0].trim()
+  }
+  return req.ip
+}
+
+const writeAuditLog = async ({ req, action, entityType, entityId, beforeJson, afterJson, impersonatedSub }) => {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        action,
+        entityType: entityType ?? null,
+        entityId: entityId ?? null,
+        actorSub: req.user?.sub ?? null,
+        actorEmail: req.user?.email ?? null,
+        actorRole: req.user?.role ?? null,
+        impersonatedSub: impersonatedSub ?? null,
+        beforeJson: beforeJson ?? null,
+        afterJson: afterJson ?? null,
+        ip: getRequestIp(req) ?? null,
+        userAgent: req.headers['user-agent'] ?? null
+      }
+    })
+  } catch (error) {
+    logger.error('Failed to write audit log', { error: error?.message })
+  }
+}
+
 // Track server status
 const serverStatus = {
   isHealthy: true,
@@ -139,7 +169,7 @@ app.get('/api/bets/latest', async (req, res) => {
       orderBy: {
         createdAt: 'desc'
       },
-      take: 30,
+      take: 150,
       include: {
         run: {
           select: {
@@ -152,11 +182,28 @@ app.get('/api/bets/latest', async (req, res) => {
       }
     })
 
+    const visible = bets
+      .filter(bet => bet.override?.status !== 'archived')
+      .sort((a, b) => {
+        const aPinned = a.override?.pinned === true
+        const bPinned = b.override?.pinned === true
+        if (aPinned !== bPinned) return aPinned ? -1 : 1
+
+        const aOrder = Number.isFinite(a.override?.pinOrder) ? a.override.pinOrder : Number.POSITIVE_INFINITY
+        const bOrder = Number.isFinite(b.override?.pinOrder) ? b.override.pinOrder : Number.POSITIVE_INFINITY
+        if (aOrder !== bOrder) return aOrder - bOrder
+
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      })
+      .slice(0, 30)
+
     // Transform to frontend format
-    const formattedBets = bets.map(bet => ({
+    const formattedBets = visible.map(bet => {
+      const displayTier = bet.override?.tierOverride || bet.tier
+      return ({
       id: bet.id,
-      category: bet.tier.toLowerCase(),
-      tier: bet.tier,
+      category: displayTier.toLowerCase(),
+      tier: displayTier,
       selection_name: bet.override?.selectionName || bet.selection,
       confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
       bestBookmaker: bet.bestBookmaker,
@@ -180,7 +227,8 @@ app.get('/api/bets/latest', async (req, res) => {
         tour: bet.tourEvent?.tour || null,
         eventName: bet.tourEvent?.eventName || null
       }
-    }))
+    })
+    })
 
     res.json({
       data: formattedBets,
@@ -202,9 +250,10 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
       'eagle': 'EAGLE'
     }
 
+    const requestedTier = tierMap[tier] || tier.toUpperCase()
+
     const bets = await prisma.betRecommendation.findMany({
       where: {
-        tier: tierMap[tier] || tier.toUpperCase(),
         run: {
           status: 'completed'
         }
@@ -212,18 +261,36 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
       orderBy: {
         createdAt: 'desc'
       },
-      take: 10,
+      take: 200,
       include: {
         tourEvent: true,
         override: true
       }
     })
 
+    const filtered = bets
+      .filter(bet => bet.override?.status !== 'archived')
+      .filter(bet => (bet.override?.tierOverride || bet.tier) === requestedTier)
+      .sort((a, b) => {
+        const aPinned = a.override?.pinned === true
+        const bPinned = b.override?.pinned === true
+        if (aPinned !== bPinned) return aPinned ? -1 : 1
+
+        const aOrder = Number.isFinite(a.override?.pinOrder) ? a.override.pinOrder : Number.POSITIVE_INFINITY
+        const bOrder = Number.isFinite(b.override?.pinOrder) ? b.override.pinOrder : Number.POSITIVE_INFINITY
+        if (aOrder !== bOrder) return aOrder - bOrder
+
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      })
+      .slice(0, 10)
+
     // Transform to frontend format (same as above)
-    const formattedBets = bets.map(bet => ({
+    const formattedBets = filtered.map(bet => {
+      const displayTier = bet.override?.tierOverride || bet.tier
+      return ({
       id: bet.id,
-      category: bet.tier.toLowerCase(),
-      tier: bet.tier,
+      category: displayTier.toLowerCase(),
+      tier: displayTier,
       selection_name: bet.override?.selectionName || bet.selection,
       confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
       bestBookmaker: bet.bestBookmaker,
@@ -247,7 +314,8 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
         tour: bet.tourEvent?.tour || null,
         eventName: bet.tourEvent?.eventName || null
       }
-    }))
+    })
+    })
 
     res.json({
       data: formattedBets,
@@ -302,14 +370,76 @@ app.get('/api/auth/me', (req, res) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
-    return res.json({
-      id: decoded.sub,
-      email: decoded.email,
-      name: 'Admin',
-      role: decoded.role || 'admin'
-    })
+    const role = decoded.role || 'admin'
+
+    if (role === 'admin') {
+      return res.json({
+        id: decoded.sub,
+        email: decoded.email,
+        name: 'Admin',
+        role
+      })
+    }
+
+    return prisma.user
+      .findUnique({ where: { id: decoded.sub } })
+      .then((user) => {
+        if (!user) return res.status(404).json({ error: 'User not found' })
+        if (user.disabledAt) return res.status(403).json({ error: 'User is disabled' })
+        return res.json({
+          id: user.id,
+          email: user.email,
+          full_name: user.fullName,
+          role: user.role || 'user',
+          favorite_tours: user.favoriteTours,
+          risk_appetite: user.riskAppetite,
+          notifications_enabled: user.notificationsEnabled,
+          email_notifications: user.emailNotifications,
+          onboarding_completed: user.onboardingCompleted,
+          disabled_at: user.disabledAt,
+          disabled_reason: user.disabledReason
+        })
+      })
+      .catch(() => res.status(401).json({ error: 'Unauthorized' }))
   } catch (error) {
     return res.status(401).json({ error: 'Unauthorized' })
+  }
+})
+
+// Public content endpoints
+app.get('/api/site-content', async (req, res) => {
+  try {
+    const items = await prisma.siteContent.findMany({ orderBy: { updatedAt: 'desc' } })
+    res.json({
+      data: items.map((i) => ({
+        key: i.key,
+        json: i.json,
+        created_at: i.createdAt,
+        updated_at: i.updatedAt
+      }))
+    })
+  } catch (error) {
+    logger.error('Failed to fetch site content', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch site content' })
+  }
+})
+
+app.get('/api/site-content/:key', async (req, res) => {
+  try {
+    const { key } = req.params
+    const item = await prisma.siteContent.findUnique({ where: { key } })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json({
+      data: {
+        key: item.key,
+        json: item.json,
+        created_at: item.createdAt,
+        updated_at: item.updatedAt
+      }
+    })
+  } catch (error) {
+    logger.error('Failed to fetch site content item', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch site content item' })
   }
 })
 
@@ -408,7 +538,10 @@ app.get('/api/entities/golf-bets', authRequired, adminOnly, async (req, res) => 
       course_fit_score: bet.override?.courseFitScore ?? 5,
       form_label: bet.override?.formLabel || '',
       weather_label: bet.override?.weatherLabel || '',
-      category: bet.tier?.toLowerCase(),
+      tier_override: bet.override?.tierOverride || '',
+      pinned: bet.override?.pinned === true,
+      pin_order: Number.isFinite(bet.override?.pinOrder) ? bet.override.pinOrder : null,
+      category: (bet.override?.tierOverride || bet.tier)?.toLowerCase(),
       tour: bet.tourEvent?.tour || null,
       tournament_name: bet.tourEvent?.eventName || null,
       odds_display_best: bet.bestOdds?.toString() || '',
@@ -435,7 +568,10 @@ app.put(
     status: z.string().optional(),
     course_fit_score: z.coerce.number().int().min(0).max(10).optional(),
     form_label: z.string().optional(),
-    weather_label: z.string().optional()
+    weather_label: z.string().optional(),
+    tier_override: z.enum(['PAR', 'BIRDIE', 'EAGLE']).optional().or(z.literal('')),
+    pinned: z.boolean().optional(),
+    pin_order: z.coerce.number().int().optional().nullable()
   })),
   async (req, res) => {
     try {
@@ -453,7 +589,10 @@ app.put(
         status,
         course_fit_score,
         form_label,
-        weather_label
+        weather_label,
+        tier_override,
+        pinned,
+        pin_order
       } = req.body || {}
 
       const updated = await prisma.betOverride.upsert({
@@ -468,7 +607,10 @@ app.put(
           status: status ?? null,
           courseFitScore: Number.isFinite(course_fit_score) ? course_fit_score : null,
           formLabel: form_label ?? null,
-          weatherLabel: weather_label ?? null
+          weatherLabel: weather_label ?? null,
+          tierOverride: tier_override ? tier_override : null,
+          pinned: typeof pinned === 'boolean' ? pinned : false,
+          pinOrder: Number.isFinite(pin_order) ? pin_order : null
         },
         update: {
           selectionName: selection_name ?? undefined,
@@ -479,7 +621,10 @@ app.put(
           status: status ?? undefined,
           courseFitScore: Number.isFinite(course_fit_score) ? course_fit_score : undefined,
           formLabel: form_label ?? undefined,
-          weatherLabel: weather_label ?? undefined
+          weatherLabel: weather_label ?? undefined,
+          tierOverride: tier_override === '' ? null : (tier_override ?? undefined),
+          pinned: typeof pinned === 'boolean' ? pinned : undefined,
+          pinOrder: pin_order === null ? null : (Number.isFinite(pin_order) ? pin_order : undefined)
         }
       })
 
@@ -502,13 +647,276 @@ app.delete('/api/entities/golf-bets/:id', authRequired, adminOnly, async (req, r
     await prisma.betRecommendation.findUniqueOrThrow({ where: { id: betRecommendationId } })
     await prisma.betOverride.upsert({
       where: { betRecommendationId },
-      create: { betRecommendationId, status: 'archived' },
-      update: { status: 'archived' }
+      create: { betRecommendationId, status: 'archived', pinned: false, pinOrder: null, tierOverride: null },
+      update: { status: 'archived', pinned: false, pinOrder: null, tierOverride: null }
     })
     res.json({ success: true })
   } catch (error) {
     logger.error('Error deleting golf bet (archive override):', error)
     res.status(500).json({ error: 'Failed to delete golf bet' })
+  }
+})
+
+app.get('/api/entities/tour-events', authRequired, adminOnly, async (req, res) => {
+  try {
+    const events = await prisma.tourEvent.findMany({
+      orderBy: { startDate: 'desc' },
+      take: 50,
+      include: {
+        run: {
+          select: { runKey: true, status: true, createdAt: true }
+        }
+      }
+    })
+
+    const formatted = events.map(ev => ({
+      id: ev.id,
+      run_id: ev.run?.runKey || null,
+      tour: ev.tour,
+      event_name: ev.eventName,
+      start_date: ev.startDate?.toISOString?.() || ev.startDate,
+      end_date: ev.endDate?.toISOString?.() || ev.endDate,
+      location: ev.location,
+      course_name: ev.courseName,
+      course_lat: ev.courseLat,
+      course_lng: ev.courseLng,
+      source_urls: ev.sourceUrls,
+      created_date: ev.createdAt?.toISOString?.() || ev.createdAt
+    }))
+
+    res.json({ data: formatted })
+  } catch (error) {
+    logger.error('Error fetching tour events:', error)
+    res.status(500).json({ error: 'Failed to fetch tour events' })
+  }
+})
+
+app.put(
+  '/api/entities/tour-events/:id',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    tour: z.string().min(1).optional(),
+    event_name: z.string().min(1).optional(),
+    start_date: z.string().datetime().optional(),
+    end_date: z.string().datetime().optional(),
+    location: z.string().min(1).optional(),
+    course_name: z.string().min(1).optional(),
+    course_lat: z.coerce.number().optional().nullable(),
+    course_lng: z.coerce.number().optional().nullable(),
+    source_urls: z.array(z.string()).optional()
+  })),
+  async (req, res) => {
+    try {
+      const { id } = req.params
+      const {
+        tour,
+        event_name,
+        start_date,
+        end_date,
+        location,
+        course_name,
+        course_lat,
+        course_lng,
+        source_urls
+      } = req.body || {}
+
+      const updated = await prisma.tourEvent.update({
+        where: { id },
+        data: {
+          tour: tour ?? undefined,
+          eventName: event_name ?? undefined,
+          startDate: start_date ? new Date(start_date) : undefined,
+          endDate: end_date ? new Date(end_date) : undefined,
+          location: location ?? undefined,
+          courseName: course_name ?? undefined,
+          courseLat: course_lat === null ? null : (typeof course_lat === 'number' ? course_lat : undefined),
+          courseLng: course_lng === null ? null : (typeof course_lng === 'number' ? course_lng : undefined),
+          sourceUrls: source_urls ?? undefined
+        }
+      })
+
+      res.json({
+        data: {
+          id: updated.id,
+          event_name: updated.eventName
+        }
+      })
+    } catch (error) {
+      logger.error('Error updating tour event:', error)
+      res.status(500).json({ error: 'Failed to update tour event' })
+    }
+  }
+)
+
+app.delete('/api/entities/tour-events/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    await prisma.tourEvent.delete({ where: { id } })
+    res.json({ success: true })
+  } catch (error) {
+    logger.error('Error deleting tour event:', error)
+    res.status(500).json({ error: 'Failed to delete tour event' })
+  }
+})
+
+app.get('/api/entities/odds-events', authRequired, adminOnly, async (req, res) => {
+  try {
+    const events = await prisma.oddsEvent.findMany({
+      orderBy: { fetchedAt: 'desc' },
+      take: 50,
+      include: {
+        tourEvent: true,
+        _count: { select: { oddsMarkets: true } }
+      }
+    })
+
+    const formatted = events.map(ev => ({
+      id: ev.id,
+      odds_provider: ev.oddsProvider,
+      external_event_id: ev.externalEventId,
+      tour: ev.tourEvent?.tour || null,
+      event_name: ev.tourEvent?.eventName || null,
+      fetched_at: ev.fetchedAt?.toISOString?.() || ev.fetchedAt,
+      markets_count: ev._count?.oddsMarkets ?? 0
+    }))
+
+    res.json({ data: formatted })
+  } catch (error) {
+    logger.error('Error fetching odds events:', error)
+    res.status(500).json({ error: 'Failed to fetch odds events' })
+  }
+})
+
+app.get('/api/entities/odds-events/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const event = await prisma.oddsEvent.findUnique({
+      where: { id },
+      include: {
+        tourEvent: true,
+        oddsMarkets: {
+          include: {
+            oddsOffers: true
+          }
+        }
+      }
+    })
+
+    if (!event) {
+      return res.status(404).json({ error: 'Odds event not found' })
+    }
+
+    res.json({
+      data: {
+        id: event.id,
+        odds_provider: event.oddsProvider,
+        external_event_id: event.externalEventId,
+        tour: event.tourEvent?.tour || null,
+        event_name: event.tourEvent?.eventName || null,
+        fetched_at: event.fetchedAt?.toISOString?.() || event.fetchedAt,
+        raw: event.raw,
+        markets: event.oddsMarkets?.map(m => ({
+          id: m.id,
+          market_key: m.marketKey,
+          raw: m.raw,
+          offers: (m.oddsOffers || []).map(o => ({
+            id: o.id,
+            selection_name: o.selectionName,
+            bookmaker: o.bookmaker,
+            odds_decimal: o.oddsDecimal,
+            odds_display: o.oddsDisplay,
+            deep_link: o.deepLink,
+            fetched_at: o.fetchedAt?.toISOString?.() || o.fetchedAt
+          }))
+        }))
+      }
+    })
+  } catch (error) {
+    logger.error('Error fetching odds event details:', error)
+    res.status(500).json({ error: 'Failed to fetch odds event details' })
+  }
+})
+
+app.get('/api/entities/odds-offers', authRequired, adminOnly, async (req, res) => {
+  try {
+    const oddsMarketId = req.query.odds_market_id
+    const take = req.query.limit ? Math.min(500, Math.max(1, Number(req.query.limit))) : 200
+
+    const offers = await prisma.oddsOffer.findMany({
+      where: oddsMarketId ? { oddsMarketId: String(oddsMarketId) } : undefined,
+      orderBy: { fetchedAt: 'desc' },
+      take,
+      include: {
+        oddsMarket: {
+          include: {
+            oddsEvent: {
+              include: { tourEvent: true }
+            }
+          }
+        }
+      }
+    })
+
+    const formatted = offers.map(o => ({
+      id: o.id,
+      selection_name: o.selectionName,
+      bookmaker: o.bookmaker,
+      odds_decimal: o.oddsDecimal,
+      odds_display: o.oddsDisplay,
+      deep_link: o.deepLink,
+      market_key: o.oddsMarket?.marketKey || null,
+      tour: o.oddsMarket?.oddsEvent?.tourEvent?.tour || null,
+      event_name: o.oddsMarket?.oddsEvent?.tourEvent?.eventName || null,
+      fetched_at: o.fetchedAt?.toISOString?.() || o.fetchedAt
+    }))
+
+    res.json({ data: formatted })
+  } catch (error) {
+    logger.error('Error fetching odds offers:', error)
+    res.status(500).json({ error: 'Failed to fetch odds offers' })
+  }
+})
+
+app.put(
+  '/api/entities/odds-offers/:id',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    odds_decimal: z.coerce.number().positive().optional(),
+    odds_display: z.string().min(1).optional(),
+    deep_link: z.string().url().optional().nullable().or(z.literal(''))
+  })),
+  async (req, res) => {
+    try {
+      const { id } = req.params
+      const { odds_decimal, odds_display, deep_link } = req.body || {}
+
+      const updated = await prisma.oddsOffer.update({
+        where: { id },
+        data: {
+          oddsDecimal: typeof odds_decimal === 'number' ? odds_decimal : undefined,
+          oddsDisplay: odds_display ?? undefined,
+          deepLink: deep_link === '' ? null : (deep_link ?? undefined)
+        }
+      })
+
+      res.json({ data: { id: updated.id } })
+    } catch (error) {
+      logger.error('Error updating odds offer:', error)
+      res.status(500).json({ error: 'Failed to update odds offer' })
+    }
+  }
+)
+
+app.delete('/api/entities/odds-offers/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    await prisma.oddsOffer.delete({ where: { id } })
+    res.json({ success: true })
+  } catch (error) {
+    logger.error('Error deleting odds offer:', error)
+    res.status(500).json({ error: 'Failed to delete odds offer' })
   }
 })
 
@@ -710,6 +1118,8 @@ app.get('/api/entities/users', authRequired, adminOnly, async (req, res) => {
       email: user.email,
       full_name: user.fullName,
       role: user.role,
+      disabled_at: user.disabledAt,
+      disabled_reason: user.disabledReason,
       favorite_tours: user.favoriteTours,
       risk_appetite: user.riskAppetite,
       notifications_enabled: user.notificationsEnabled,
@@ -727,6 +1137,56 @@ app.get('/api/entities/users', authRequired, adminOnly, async (req, res) => {
   }
 })
 
+app.post(
+  '/api/entities/users',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    email: z.string().email(),
+    full_name: z.string().optional().nullable(),
+    role: z.string().optional(),
+    disabled: z.boolean().optional(),
+    disabled_reason: z.string().optional().nullable()
+  })),
+  async (req, res) => {
+    try {
+      const { email, full_name, role, disabled, disabled_reason } = req.body
+      const created = await prisma.user.create({
+        data: {
+          email,
+          fullName: full_name === null ? null : (full_name ?? null),
+          role: role ?? 'user',
+          disabledAt: disabled === true ? new Date() : null,
+          disabledReason: disabled === true ? (disabled_reason ?? null) : null
+        }
+      })
+
+      await writeAuditLog({
+        req,
+        action: 'user.create',
+        entityType: 'User',
+        entityId: created.id,
+        afterJson: { email: created.email, role: created.role, disabledAt: created.disabledAt }
+      })
+
+      res.json({
+        data: {
+          id: created.id,
+          email: created.email,
+          full_name: created.fullName,
+          role: created.role
+        }
+      })
+    } catch (error) {
+      if (error?.code === 'P2002') {
+        return res.status(409).json({ error: 'Email already exists' })
+      }
+      logger.error('Error creating user:', error)
+      res.status(500).json({ error: 'Failed to create user' })
+    }
+  }
+)
+
 app.put(
   '/api/entities/users/:id',
   authRequired,
@@ -735,6 +1195,8 @@ app.put(
     email: z.string().email().optional(),
     full_name: z.string().optional().nullable(),
     role: z.string().optional(),
+    disabled: z.boolean().optional(),
+    disabled_reason: z.string().optional().nullable(),
     favorite_tours: z.array(z.string()).optional().nullable(),
     risk_appetite: z.string().optional().nullable(),
     notifications_enabled: z.boolean().optional(),
@@ -751,6 +1213,8 @@ app.put(
         email,
         full_name,
         role,
+        disabled,
+        disabled_reason,
         favorite_tours,
         risk_appetite,
         notifications_enabled,
@@ -761,12 +1225,26 @@ app.put(
         hio_total_points
       } = req.body || {}
 
+      const before = await prisma.user.findUnique({ where: { id } })
+      if (!before) return res.status(404).json({ error: 'User not found' })
+
+      let disabledAtUpdate = undefined
+      let disabledReasonUpdate = undefined
+      if (typeof disabled === 'boolean') {
+        disabledAtUpdate = disabled ? new Date() : null
+        disabledReasonUpdate = disabled ? (disabled_reason ?? before.disabledReason ?? null) : null
+      } else if (disabled_reason !== undefined) {
+        disabledReasonUpdate = disabled_reason === null ? null : disabled_reason
+      }
+
       const updated = await prisma.user.update({
         where: { id },
         data: {
           email: email ?? undefined,
           fullName: full_name === null ? null : (full_name ?? undefined),
           role: role ?? undefined,
+          disabledAt: disabledAtUpdate,
+          disabledReason: disabledReasonUpdate,
           favoriteTours: favorite_tours === null ? null : (favorite_tours ?? undefined),
           riskAppetite: risk_appetite === null ? null : (risk_appetite ?? undefined),
           notificationsEnabled: typeof notifications_enabled === 'boolean' ? notifications_enabled : undefined,
@@ -775,6 +1253,25 @@ app.put(
           totalBetsPlaced: Number.isFinite(total_bets_placed) ? total_bets_placed : undefined,
           totalWins: Number.isFinite(total_wins) ? total_wins : undefined,
           hioTotalPoints: Number.isFinite(hio_total_points) ? hio_total_points : undefined
+        }
+      })
+
+      await writeAuditLog({
+        req,
+        action: 'user.update',
+        entityType: 'User',
+        entityId: updated.id,
+        beforeJson: {
+          email: before.email,
+          role: before.role,
+          disabledAt: before.disabledAt,
+          disabledReason: before.disabledReason
+        },
+        afterJson: {
+          email: updated.email,
+          role: updated.role,
+          disabledAt: updated.disabledAt,
+          disabledReason: updated.disabledReason
         }
       })
 
@@ -792,6 +1289,160 @@ app.put(
     }
   }
 )
+
+app.post('/api/entities/users/:id/impersonate', authRequired, adminOnly, async (req, res) => {
+  try {
+    if (!JWT_SECRET) {
+      return res.status(500).json({ error: 'Auth not configured' })
+    }
+    const { id } = req.params
+    const user = await prisma.user.findUnique({ where: { id } })
+    if (!user) return res.status(404).json({ error: 'User not found' })
+    if (user.disabledAt) return res.status(400).json({ error: 'Cannot impersonate disabled user' })
+
+    const token = jwt.sign(
+      {
+        sub: user.id,
+        email: user.email,
+        role: user.role || 'user',
+        impersonatedBySub: req.user?.sub
+      },
+      JWT_SECRET,
+      { expiresIn: '1h' }
+    )
+
+    await writeAuditLog({
+      req,
+      action: 'user.impersonate',
+      entityType: 'User',
+      entityId: user.id,
+      impersonatedSub: user.id,
+      afterJson: { impersonatedUserId: user.id }
+    })
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.fullName,
+        role: user.role || 'user'
+      }
+    })
+  } catch (error) {
+    logger.error('Error impersonating user:', error)
+    res.status(500).json({ error: 'Failed to impersonate user' })
+  }
+})
+
+// Admin: site content CRUD
+app.get('/api/entities/site-content', authRequired, adminOnly, async (req, res) => {
+  try {
+    const items = await prisma.siteContent.findMany({ orderBy: { updatedAt: 'desc' } })
+    res.json({
+      data: items.map((i) => ({
+        key: i.key,
+        json: i.json,
+        created_at: i.createdAt,
+        updated_at: i.updatedAt
+      }))
+    })
+  } catch (error) {
+    logger.error('Error fetching site content:', error)
+    res.status(500).json({ error: 'Failed to fetch site content' })
+  }
+})
+
+app.put(
+  '/api/entities/site-content/:key',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    json: z.any()
+  })),
+  async (req, res) => {
+    try {
+      const { key } = req.params
+      const before = await prisma.siteContent.findUnique({ where: { key } })
+      const updated = await prisma.siteContent.upsert({
+        where: { key },
+        create: { key, json: req.body.json },
+        update: { json: req.body.json }
+      })
+
+      await writeAuditLog({
+        req,
+        action: before ? 'siteContent.update' : 'siteContent.create',
+        entityType: 'SiteContent',
+        entityId: key,
+        beforeJson: before?.json ?? null,
+        afterJson: updated.json
+      })
+
+      res.json({
+        data: {
+          key: updated.key,
+          json: updated.json,
+          created_at: updated.createdAt,
+          updated_at: updated.updatedAt
+        }
+      })
+    } catch (error) {
+      logger.error('Error upserting site content:', error)
+      res.status(500).json({ error: 'Failed to update site content' })
+    }
+  }
+)
+
+app.delete('/api/entities/site-content/:key', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { key } = req.params
+    const before = await prisma.siteContent.findUnique({ where: { key } })
+    if (!before) return res.status(404).json({ error: 'Not found' })
+    await prisma.siteContent.delete({ where: { key } })
+    await writeAuditLog({
+      req,
+      action: 'siteContent.delete',
+      entityType: 'SiteContent',
+      entityId: key,
+      beforeJson: before.json
+    })
+    res.json({ ok: true })
+  } catch (error) {
+    logger.error('Error deleting site content:', error)
+    res.status(500).json({ error: 'Failed to delete site content' })
+  }
+})
+
+// Admin: audit logs
+app.get('/api/entities/audit-logs', authRequired, adminOnly, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 100, 500)
+    const items = await prisma.auditLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit
+    })
+    res.json({
+      data: items.map((i) => ({
+        id: i.id,
+        action: i.action,
+        entity_type: i.entityType,
+        entity_id: i.entityId,
+        actor_email: i.actorEmail,
+        actor_role: i.actorRole,
+        impersonated_sub: i.impersonatedSub,
+        before_json: i.beforeJson,
+        after_json: i.afterJson,
+        ip: i.ip,
+        user_agent: i.userAgent,
+        created_at: i.createdAt
+      }))
+    })
+  } catch (error) {
+    logger.error('Error fetching audit logs:', error)
+    res.status(500).json({ error: 'Failed to fetch audit logs' })
+  }
+})
 
 app.get('/api/entities/membership-packages', authRequired, adminOnly, async (req, res) => {
   try {
