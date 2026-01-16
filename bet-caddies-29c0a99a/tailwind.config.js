@@ -12,6 +12,12 @@ module.exports = {
   		colors: {
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',
+			emerald: {
+				300: '#5aebec',
+				400: '#5aebec',
+				500: '#5aebec',
+				600: '#5aebec'
+			},
   			card: {
   				DEFAULT: 'hsl(var(--card))',
   				foreground: 'hsl(var(--card-foreground))'
