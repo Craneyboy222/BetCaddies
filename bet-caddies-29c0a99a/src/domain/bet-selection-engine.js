@@ -143,7 +143,7 @@ export class BetSelectionEngine {
       // Check tour minimums
       if (tier === 'PAR' || tier === 'BIRDIE') {
         if (candidate.tour === 'PGA' && (tourCounts.PGA || 0) >= 2) continue
-        if (candidate.tour === 'DPWT' && (tourCounts.DPWT || 0) >= 2) continue
+        if (candidate.tour === 'LPGA' && (tourCounts.LPGA || 0) >= 2) continue
       }
 
       // Check max 2 bets per player across all tiers

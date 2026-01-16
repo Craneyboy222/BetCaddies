@@ -6,14 +6,14 @@ import { logger } from '../observability/logger.js'
 
 async function smokeTest() {
   try {
-    logger.info('Starting smoke test for DPWT tour only...')
+    logger.info('Starting smoke test for PGA tour only...')
 
-    // Create a modified pipeline that only tests DPWT
+    // Create a modified pipeline that only tests PGA
     const pipeline = new WeeklyPipeline()
 
-    // Override scrapers to only include DPWT
+    // Override scrapers to only include PGA
     pipeline.scrapers = {
-      DPWT: pipeline.scrapers.DPWT
+      PGA: pipeline.scrapers.PGA
     }
 
     const runKey = `smoke_test_${Date.now()}`

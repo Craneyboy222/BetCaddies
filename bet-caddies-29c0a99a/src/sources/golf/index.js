@@ -1,5 +1,3 @@
 export { PGATourScraper } from './pga-tour.js'
-export { DPWTScraper } from './dpwt.js'
 export { LPGAScraper } from './lpga.js'
 export { LIVScraper } from './liv.js'
-export { KornFerryScraper } from './korn-ferry.js'

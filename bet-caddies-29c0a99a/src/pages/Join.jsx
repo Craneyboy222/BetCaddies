@@ -17,10 +17,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 
 const tours = [
   { id: 'PGA', name: 'PGA Tour', description: 'Premier US tour' },
-  { id: 'DPWT', name: 'DP World Tour', description: 'European tour' },
   { id: 'LPGA', name: 'LPGA Tour', description: "Women's premier tour" },
-  { id: 'LIV', name: 'LIV Golf', description: 'Team-based format' },
-  { id: 'KFT', name: 'Korn Ferry Tour', description: 'Developmental tour' }
+  { id: 'LIV', name: 'LIV Golf', description: 'Team-based format' }
 ];
 
 const riskOptions = [
@@ -31,7 +29,7 @@ const riskOptions = [
 
 export default function Join() {
   const [step, setStep] = useState(1);
-  const [selectedTours, setSelectedTours] = useState(['PGA', 'DPWT']);
+  const [selectedTours, setSelectedTours] = useState(['PGA', 'LPGA']);
   const [riskAppetite, setRiskAppetite] = useState('balanced');
   const [gamblingAck, setGamblingAck] = useState(false);
   const [user, setUser] = useState(null);

@@ -29,10 +29,8 @@ import LoadingSpinner from '@/components/ui/LoadingSpinner';
 
 const tours = [
   { id: 'PGA', name: 'PGA Tour' },
-  { id: 'DPWT', name: 'DP World Tour' },
   { id: 'LPGA', name: 'LPGA Tour' },
-  { id: 'LIV', name: 'LIV Golf' },
-  { id: 'KFT', name: 'Korn Ferry Tour' }
+  { id: 'LIV', name: 'LIV Golf' }
 ];
 
 export default function Profile() {

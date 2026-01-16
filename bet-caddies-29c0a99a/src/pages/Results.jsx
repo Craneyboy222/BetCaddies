@@ -82,7 +82,7 @@ export default function Results() {
   });
 
   // Tour breakdown
-  const tours = ['PGA', 'DPWT', 'LPGA', 'LIV', 'KFT'];
+  const tours = ['PGA', 'LPGA', 'LIV'];
   const tourStats = tours.map(tour => {
     const tourBets = filteredBets.filter(b => b.tour === tour);
     const won = tourBets.filter(b => b.status === 'settled_won').length;

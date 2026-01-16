@@ -4,10 +4,8 @@ import { motion } from 'framer-motion';
 const tours = [
   { id: 'all', label: 'All Tours' },
   { id: 'PGA', label: 'PGA Tour' },
-  { id: 'DPWT', label: 'DP World' },
   { id: 'LPGA', label: 'LPGA' },
   { id: 'LIV', label: 'LIV Golf' },
-  { id: 'KFT', label: 'Korn Ferry' }
 ];
 
 export default function TourFilter({ selected, onChange }) {

@@ -18,7 +18,7 @@ src/
 ```
 
 ### Data Flow
-1. **Discovery**: Find current-week tournaments across PGA, DPWT, LPGA, LIV, KFT
+1. **Discovery**: Find current-week tournaments across PGA, LPGA, LIV
 2. **Ingestion**: Scrape player fields, tee times, course data, weather
 3. **Enrichment**: Fetch betting odds from The Odds API
 4. **Analysis**: Generate bet selections with ML-style features
@@ -60,7 +60,7 @@ src/
 
 4. **Run the pipeline**
    ```bash
-   # Smoke test (DPWT only)
+   # Smoke test (PGA only)
    npm run pipeline:smoke
 
    # Full weekly pipeline
@@ -97,7 +97,7 @@ For automated pipeline runs, add these secrets to your GitHub repository:
 # Run full weekly pipeline
 npm run pipeline:weekly
 
-# Run smoke test (DPWT only)
+# Run smoke test (PGA only)
 npm run pipeline:smoke
 
 # Run with custom run key
@@ -143,10 +143,8 @@ npm test player-normalizer.test.js
 ### Tour Coverage
 
 - **PGA Tour**: pgatour.com
-- **DP World Tour**: europeantour.com
 - **LPGA**: lpga.com
 - **LIV Golf**: livgolf.com
-- **Korn Ferry Tour**: pgatour.com/korn-ferry-tour
 
 ## 🔍 Monitoring & Observability
 

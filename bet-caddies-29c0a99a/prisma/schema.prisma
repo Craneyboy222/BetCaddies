@@ -34,7 +34,7 @@ model Run {
 model TourEvent {
   id          String   @id @default(cuid())
   runId       String
-  tour        String   // 'PGA', 'DPWT', 'LPGA', 'LIV', 'KFT'
+  tour        String   // 'PGA', 'LPGA', 'LIV'
   eventName   String
   startDate   DateTime
   endDate     DateTime

@@ -7,7 +7,7 @@ describe('BetSelectionEngine constraint logic', () => {
     fakeCandidates.push({
       selection: `Player ${i % 15}`,
       bestOdds: i < 15 ? 3 : i < 30 ? 8 : 18,
-      tour: ['PGA', 'DPWT', 'LPGA', 'LIV', 'KFT'][i % 5],
+      tour: ['PGA', 'LPGA', 'LIV'][i % 3],
       marketKey: 'winner',
       bestBookmaker: 'BestBook',
       altOffers: Array(5).fill().map((_, a) => ({

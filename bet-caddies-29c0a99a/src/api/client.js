@@ -299,8 +299,8 @@ export class BetCaddiesApi {
             bestBookmaker: 'William Hill',
             bestOdds: 7.0,
             bet_title: 'Under par finish',
-            tour: 'DPWT',
-            tournament_name: 'DP World Tour Championship',
+              tour: 'LPGA',
+              tournament_name: 'LPGA Championship',
             analysis_paragraph: 'Rory McIlroy has excellent course history...',
             provider_best_slug: 'william-hill',
             odds_display_best: '7.0',
@@ -318,8 +318,8 @@ export class BetCaddiesApi {
             ],
             affiliate_link: 'https://example.com/william-hill',
             tourEvent: {
-              tour: 'DPWT',
-              eventName: 'DP World Tour Championship'
+                tour: 'LPGA',
+                eventName: 'LPGA Championship'
             }
           },
           {
@@ -383,10 +383,17 @@ export class BetCaddiesApi {
           },
           {
             id: '2',
-            tour: 'DPWT',
-            eventName: 'DP World Tour Championship',
+            tour: 'LPGA',
+            eventName: 'LPGA Championship',
             startDate: '2024-04-18',
-            location: 'Dubai, UAE'
+            location: 'Orlando, FL'
+          },
+          {
+            id: '3',
+            tour: 'LIV',
+            eventName: 'LIV Golf Invitational',
+            startDate: '2024-04-25',
+            location: 'Miami, FL'
           }
         ]
       }

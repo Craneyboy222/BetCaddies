@@ -4,12 +4,11 @@ import { logger, logStep, logError } from '../observability/logger.js'
 import { DataIssueTracker } from '../observability/data-issue-tracker.js'
 import {
   PGATourScraper,
-  DPWTScraper,
   LPGAScraper,
-  LIVScraper,
-  KornFerryScraper
+  LIVScraper
 } from '../sources/golf/index.js'
 import { TheOddsApiClient } from '../sources/odds/the-odds-api.js'
+import { OddsCheckerClient } from '../sources/odds/oddschecker.js'
 import { PlayerNormalizer } from '../domain/player-normalizer.js'
 import { BetSelectionEngine } from '../domain/bet-selection-engine.js'
 
@@ -17,12 +16,13 @@ export class WeeklyPipeline {
   constructor() {
     this.scrapers = {
       PGA: new PGATourScraper(),
-      DPWT: new DPWTScraper(),
       LPGA: new LPGAScraper(),
-      LIV: new LIVScraper(),
-      KFT: new KornFerryScraper()
+      LIV: new LIVScraper()
     }
-    this.oddsClient = new TheOddsApiClient()
+    const oddsProvider = process.env.ODDS_PROVIDER || 'oddschecker'
+    this.oddsClient = oddsProvider === 'sportsgameodds'
+      ? new TheOddsApiClient()
+      : new OddsCheckerClient()
     this.playerNormalizer = new PlayerNormalizer()
     this.betEngine = new BetSelectionEngine()
   }
@@ -280,11 +280,18 @@ export class WeeklyPipeline {
   async fetchOdds(tourEvents, issueTracker) {
     const oddsData = []
 
+    const leagueIdsByTour = {
+      PGA: 'PGA_MEN',
+      LPGA: 'PGA_WOMEN',
+      LIV: 'LIV_TOUR'
+    }
+
     for (const tourEvent of tourEvents) {
       try {
         const oddsEvent = await this.oddsClient.fetchOddsForTournament(
           tourEvent.eventName,
-          tourEvent.startDate
+          tourEvent.startDate,
+          leagueIdsByTour[tourEvent.tour] || null
         )
 
         if (oddsEvent) {
