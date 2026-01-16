@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '../utils';
 import { motion } from 'framer-motion';
 import { 
-  Flag, 
   Target, 
   Zap, 
   Trophy, 
@@ -87,8 +86,12 @@ export default function Join() {
       >
         {/* Logo */}
         <div className="text-center mb-10">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center mx-auto mb-4">
-            <Flag className="w-8 h-8 text-white" />
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center mx-auto mb-4 overflow-hidden">
+            <img
+              src="/brand/logo.png"
+              alt="Bet Caddies"
+              className="w-12 h-12 object-contain"
+            />
           </div>
           <h1 className="text-3xl font-bold text-white">Welcome to Bet Caddies</h1>
           <p className="text-slate-400 mt-2">Your premium golf betting companion</p>
