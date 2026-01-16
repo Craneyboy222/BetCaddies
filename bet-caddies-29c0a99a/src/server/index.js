@@ -90,6 +90,14 @@ const authRequired = (req, res, next) => {
   }
 }
 
+const adminOnly = (req, res, next) => {
+  const role = req.user?.role
+  if (role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' })
+  }
+  return next()
+}
+
 const validateBody = (schema) => (req, res, next) => {
   const result = schema.safeParse(req.body)
   if (!result.success) {
@@ -139,7 +147,8 @@ app.get('/api/bets/latest', async (req, res) => {
             weekEnd: true
           }
         },
-        tourEvent: true
+        tourEvent: true,
+        override: true
       }
     })
 
@@ -148,25 +157,25 @@ app.get('/api/bets/latest', async (req, res) => {
       id: bet.id,
       category: bet.tier.toLowerCase(),
       tier: bet.tier,
-      selection_name: bet.selection,
-      confidence_rating: bet.confidence1To5,
+      selection_name: bet.override?.selectionName || bet.selection,
+      confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
       bestBookmaker: bet.bestBookmaker,
       bestOdds: bet.bestOdds,
-      bet_title: `${bet.selection} ${bet.marketKey || 'market'}`,
+      bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
       tour: bet.tourEvent?.tour || null,
       tournament_name: bet.tourEvent?.eventName || null,
-      analysis_paragraph: bet.analysisParagraph,
+      analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
       provider_best_slug: bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-'),
       odds_display_best: bet.bestOdds?.toString() || '',
       odds_decimal_best: bet.bestOdds,
-      course_fit_score: 8, // Default values for now
-      form_label: 'Good',
+      course_fit_score: bet.override?.courseFitScore ?? 8,
+      form_label: bet.override?.formLabel || 'Good',
       form_indicator: 'up',
       weather_icon: 'sunny',
-      weather_label: 'Clear',
-      ai_analysis_paragraph: bet.analysisParagraph,
+      weather_label: bet.override?.weatherLabel || 'Clear',
+      ai_analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
       ai_analysis_bullets: bet.analysisBullets || [],
-      affiliate_link: `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
+      affiliate_link: bet.override?.affiliateLinkOverride || `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
       tourEvent: {
         tour: bet.tourEvent?.tour || null,
         eventName: bet.tourEvent?.eventName || null
@@ -205,7 +214,8 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
       },
       take: 10,
       include: {
-        tourEvent: true
+        tourEvent: true,
+        override: true
       }
     })
 
@@ -214,25 +224,25 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
       id: bet.id,
       category: bet.tier.toLowerCase(),
       tier: bet.tier,
-      selection_name: bet.selection,
-      confidence_rating: bet.confidence1To5,
+      selection_name: bet.override?.selectionName || bet.selection,
+      confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
       bestBookmaker: bet.bestBookmaker,
       bestOdds: bet.bestOdds,
-      bet_title: `${bet.selection} ${bet.marketKey || 'market'}`,
+      bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
       tour: bet.tourEvent?.tour || null,
       tournament_name: bet.tourEvent?.eventName || null,
-      analysis_paragraph: bet.analysisParagraph,
+      analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
       provider_best_slug: bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-'),
       odds_display_best: bet.bestOdds?.toString() || '',
       odds_decimal_best: bet.bestOdds,
-      course_fit_score: 8,
-      form_label: 'Good',
+      course_fit_score: bet.override?.courseFitScore ?? 8,
+      form_label: bet.override?.formLabel || 'Good',
       form_indicator: 'up',
       weather_icon: 'sunny',
-      weather_label: 'Clear',
-      ai_analysis_paragraph: bet.analysisParagraph,
+      weather_label: bet.override?.weatherLabel || 'Clear',
+      ai_analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
       ai_analysis_bullets: bet.analysisBullets || [],
-      affiliate_link: `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
+      affiliate_link: bet.override?.affiliateLinkOverride || `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
       tourEvent: {
         tour: bet.tourEvent?.tour || null,
         eventName: bet.tourEvent?.eventName || null
@@ -344,7 +354,7 @@ app.post(
   }
 })
 
-app.get('/api/entities/research-runs', authRequired, async (req, res) => {
+app.get('/api/entities/research-runs', authRequired, adminOnly, async (req, res) => {
   try {
     const runs = await prisma.run.findMany({
       orderBy: { createdAt: 'desc' },
@@ -376,27 +386,28 @@ app.get('/api/entities/research-runs', authRequired, async (req, res) => {
   }
 })
 
-app.get('/api/entities/golf-bets', authRequired, async (req, res) => {
+app.get('/api/entities/golf-bets', authRequired, adminOnly, async (req, res) => {
   try {
     const bets = await prisma.betRecommendation.findMany({
       orderBy: { createdAt: 'desc' },
       take: 100,
       include: {
         run: true,
-        tourEvent: true
+        tourEvent: true,
+        override: true
       }
     })
     const formatted = bets.map(bet => ({
       id: bet.id,
-      selection_name: bet.selection,
-      bet_title: `${bet.selection} ${bet.marketKey || 'market'}`,
-      confidence_rating: bet.confidence1To5,
-      ai_analysis_paragraph: bet.analysisParagraph,
-      affiliate_link_override: '',
-      status: 'active',
-      course_fit_score: 5,
-      form_label: '',
-      weather_label: '',
+      selection_name: bet.override?.selectionName || bet.selection,
+      bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
+      confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
+      ai_analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
+      affiliate_link_override: bet.override?.affiliateLinkOverride || '',
+      status: bet.override?.status || 'active',
+      course_fit_score: bet.override?.courseFitScore ?? 5,
+      form_label: bet.override?.formLabel || '',
+      weather_label: bet.override?.weatherLabel || '',
       category: bet.tier?.toLowerCase(),
       tour: bet.tourEvent?.tour || null,
       tournament_name: bet.tourEvent?.eventName || null,
@@ -411,7 +422,97 @@ app.get('/api/entities/golf-bets', authRequired, async (req, res) => {
   }
 })
 
-app.get('/api/entities/betting-providers', authRequired, async (req, res) => {
+app.put(
+  '/api/entities/golf-bets/:id',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    selection_name: z.string().optional(),
+    bet_title: z.string().optional(),
+    confidence_rating: z.coerce.number().int().min(1).max(5).optional(),
+    ai_analysis_paragraph: z.string().optional(),
+    affiliate_link_override: z.string().url().optional().or(z.literal('')),
+    status: z.string().optional(),
+    course_fit_score: z.coerce.number().int().min(0).max(10).optional(),
+    form_label: z.string().optional(),
+    weather_label: z.string().optional()
+  })),
+  async (req, res) => {
+    try {
+      const betRecommendationId = req.params.id
+
+      // Ensure bet exists
+      await prisma.betRecommendation.findUniqueOrThrow({ where: { id: betRecommendationId } })
+
+      const {
+        selection_name,
+        bet_title,
+        confidence_rating,
+        ai_analysis_paragraph,
+        affiliate_link_override,
+        status,
+        course_fit_score,
+        form_label,
+        weather_label
+      } = req.body || {}
+
+      const updated = await prisma.betOverride.upsert({
+        where: { betRecommendationId },
+        create: {
+          betRecommendationId,
+          selectionName: selection_name ?? null,
+          betTitle: bet_title ?? null,
+          confidenceRating: Number.isFinite(confidence_rating) ? confidence_rating : null,
+          aiAnalysisParagraph: ai_analysis_paragraph ?? null,
+          affiliateLinkOverride: affiliate_link_override ? affiliate_link_override : null,
+          status: status ?? null,
+          courseFitScore: Number.isFinite(course_fit_score) ? course_fit_score : null,
+          formLabel: form_label ?? null,
+          weatherLabel: weather_label ?? null
+        },
+        update: {
+          selectionName: selection_name ?? undefined,
+          betTitle: bet_title ?? undefined,
+          confidenceRating: Number.isFinite(confidence_rating) ? confidence_rating : undefined,
+          aiAnalysisParagraph: ai_analysis_paragraph ?? undefined,
+          affiliateLinkOverride: affiliate_link_override === '' ? null : (affiliate_link_override ?? undefined),
+          status: status ?? undefined,
+          courseFitScore: Number.isFinite(course_fit_score) ? course_fit_score : undefined,
+          formLabel: form_label ?? undefined,
+          weatherLabel: weather_label ?? undefined
+        }
+      })
+
+      res.json({
+        data: {
+          id: betRecommendationId,
+          override_id: updated.id
+        }
+      })
+    } catch (error) {
+      logger.error('Error updating golf bet override:', error)
+      res.status(500).json({ error: 'Failed to update golf bet' })
+    }
+  }
+)
+
+app.delete('/api/entities/golf-bets/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const betRecommendationId = req.params.id
+    await prisma.betRecommendation.findUniqueOrThrow({ where: { id: betRecommendationId } })
+    await prisma.betOverride.upsert({
+      where: { betRecommendationId },
+      create: { betRecommendationId, status: 'archived' },
+      update: { status: 'archived' }
+    })
+    res.json({ success: true })
+  } catch (error) {
+    logger.error('Error deleting golf bet (archive override):', error)
+    res.status(500).json({ error: 'Failed to delete golf bet' })
+  }
+})
+
+app.get('/api/entities/betting-providers', authRequired, adminOnly, async (req, res) => {
   try {
     const providers = await prisma.bettingProvider.findMany({
       orderBy: { priority: 'asc' },
@@ -436,6 +537,7 @@ app.get('/api/entities/betting-providers', authRequired, async (req, res) => {
 app.post(
   '/api/entities/betting-providers',
   authRequired,
+  adminOnly,
   validateBody(z.object({
     name: z.string().min(1),
     slug: z.string().min(1),
@@ -486,6 +588,7 @@ app.post(
 app.put(
   '/api/entities/betting-providers/:id',
   authRequired,
+  adminOnly,
   validateBody(z.object({
     name: z.string().min(1).optional(),
     slug: z.string().min(1).optional(),
@@ -535,7 +638,7 @@ app.put(
   }
 })
 
-app.delete('/api/entities/betting-providers/:id', authRequired, async (req, res) => {
+app.delete('/api/entities/betting-providers/:id', authRequired, adminOnly, async (req, res) => {
   try {
     const { id } = req.params
     await prisma.bettingProvider.delete({ where: { id } })
@@ -546,7 +649,7 @@ app.delete('/api/entities/betting-providers/:id', authRequired, async (req, res)
   }
 })
 
-app.get('/api/entities/data-quality-issues', authRequired, async (req, res) => {
+app.get('/api/entities/data-quality-issues', authRequired, adminOnly, async (req, res) => {
   try {
     const issues = await prisma.dataIssue.findMany({
       where: { resolved: false },
@@ -572,6 +675,7 @@ app.get('/api/entities/data-quality-issues', authRequired, async (req, res) => {
 app.put(
   '/api/entities/data-quality-issues/:id',
   authRequired,
+  adminOnly,
   validateBody(z.object({
     resolved: z.boolean()
   })),
@@ -595,7 +699,7 @@ app.put(
   }
 })
 
-app.get('/api/entities/users', authRequired, async (req, res) => {
+app.get('/api/entities/users', authRequired, adminOnly, async (req, res) => {
   try {
     const users = await prisma.user.findMany({
       orderBy: { createdAt: 'desc' },
@@ -606,6 +710,14 @@ app.get('/api/entities/users', authRequired, async (req, res) => {
       email: user.email,
       full_name: user.fullName,
       role: user.role,
+      favorite_tours: user.favoriteTours,
+      risk_appetite: user.riskAppetite,
+      notifications_enabled: user.notificationsEnabled,
+      email_notifications: user.emailNotifications,
+      onboarding_completed: user.onboardingCompleted,
+      total_bets_placed: user.totalBetsPlaced,
+      total_wins: user.totalWins,
+      hio_total_points: user.hioTotalPoints,
       created_date: user.createdAt?.toISOString?.() || user.createdAt
     }))
     res.json({ data: formatted })
@@ -615,7 +727,73 @@ app.get('/api/entities/users', authRequired, async (req, res) => {
   }
 })
 
-app.get('/api/entities/membership-packages', authRequired, async (req, res) => {
+app.put(
+  '/api/entities/users/:id',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    email: z.string().email().optional(),
+    full_name: z.string().optional().nullable(),
+    role: z.string().optional(),
+    favorite_tours: z.array(z.string()).optional().nullable(),
+    risk_appetite: z.string().optional().nullable(),
+    notifications_enabled: z.boolean().optional(),
+    email_notifications: z.boolean().optional(),
+    onboarding_completed: z.boolean().optional(),
+    total_bets_placed: z.coerce.number().int().nonnegative().optional(),
+    total_wins: z.coerce.number().int().nonnegative().optional(),
+    hio_total_points: z.coerce.number().int().nonnegative().optional()
+  })),
+  async (req, res) => {
+    try {
+      const { id } = req.params
+      const {
+        email,
+        full_name,
+        role,
+        favorite_tours,
+        risk_appetite,
+        notifications_enabled,
+        email_notifications,
+        onboarding_completed,
+        total_bets_placed,
+        total_wins,
+        hio_total_points
+      } = req.body || {}
+
+      const updated = await prisma.user.update({
+        where: { id },
+        data: {
+          email: email ?? undefined,
+          fullName: full_name === null ? null : (full_name ?? undefined),
+          role: role ?? undefined,
+          favoriteTours: favorite_tours === null ? null : (favorite_tours ?? undefined),
+          riskAppetite: risk_appetite === null ? null : (risk_appetite ?? undefined),
+          notificationsEnabled: typeof notifications_enabled === 'boolean' ? notifications_enabled : undefined,
+          emailNotifications: typeof email_notifications === 'boolean' ? email_notifications : undefined,
+          onboardingCompleted: typeof onboarding_completed === 'boolean' ? onboarding_completed : undefined,
+          totalBetsPlaced: Number.isFinite(total_bets_placed) ? total_bets_placed : undefined,
+          totalWins: Number.isFinite(total_wins) ? total_wins : undefined,
+          hioTotalPoints: Number.isFinite(hio_total_points) ? hio_total_points : undefined
+        }
+      })
+
+      res.json({
+        data: {
+          id: updated.id,
+          email: updated.email,
+          full_name: updated.fullName,
+          role: updated.role
+        }
+      })
+    } catch (error) {
+      logger.error('Error updating user:', error)
+      res.status(500).json({ error: 'Failed to update user' })
+    }
+  }
+)
+
+app.get('/api/entities/membership-packages', authRequired, adminOnly, async (req, res) => {
   try {
     const memberships = await prisma.membershipPackage.findMany({
       orderBy: { price: 'asc' },
@@ -643,6 +821,7 @@ app.get('/api/entities/membership-packages', authRequired, async (req, res) => {
 app.post(
   '/api/entities/membership-packages',
   authRequired,
+  adminOnly,
   validateBody(z.object({
     name: z.string().min(1),
     description: z.string().optional().nullable(),
@@ -705,6 +884,7 @@ app.post(
 app.put(
   '/api/entities/membership-packages/:id',
   authRequired,
+  adminOnly,
   validateBody(z.object({
     name: z.string().min(1).optional(),
     description: z.string().optional().nullable(),
@@ -766,7 +946,7 @@ app.put(
   }
 })
 
-app.delete('/api/entities/membership-packages/:id', authRequired, async (req, res) => {
+app.delete('/api/entities/membership-packages/:id', authRequired, adminOnly, async (req, res) => {
   try {
     const { id } = req.params
     await prisma.membershipPackage.delete({ where: { id } })
@@ -777,7 +957,7 @@ app.delete('/api/entities/membership-packages/:id', authRequired, async (req, re
   }
 })
 
-app.get('/api/entities/membership-subscriptions', authRequired, async (req, res) => {
+app.get('/api/entities/membership-subscriptions', authRequired, adminOnly, async (req, res) => {
   try {
     const subscriptions = await prisma.membershipSubscription.findMany({
       orderBy: { createdDate: 'desc' },
@@ -806,6 +986,7 @@ app.get('/api/entities/membership-subscriptions', authRequired, async (req, res)
 app.put(
   '/api/entities/membership-subscriptions/:id',
   authRequired,
+  adminOnly,
   validateBody(z.object({
     status: z.string().min(1).optional(),
     billing_period: z.string().min(1).optional(),
@@ -857,6 +1038,7 @@ app.put(
 app.post(
   '/api/pipeline/run',
   authRequired,
+  adminOnly,
   pipelineLimiter,
   validateBody(z.object({
     dryRun: z.boolean().optional(),

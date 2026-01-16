@@ -52,6 +52,7 @@ export default function Admin() {
   const [editingBet, setEditingBet] = useState(null);
   const [editingProvider, setEditingProvider] = useState(null);
   const [editingMembership, setEditingMembership] = useState(null);
+  const [editingUser, setEditingUser] = useState(null);
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -163,6 +164,14 @@ export default function Admin() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['memberships'] });
       setEditingMembership(null);
+    }
+  });
+
+  const updateUserMutation = useMutation({
+    mutationFn: ({ id, data }) => api.entities.User.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allUsers'] });
+      setEditingUser(null);
     }
   });
 
@@ -536,6 +545,7 @@ export default function Admin() {
                     <th className="text-center px-4 py-3 text-sm font-medium text-slate-400">Bets</th>
                     <th className="text-center px-4 py-3 text-sm font-medium text-slate-400">HIO Points</th>
                     <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Joined</th>
+                    <th className="text-right px-4 py-3 text-sm font-medium text-slate-400">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -557,6 +567,16 @@ export default function Admin() {
                       <td className="px-4 py-3 text-center text-amber-400">{u.hio_total_points || 0}</td>
                       <td className="px-4 py-3 text-sm text-slate-400">
                         {u.created_date ? new Date(u.created_date).toLocaleDateString() : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setEditingUser(u)}
+                          className="text-slate-400 hover:text-white"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -733,6 +753,176 @@ export default function Admin() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Edit User Dialog */}
+      <Dialog open={!!editingUser} onOpenChange={() => setEditingUser(null)}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit User</DialogTitle>
+          </DialogHeader>
+          {editingUser && (
+            <UserEditForm
+              user={editingUser}
+              isSaving={updateUserMutation.isPending}
+              onSave={(data) => updateUserMutation.mutate({ id: editingUser.id, data })}
+              onCancel={() => setEditingUser(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function UserEditForm({ user, onSave, onCancel, isSaving }) {
+  const [form, setForm] = useState({
+    email: user.email || '',
+    full_name: user.full_name || '',
+    role: user.role || 'user',
+    favorite_tours: Array.isArray(user.favorite_tours) ? user.favorite_tours : [],
+    risk_appetite: user.risk_appetite || '',
+    notifications_enabled: user.notifications_enabled !== false,
+    email_notifications: user.email_notifications !== false,
+    onboarding_completed: user.onboarding_completed === true,
+    total_bets_placed: user.total_bets_placed ?? 0,
+    total_wins: user.total_wins ?? 0,
+    hio_total_points: user.hio_total_points ?? 0
+  });
+
+  const favoriteToursCsv = (form.favorite_tours || []).join(', ');
+
+  return (
+    <div className="space-y-4 pt-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">Full Name</label>
+          <Input
+            value={form.full_name}
+            onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+            className="bg-slate-800 border-slate-700"
+          />
+        </div>
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">Email</label>
+          <Input
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            className="bg-slate-800 border-slate-700"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">Role</label>
+          <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}>
+            <SelectTrigger className="bg-slate-800 border-slate-700">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="user">User</SelectItem>
+              <SelectItem value="admin">Admin</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">Risk Appetite</label>
+          <Input
+            value={form.risk_appetite}
+            onChange={(e) => setForm({ ...form, risk_appetite: e.target.value })}
+            className="bg-slate-800 border-slate-700"
+            placeholder="conservative / balanced / aggressive"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="text-sm text-slate-400 mb-2 block">Favorite Tours (comma separated)</label>
+        <Input
+          value={favoriteToursCsv}
+          onChange={(e) =>
+            setForm({
+              ...form,
+              favorite_tours: e.target.value
+                .split(',')
+                .map((t) => t.trim())
+                .filter(Boolean)
+            })
+          }
+          className="bg-slate-800 border-slate-700"
+          placeholder="PGA, LIV, LPGA"
+        />
+      </div>
+
+      <div className="grid grid-cols-3 gap-4">
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">Total Bets Placed</label>
+          <Input
+            type="number"
+            min="0"
+            value={form.total_bets_placed}
+            onChange={(e) => setForm({ ...form, total_bets_placed: e.target.value })}
+            className="bg-slate-800 border-slate-700"
+          />
+        </div>
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">Total Wins</label>
+          <Input
+            type="number"
+            min="0"
+            value={form.total_wins}
+            onChange={(e) => setForm({ ...form, total_wins: e.target.value })}
+            className="bg-slate-800 border-slate-700"
+          />
+        </div>
+        <div>
+          <label className="text-sm text-slate-400 mb-2 block">HIO Total Points</label>
+          <Input
+            type="number"
+            min="0"
+            value={form.hio_total_points}
+            onChange={(e) => setForm({ ...form, hio_total_points: e.target.value })}
+            className="bg-slate-800 border-slate-700"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 pt-2">
+        <div className="flex items-center justify-between bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2">
+          <span className="text-sm text-slate-300">Notifications</span>
+          <Switch
+            checked={!!form.notifications_enabled}
+            onCheckedChange={(v) => setForm({ ...form, notifications_enabled: v })}
+          />
+        </div>
+        <div className="flex items-center justify-between bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2">
+          <span className="text-sm text-slate-300">Email Notifs</span>
+          <Switch
+            checked={!!form.email_notifications}
+            onCheckedChange={(v) => setForm({ ...form, email_notifications: v })}
+          />
+        </div>
+        <div className="flex items-center justify-between bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2">
+          <span className="text-sm text-slate-300">Onboarding</span>
+          <Switch
+            checked={!!form.onboarding_completed}
+            onCheckedChange={(v) => setForm({ ...form, onboarding_completed: v })}
+          />
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-3 pt-4">
+        <Button variant="outline" onClick={onCancel} className="border-slate-600" disabled={isSaving}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() => onSave(form)}
+          className="bg-emerald-500 hover:bg-emerald-600"
+          disabled={isSaving}
+        >
+          Save Changes
+        </Button>
+      </div>
     </div>
   );
 }

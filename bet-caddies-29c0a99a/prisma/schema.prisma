@@ -232,11 +232,36 @@ model BetRecommendation {
   analysisBullets   Json     // JSON array of bullet points
   createdAt         DateTime @default(now())
 
+  // Admin overrides (optional)
+  override          BetOverride?
+
   // Relations
   run               Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
   tourEvent         TourEvent @relation(fields: [tourEventId], references: [id], onDelete: Cascade)
 
   @@map("bet_recommendations")
+}
+
+model BetOverride {
+  id                   String   @id @default(cuid())
+  betRecommendationId   String   @unique
+
+  selectionName         String?
+  betTitle              String?
+  confidenceRating      Int?
+  aiAnalysisParagraph   String?
+  affiliateLinkOverride String?
+  status                String?
+  courseFitScore        Int?
+  formLabel             String?
+  weatherLabel          String?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  betRecommendation     BetRecommendation @relation(fields: [betRecommendationId], references: [id], onDelete: Cascade)
+
+  @@map("bet_overrides")
 }
 
 model DataIssue {

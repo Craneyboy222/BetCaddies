@@ -14,21 +14,17 @@ export class BetCaddiesApi {
     this.client = {
       get: async (endpoint) => {
         const url = `${API_BASE_URL}${endpoint}`
-        console.log('API: Fetching', url)
         const response = await fetch(url, {
           headers: this.buildHeaders()
         })
-        console.log('API: Response status:', response.status)
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`)
         }
         const data = await response.json()
-        console.log('API: Response data:', data)
         return data
       },
       post: async (endpoint, body) => {
         const url = `${API_BASE_URL}${endpoint}`
-        console.log('API: Posting', url)
         const response = await fetch(url, {
           method: 'POST',
           headers: this.buildHeaders({
@@ -36,17 +32,14 @@ export class BetCaddiesApi {
           }),
           body: JSON.stringify(body || {})
         })
-        console.log('API: Response status:', response.status)
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`)
         }
         const data = await response.json()
-        console.log('API: Response data:', data)
         return data
       },
       put: async (endpoint, body) => {
         const url = `${API_BASE_URL}${endpoint}`
-        console.log('API: Putting', url)
         const response = await fetch(url, {
           method: 'PUT',
           headers: this.buildHeaders({
@@ -54,27 +47,22 @@ export class BetCaddiesApi {
           }),
           body: JSON.stringify(body || {})
         })
-        console.log('API: Response status:', response.status)
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`)
         }
         const data = await response.json()
-        console.log('API: Response data:', data)
         return data
       },
       delete: async (endpoint) => {
         const url = `${API_BASE_URL}${endpoint}`
-        console.log('API: Deleting', url)
         const response = await fetch(url, {
           method: 'DELETE',
           headers: this.buildHeaders()
         })
-        console.log('API: Response status:', response.status)
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`)
         }
         const data = await response.json()
-        console.log('API: Response data:', data)
         return data
       }
     }
@@ -115,9 +103,7 @@ export class BetCaddiesApi {
   // Admin API methods
   auth = {
     me: async () => {
-      console.log('API: Calling auth.me')
       const response = await this.client.get('/api/auth/me')
-      console.log('API: auth.me response:', response)
       return response
     },
     login: async (email, password) => {
@@ -148,12 +134,12 @@ export class BetCaddiesApi {
         return response.data || []
       },
       update: async (id, data) => {
-        // For now, return mock success
-        return { id, ...data }
+        const response = await this.client.put(`/api/entities/golf-bets/${id}`, data)
+        return response.data || response
       },
       delete: async (id) => {
-        // For now, return mock success
-        return { id }
+        const response = await this.client.delete(`/api/entities/golf-bets/${id}`)
+        return response.data || response
       }
     },
     BettingProvider: {
@@ -188,6 +174,10 @@ export class BetCaddiesApi {
       list: async (order, limit) => {
         const response = await this.client.get('/api/entities/users')
         return response.data || []
+      },
+      update: async (id, data) => {
+        const response = await this.client.put(`/api/entities/users/${id}`, data)
+        return response.data || response
       }
     },
     MembershipPackage: {
@@ -222,15 +212,11 @@ export class BetCaddiesApi {
 
   functions = {
     invoke: async (functionName, params) => {
-      console.log(`API function invoked: ${functionName}`, params)
-      
       if (functionName === 'weeklyResearchPipeline') {
         try {
           const response = await this.client.post('/api/pipeline/run', params || {})
-          console.log('Pipeline response:', response)
           return response
         } catch (error) {
-          console.error('Pipeline execution failed:', error)
           throw error
         }
       }
