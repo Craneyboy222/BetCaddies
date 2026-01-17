@@ -15,9 +15,13 @@ export class LPGAScraper extends BaseScraper {
       ]
 
       let $ = null
+      let selectedScheduleUrl = null
       for (const url of scheduleUrls) {
         $ = await this.fetchHtmlSafe(url)
-        if ($) break
+        if ($) {
+          selectedScheduleUrl = url
+          break
+        }
       }
 
       if (!$) {
@@ -53,7 +57,7 @@ export class LPGAScraper extends BaseScraper {
             endDate,
             location: loc,
             courseName: loc,
-            sourceUrls: [link ? `https://www.lpga.com${link}` : scheduleUrl]
+            sourceUrls: [link ? `https://www.lpga.com${link}` : (selectedScheduleUrl || this.baseUrl)]
           };
           return false;
         }

@@ -2219,12 +2219,35 @@ app.post(
       })
     }
     
-    // Create the pipeline instance and run it
+    // Fail fast if DB is unreachable, so the UI can show a real error.
+    try {
+      await prisma.run.count()
+    } catch (dbError) {
+      logger.error('Cannot run pipeline: database is not reachable', { error: dbError.message })
+      return res.status(503).json({
+        success: false,
+        message: 'Database is not reachable; cannot start pipeline',
+        error: dbError.message
+      })
+    }
+
+    // Create the pipeline instance and compute runKey
     const pipeline = new WeeklyPipeline()
     const runKey = req.body?.run_key || pipeline.generateRunKey()
-    
-    // Start the pipeline asynchronously to avoid timeout
-    // We will return immediately while pipeline runs in the background
+
+    // Ensure the run exists immediately (so admin UI can show it)
+    await prisma.run.upsert({
+      where: { runKey },
+      update: { status: 'running' },
+      create: {
+        runKey,
+        weekStart: pipeline.getWeekStart(),
+        weekEnd: pipeline.getWeekEnd(),
+        status: 'running'
+      }
+    })
+
+    // Start the pipeline asynchronously to avoid request timeouts.
     pipeline.run(runKey).catch(err => {
       logger.error('Pipeline execution failed', { error: err.message, runKey })
     })

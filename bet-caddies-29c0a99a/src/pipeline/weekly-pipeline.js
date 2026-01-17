@@ -32,6 +32,9 @@ export class WeeklyPipeline {
   async run(runKey = null) {
     const startTime = new Date()
 
+    let run = null
+    let issueTracker = null
+
     try {
       // Generate run key if not provided
       if (!runKey) {
@@ -51,7 +54,7 @@ export class WeeklyPipeline {
       }
 
       // Create or update run record
-      const run = await prisma.run.upsert({
+      run = await prisma.run.upsert({
         where: { runKey },
         update: { status: 'running' },
         create: {
@@ -62,7 +65,7 @@ export class WeeklyPipeline {
         }
       })
 
-      const issueTracker = new DataIssueTracker(run.id)
+      issueTracker = new DataIssueTracker(run.id)
 
       // Execute pipeline steps
       const result = await this.executePipeline(run, issueTracker)
@@ -82,6 +85,30 @@ export class WeeklyPipeline {
       return result
 
     } catch (error) {
+      try {
+        if (issueTracker?.logIssue && run?.id) {
+          await issueTracker.logIssue(
+            'pipeline',
+            'error',
+            'pipeline',
+            `Pipeline failed: ${error?.message || String(error)}`
+          )
+        }
+
+        if (run?.id) {
+          await prisma.run.update({
+            where: { id: run.id },
+            data: {
+              status: 'failed',
+              completedAt: new Date()
+            }
+          })
+        }
+      } catch (updateError) {
+        // Best-effort; fall through to original error
+        logError('pipeline', updateError, { runKey })
+      }
+
       logError('pipeline', error, { runKey })
       throw error
     }
