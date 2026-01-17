@@ -406,6 +406,163 @@ app.get('/api/auth/me', (req, res) => {
   }
 })
 
+// Public: membership packages (enabled only)
+app.get('/api/membership-packages', async (req, res) => {
+  try {
+    const memberships = await prisma.membershipPackage.findMany({
+      where: { enabled: true },
+      orderBy: [{ displayOrder: 'asc' }, { price: 'asc' }],
+      take: 50
+    })
+
+    const formatted = memberships.map(pkg => ({
+      id: pkg.id,
+      name: pkg.name,
+      description: pkg.description,
+      price: pkg.price,
+      billing_period: pkg.billingPeriod,
+      features: Array.isArray(pkg.features) ? pkg.features : [],
+      badges: Array.isArray(pkg.badges) ? pkg.badges : [],
+      enabled: pkg.enabled,
+      stripe_price_id: pkg.stripePriceId,
+      display_order: pkg.displayOrder
+    }))
+
+    res.json({ data: formatted })
+  } catch (error) {
+    logger.error('Error fetching public membership packages:', error)
+    res.status(500).json({ error: 'Failed to fetch membership packages' })
+  }
+})
+
+// User: current membership subscription (if any)
+app.get('/api/membership-subscriptions/me', authRequired, async (req, res) => {
+  try {
+    const email = req.user?.email
+    if (!email) return res.status(400).json({ error: 'Missing user email' })
+
+    const subscription = await prisma.membershipSubscription.findFirst({
+      where: {
+        userEmail: email,
+        status: 'active'
+      },
+      orderBy: { createdDate: 'desc' }
+    })
+
+    if (!subscription) return res.json({ data: null })
+
+    res.json({
+      data: {
+        id: subscription.id,
+        user_email: subscription.userEmail,
+        package_id: subscription.packageId,
+        package_name: subscription.packageName,
+        status: subscription.status,
+        billing_period: subscription.billingPeriod,
+        price_paid: subscription.pricePaid,
+        lifetime_value: subscription.lifetimeValue,
+        next_payment_date: subscription.nextPaymentDate?.toISOString?.() || subscription.nextPaymentDate,
+        created_date: subscription.createdDate?.toISOString?.() || subscription.createdDate,
+        cancelled_at: subscription.cancelledAt?.toISOString?.() || subscription.cancelledAt,
+        cancel_at_period_end: subscription.cancelAtPeriodEnd
+      }
+    })
+  } catch (error) {
+    logger.error('Error fetching membership subscription for user:', error)
+    res.status(500).json({ error: 'Failed to fetch membership subscription' })
+  }
+})
+
+// User: update own profile/preferences
+app.put(
+  '/api/users/me',
+  authRequired,
+  validateBody(z.object({
+    full_name: z.string().optional().nullable(),
+    favorite_tours: z.array(z.string()).optional().nullable(),
+    risk_appetite: z.string().optional().nullable(),
+    notifications_enabled: z.boolean().optional(),
+    email_notifications: z.boolean().optional(),
+    onboarding_completed: z.boolean().optional()
+  })),
+  async (req, res) => {
+    try {
+      const id = req.user?.sub
+      if (!id) return res.status(400).json({ error: 'Missing user id' })
+
+      const before = await prisma.user.findUnique({ where: { id } })
+      if (!before) return res.status(404).json({ error: 'User not found' })
+      if (before.disabledAt) return res.status(403).json({ error: 'User is disabled' })
+
+      const {
+        full_name,
+        favorite_tours,
+        risk_appetite,
+        notifications_enabled,
+        email_notifications,
+        onboarding_completed
+      } = req.body || {}
+
+      const updated = await prisma.user.update({
+        where: { id },
+        data: {
+          fullName: full_name === null ? null : (full_name ?? undefined),
+          favoriteTours: favorite_tours === null ? null : (favorite_tours ?? undefined),
+          riskAppetite: risk_appetite === null ? null : (risk_appetite ?? undefined),
+          notificationsEnabled: typeof notifications_enabled === 'boolean' ? notifications_enabled : undefined,
+          emailNotifications: typeof email_notifications === 'boolean' ? email_notifications : undefined,
+          onboardingCompleted: typeof onboarding_completed === 'boolean' ? onboarding_completed : undefined
+        }
+      })
+
+      await writeAuditLog({
+        req,
+        action: 'user.self_update',
+        entityType: 'User',
+        entityId: updated.id,
+        beforeJson: {
+          fullName: before.fullName,
+          favoriteTours: before.favoriteTours,
+          riskAppetite: before.riskAppetite,
+          notificationsEnabled: before.notificationsEnabled,
+          emailNotifications: before.emailNotifications,
+          onboardingCompleted: before.onboardingCompleted
+        },
+        afterJson: {
+          fullName: updated.fullName,
+          favoriteTours: updated.favoriteTours,
+          riskAppetite: updated.riskAppetite,
+          notificationsEnabled: updated.notificationsEnabled,
+          emailNotifications: updated.emailNotifications,
+          onboardingCompleted: updated.onboardingCompleted
+        }
+      })
+
+      res.json({
+        data: {
+          id: updated.id,
+          email: updated.email,
+          full_name: updated.fullName,
+          role: updated.role || 'user',
+          favorite_tours: updated.favoriteTours,
+          risk_appetite: updated.riskAppetite,
+          notifications_enabled: updated.notificationsEnabled,
+          email_notifications: updated.emailNotifications,
+          onboarding_completed: updated.onboardingCompleted,
+          disabled_at: updated.disabledAt,
+          disabled_reason: updated.disabledReason,
+          total_bets_placed: updated.totalBetsPlaced,
+          total_wins: updated.totalWins,
+          hio_total_points: updated.hioTotalPoints
+        }
+      })
+    } catch (error) {
+      logger.error('Error updating current user:', error)
+      res.status(500).json({ error: 'Failed to update user' })
+    }
+  }
+)
+
 // Public content endpoints
 app.get('/api/site-content', async (req, res) => {
   try {

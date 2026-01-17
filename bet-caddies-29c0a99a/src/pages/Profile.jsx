@@ -52,19 +52,14 @@ export default function Profile() {
     loadUser();
   }, []);
 
-  const updateUserLocal = (updates) => {
-    const updatedUser = { ...user, ...updates }
-    localStorage.setItem('betcaddies_auth', JSON.stringify({
-      isLoggedIn: true,
-      user: updatedUser
-    }))
-    return Promise.resolve(updatedUser)
-  }
-
   const updateMutation = useMutation({
-    mutationFn: (data) => updateUserLocal(data),
+    mutationFn: (data) => api.users.me.update(data),
     onSuccess: (updatedUser) => {
-      setUser(prev => ({ ...prev, ...updatedUser }));
+      setUser(updatedUser);
+      localStorage.setItem('betcaddies_auth', JSON.stringify({
+        isLoggedIn: true,
+        user: updatedUser
+      }))
     }
   });
 

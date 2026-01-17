@@ -111,6 +111,29 @@ export class BetCaddiesApi {
     }
   }
 
+  membershipPackages = {
+    list: async () => {
+      const response = await this.client.get('/api/membership-packages')
+      return response.data || []
+    }
+  }
+
+  membershipSubscriptions = {
+    me: async () => {
+      const response = await this.client.get('/api/membership-subscriptions/me')
+      return response.data || null
+    }
+  }
+
+  users = {
+    me: {
+      update: async (data) => {
+        const response = await this.client.put('/api/users/me', data)
+        return response.data || response
+      }
+    }
+  }
+
   // Admin API methods
   auth = {
     me: async () => {

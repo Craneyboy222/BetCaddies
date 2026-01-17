@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
 import { api } from '@/api/client';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
@@ -25,7 +24,8 @@ export default function Memberships() {
 
   const { data: packages = [], isLoading } = useQuery({
     queryKey: ['membershipPackages'],
-    queryFn: () => base44.entities.MembershipPackage.filter({ enabled: true }, 'display_order', 50)
+    queryFn: () => api.membershipPackages.list(),
+    retry: false
   });
 
   const { data: membershipsContent } = useQuery({
@@ -37,21 +37,26 @@ export default function Memberships() {
   const heroTitle = membershipsContent?.json?.hero?.title || 'Premium Membership';
   const heroSubtitle = membershipsContent?.json?.hero?.subtitle || 'Unlock exclusive features and maximize your betting success';
 
-  const { data: subscription } = useQuery({
-    queryKey: ['mySubscription', user?.email],
-    queryFn: () => base44.entities.MembershipSubscription.filter({ 
-      user_email: user.email,
-      status: 'active'
-    }),
-    enabled: !!user?.email
-  });
+  const renewalDateText = activeSubscription?.next_payment_date
+    ? new Date(activeSubscription.next_payment_date).toLocaleDateString()
+    : null
 
-  const activeSubscription = subscription?.[0];
+  const { data: activeSubscription } = useQuery({
+    queryKey: ['mySubscription', user?.email],
+    queryFn: () => api.membershipSubscriptions.me(),
+    enabled: !!user?.email,
+    retry: false
+  });
 
   const handleSelectPlan = async (pkg) => {
     if (!user) {
       api.auth.redirectToLogin();
       return;
+    }
+
+    if (!pkg?.stripe_price_id) {
+      alert('Checkout is not configured for this package yet.')
+      return
     }
 
     // Check if running in iframe
@@ -61,16 +66,7 @@ export default function Memberships() {
     }
 
     try {
-      const response = await base44.functions.invoke('createCheckoutSession', {
-        packageId: pkg.id,
-        priceId: pkg.stripe_price_id,
-        successUrl: window.location.origin + window.location.pathname + '?success=true',
-        cancelUrl: window.location.origin + window.location.pathname + '?cancelled=true'
-      });
-
-      if (response.data.url) {
-        window.location.href = response.data.url;
-      }
+      alert('Checkout flow coming next. Package selection is saved in the database.')
     } catch (error) {
       console.error('Checkout error:', error);
       alert('Failed to start checkout. Please try again.');
@@ -120,7 +116,8 @@ export default function Memberships() {
                 <span className="text-lg font-semibold text-white">Active Membership</span>
               </div>
               <p className="text-slate-300">
-                {activeSubscription.package_name} • Renews {new Date(activeSubscription.next_payment_date).toLocaleDateString()}
+                {activeSubscription.package_name}
+                {renewalDateText ? ` • Renews ${renewalDateText}` : ''}
               </p>
             </div>
             <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
@@ -139,7 +136,7 @@ export default function Memberships() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: idx * 0.1 }}
             className={`bg-slate-800/50 backdrop-blur-sm rounded-2xl border p-8 relative ${
-              pkg.badges?.some(b => b.text.toLowerCase().includes('popular')) 
+              pkg.badges?.some(b => String(b?.text || '').toLowerCase().includes('popular')) 
                 ? 'border-emerald-500/50 shadow-lg shadow-emerald-500/20' 
                 : 'border-slate-700/50'
             }`}
@@ -186,15 +183,17 @@ export default function Memberships() {
             {/* CTA Button */}
             <Button
               onClick={() => handleSelectPlan(pkg)}
-              disabled={activeSubscription?.package_id === pkg.id}
+              disabled={activeSubscription?.package_id === pkg.id || !pkg?.stripe_price_id}
               className={`w-full ${
-                pkg.badges?.some(b => b.text.toLowerCase().includes('popular'))
+                pkg.badges?.some(b => String(b?.text || '').toLowerCase().includes('popular'))
                   ? 'bg-emerald-500 hover:bg-emerald-600'
                   : 'bg-slate-700 hover:bg-slate-600'
               }`}
             >
               {activeSubscription?.package_id === pkg.id ? (
                 'Current Plan'
+              ) : !pkg?.stripe_price_id ? (
+                'Coming Soon'
               ) : (
                 <>
                   Get Started

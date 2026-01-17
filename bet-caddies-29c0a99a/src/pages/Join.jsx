@@ -81,20 +81,29 @@ export default function Join() {
       return;
     }
 
-    const updatedUser = {
-      ...user,
-      favorite_tours: selectedTours,
-      risk_appetite: riskAppetite,
-      responsible_gambling_acknowledged: gamblingAck,
-      onboarding_completed: true
-    }
-    localStorage.setItem('betcaddies_auth', JSON.stringify({
-      isLoggedIn: true,
-      user: updatedUser
-    }))
-    setUser(updatedUser)
+    try {
+      const updatedUser = await api.users.me.update({
+        favorite_tours: selectedTours,
+        risk_appetite: riskAppetite,
+        onboarding_completed: true
+      })
 
-    navigate(createPageUrl('Home'));
+      localStorage.setItem('betcaddies_auth', JSON.stringify({
+        isLoggedIn: true,
+        user: {
+          ...updatedUser,
+          responsible_gambling_acknowledged: gamblingAck
+        }
+      }))
+      setUser({
+        ...updatedUser,
+        responsible_gambling_acknowledged: gamblingAck
+      })
+
+      navigate(createPageUrl('Home'));
+    } catch (e) {
+      alert('Failed to save your preferences. Please try again.')
+    }
   };
 
   return (
