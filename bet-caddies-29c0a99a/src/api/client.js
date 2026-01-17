@@ -1,11 +1,30 @@
 // Frontend API client for BetCaddies
 // Connects to Railway backend API
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (
   import.meta.env.DEV
     ? 'http://localhost:3000'
-    : 'https://bet-caddies-29c0a99a-production.up.railway.app'
+    : ''
 )
+
+async function readErrorPayload(response) {
+  try {
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      return await response.json()
+    }
+    const text = await response.text()
+    return text ? { error: text } : null
+  } catch {
+    return null
+  }
+}
+
+function toErrorMessage(status, payload) {
+  if (!payload) return `HTTP error! status: ${status}`
+  if (typeof payload === 'string') return payload
+  return payload.message || payload.error || `HTTP error! status: ${status}`
+}
 
 export class BetCaddiesApi {
   constructor() {
@@ -113,7 +132,8 @@ export class BetCaddiesApi {
       window?.localStorage?.setItem(this.tokenKey, token)
     } else {
       window?.localStorage?.removeItem(this.tokenKey)
-    }
+          const payload = await readErrorPayload(response)
+          throw new Error(toErrorMessage(response.status, payload))
   }
 
   async getLatestBets() {
@@ -128,7 +148,8 @@ export class BetCaddiesApi {
 
   async getTournaments() {
     const response = await this.client.get('/api/tournaments')
-    return response.data || response
+          const payload = await readErrorPayload(response)
+          throw new Error(toErrorMessage(response.status, payload))
   }
 
   siteContent = {
@@ -143,7 +164,8 @@ export class BetCaddiesApi {
   }
 
   membershipPackages = {
-    list: async () => {
+          const payload = await readErrorPayload(response)
+          throw new Error(toErrorMessage(response.status, payload))
       const response = await this.client.get('/api/membership-packages')
       return response.data || []
     }
@@ -155,7 +177,8 @@ export class BetCaddiesApi {
       return response.data || null
     }
   }
-
+          const payload = await readErrorPayload(response)
+          throw new Error(toErrorMessage(response.status, payload))
   users = {
     me: {
       update: async (data) => {
