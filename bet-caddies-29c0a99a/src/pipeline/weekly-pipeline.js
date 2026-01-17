@@ -161,6 +161,21 @@ export class WeeklyPipeline {
     const tourEvents = await this.discoverEvents(run, issueTracker)
     result.eventsDiscovered = tourEvents.length
 
+    if (tourEvents.length === 0) {
+      await issueTracker.logIssue(
+        null,
+        'error',
+        'discover',
+        'No tour events discovered for any tour; cannot generate bets',
+        {
+          weekStart: run.weekStart instanceof Date ? run.weekStart.toISOString() : run.weekStart,
+          weekEnd: run.weekEnd instanceof Date ? run.weekEnd.toISOString() : run.weekEnd,
+          tours: Object.keys(this.scrapers)
+        }
+      )
+      throw new Error('No tour events discovered; pipeline aborted')
+    }
+
     // Step 2: Fetch field data
     logStep('field', 'Fetching player fields...')
     const fieldData = await this.fetchFields(tourEvents, issueTracker)
@@ -171,10 +186,42 @@ export class WeeklyPipeline {
     const oddsData = await this.fetchOdds(tourEvents, issueTracker)
     result.oddsMarketsIngested = oddsData.length
 
+    if (oddsData.length === 0) {
+      await issueTracker.logIssue(
+        null,
+        'error',
+        'odds',
+        'No odds data fetched; cannot generate bets',
+        {
+          events: tourEvents.map((e) => ({
+            tour: e.tour,
+            eventName: e.eventName,
+            startDate: e.startDate instanceof Date ? e.startDate.toISOString() : e.startDate
+          }))
+        }
+      )
+      throw new Error('No odds data fetched; pipeline aborted')
+    }
+
     // Step 4: Generate bet recommendations
     logStep('selection', 'Generating bet recommendations...')
     const recommendations = await this.generateRecommendations(run, tourEvents, oddsData, issueTracker)
     result.finalBets = recommendations.length
+
+    if (recommendations.length === 0) {
+      await issueTracker.logIssue(
+        null,
+        'error',
+        'selection',
+        'Generated 0 bet recommendations; cannot publish bets',
+        {
+          eventsDiscovered: result.eventsDiscovered,
+          playersIngested: result.playersIngested,
+          oddsEventsFetched: oddsData.length
+        }
+      )
+      throw new Error('Generated 0 bet recommendations; pipeline aborted')
+    }
 
     // Get top issues
     result.issues = await issueTracker.getTopIssues(10)
