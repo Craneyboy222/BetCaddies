@@ -36,26 +36,53 @@ export class TheOddsApiClient extends BaseScraper {
         return null
       }
 
-      // Choose the closest commence_time to our tournament startDate.
+      const normalizeTokens = (s) => {
+        return String(s || '')
+          .toLowerCase()
+          .replace(/[^a-z0-9\s]/g, ' ')
+          .split(/\s+/)
+          .filter(Boolean)
+          .filter((t) => !new Set(['the', 'in', 'at', 'and', 'of']).has(t))
+      }
+
       const tournamentTs = new Date(startDate).getTime()
+      const tournamentTokens = normalizeTokens(tournamentName)
+      const tournamentTokenSet = new Set(tournamentTokens)
+
+      const tokenSimilarity = (aSet, bTokens) => {
+        if (!aSet || aSet.size === 0 || !bTokens || bTokens.length === 0) return 0
+        let hit = 0
+        for (const t of bTokens) if (aSet.has(t)) hit++
+        return hit / Math.max(aSet.size, bTokens.length)
+      }
+
       let best = null
-      let bestDelta = Number.POSITIVE_INFINITY
+      let bestScore = Number.NEGATIVE_INFINITY
 
       for (const event of events) {
         const commenceTs = new Date(event?.commence_time).getTime()
         if (!Number.isFinite(commenceTs)) continue
 
-        const delta = Math.abs(commenceTs - tournamentTs)
+        const deltaMs = Math.abs(commenceTs - tournamentTs)
+        const deltaHours = deltaMs / (1000 * 60 * 60)
 
-        // Prefer events within ~3 days; otherwise still pick closest.
-        const name = String(event?.home_team || event?.sport_title || '')
-        const nameMatch = tournamentName
-          ? name.toLowerCase().includes(String(tournamentName).toLowerCase())
-          : false
+        const eventName = String(
+          event?.home_team ||
+          event?.away_team ||
+          event?.name ||
+          event?.sport_title ||
+          ''
+        )
+        const eventTokens = normalizeTokens(eventName)
+        const nameScore = tokenSimilarity(tournamentTokenSet, eventTokens)
 
-        if (delta < bestDelta || (delta === bestDelta && nameMatch)) {
+        // Prefer strong name matches; otherwise fall back to time proximity.
+        // Weight name heavily so "Sony Open in Hawaii" doesn't match the wrong week.
+        const score = (nameScore * 1000) - deltaHours
+
+        if (score > bestScore) {
           best = event
-          bestDelta = delta
+          bestScore = score
         }
       }
 
@@ -63,6 +90,14 @@ export class TheOddsApiClient extends BaseScraper {
         logger.warn(`No matching odds found for tournament: ${tournamentName}`)
         return null
       }
+
+      logger.info('Selected odds event', {
+        sportKey,
+        tournamentName,
+        selectedEventName: best?.home_team || best?.away_team || best?.name || null,
+        commence_time: best?.commence_time || null,
+        score: bestScore
+      })
 
       return best
     } catch (error) {

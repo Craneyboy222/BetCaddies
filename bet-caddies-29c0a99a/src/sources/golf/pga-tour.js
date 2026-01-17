@@ -8,6 +8,11 @@ export class PGATourScraper extends BaseScraper {
   }
 
   async discoverEvent(weekWindow) {
+    const weekStart = new Date(weekWindow.start)
+    const weekEnd = new Date(weekWindow.end)
+
+    // Preferred: statdata JSON feeds (fast + structured). These can be blocked/unresolvable
+    // in some production environments, so we gracefully fall back to scraping pgatour.com.
     try {
       const scheduleUrls = [
         'https://statdata.pgatour.com/r/current/schedule-v2.json',
@@ -17,42 +22,160 @@ export class PGATourScraper extends BaseScraper {
 
       let data = null
       for (const url of scheduleUrls) {
-        data = await this.fetchJsonSafe(url)
-        if (data) break
+        try {
+          data = await this.fetchJsonSafe(url)
+          if (data) break
+        } catch (error) {
+          // If DNS/blocked/etc, fall back rather than failing the whole pipeline.
+          logger.warn('PGA schedule feed fetch failed', {
+            url,
+            error: error.message
+          })
+        }
       }
 
-      if (!data) {
-        logger.warn('PGA schedule feed not available')
-        return null
+      if (data && Array.isArray(data.schedule)) {
+        const tournaments = data.schedule
+        const event = tournaments.find(tourEvent => {
+          const start = new Date(tourEvent.startDate)
+          const end = new Date(tourEvent.endDate || tourEvent.startDate)
+          return start <= weekEnd && end >= weekStart
+        })
+
+        if (event) {
+          return {
+            tour: 'PGA',
+            eventName: event.tournamentName,
+            startDate: new Date(event.startDate),
+            endDate: new Date(event.endDate || event.startDate),
+            location: event.venue || event.location || '',
+            courseName: event.course || '',
+            sourceUrls: [event.tournamentPermalink ? `https://www.pgatour.com${event.tournamentPermalink}` : this.baseUrl]
+          }
+        }
       }
-
-      const tournaments = data.schedule || [];
-      const weekStart = new Date(weekWindow.start);
-      const weekEnd = new Date(weekWindow.end);
-
-      const event = tournaments.find(tourEvent => {
-        const start = new Date(tourEvent.startDate);
-        const end = new Date(tourEvent.endDate || tourEvent.startDate);
-        return start <= weekEnd && end >= weekStart;
-      });
-
-      if (!event) {
-        logger.warn('No current PGA tournament found');
-        return null;
-      }
-
-      return {
-        tour: 'PGA',
-        eventName: event.tournamentName,
-        startDate: new Date(event.startDate),
-        endDate: new Date(event.endDate || event.startDate),
-        location: event.venue || event.location || '',
-        courseName: event.course || '',
-        sourceUrls: [event.tournamentPermalink ? `https://www.pgatour.com${event.tournamentPermalink}` : this.baseUrl]
-      };
     } catch (error) {
-      logger.error('Failed to discover PGA event', { error: error.message });
-      throw error;
+      // Keep going to HTML fallback.
+      logger.warn('PGA schedule feed path failed; will try HTML schedule', { error: error.message })
+    }
+
+    // Fallback: scrape pgatour.com schedule page and parse embedded __NEXT_DATA__.
+    try {
+      return await this.discoverEventFromSchedulePage({ weekStart, weekEnd })
+    } catch (error) {
+      logger.error('Failed to discover PGA event', { error: error.message })
+      throw error
+    }
+  }
+
+  parseTournamentDateRange({ displayDate, dateAccessibilityText, year }) {
+    const normalizedYear = year ? String(year).trim() : null
+
+    const stripOrdinals = (s) => String(s)
+      .replace(/(\d)(st|nd|rd|th)\b/gi, '$1')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    // Prefer accessibility text: "January 15th through January 18th"
+    const src = dateAccessibilityText ? stripOrdinals(dateAccessibilityText) : stripOrdinals(displayDate)
+    if (!src) return { startDate: null, endDate: null }
+
+    // Match "January 15 through January 18" or "January 15 through 18"
+    const m = src.match(/([A-Za-z]+)\s+(\d{1,2})(?:,?\s*(\d{4}))?\s*(?:through|-|–)\s*([A-Za-z]+)?\s*(\d{1,2})(?:,?\s*(\d{4}))?/i)
+    if (!m) return { startDate: null, endDate: null }
+
+    const startMonthName = m[1]
+    const startDay = m[2]
+    const startYear = m[3] || normalizedYear
+
+    const endMonthName = m[4] || startMonthName
+    const endDay = m[5]
+    let endYear = m[6] || startYear
+
+    if (!startYear || !endYear) return { startDate: null, endDate: null }
+
+    const startDate = new Date(`${startMonthName} ${startDay}, ${startYear} 00:00:00Z`)
+    let endDate = new Date(`${endMonthName} ${endDay}, ${endYear} 23:59:59Z`)
+
+    // Handle year rollover (e.g., "Dec 29 - Jan 1")
+    if (Number.isFinite(startDate.getTime()) && Number.isFinite(endDate.getTime()) && endDate < startDate) {
+      const rolled = new Date(`${endMonthName} ${endDay}, ${Number(endYear) + 1} 23:59:59Z`)
+      if (Number.isFinite(rolled.getTime())) endDate = rolled
+    }
+
+    return {
+      startDate: Number.isFinite(startDate.getTime()) ? startDate : null,
+      endDate: Number.isFinite(endDate.getTime()) ? endDate : null
+    }
+  }
+
+  async discoverEventFromSchedulePage({ weekStart, weekEnd }) {
+    const scheduleUrl = `${this.baseUrl}/schedule`
+    const html = await this.fetch(scheduleUrl)
+    const match = String(html).match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s)
+    if (!match) {
+      logger.warn('PGA schedule page missing __NEXT_DATA__')
+      return null
+    }
+
+    let nextData
+    try {
+      nextData = JSON.parse(match[1])
+    } catch {
+      logger.warn('PGA schedule page has invalid __NEXT_DATA__ JSON')
+      return null
+    }
+
+    const queries = nextData?.props?.pageProps?.dehydratedState?.queries
+    if (!Array.isArray(queries)) {
+      logger.warn('PGA schedule page dehydrated queries not found')
+      return null
+    }
+
+    const scheduleQuery = queries.find((q) => Array.isArray(q?.queryKey) && q.queryKey[0] === 'schedule')
+    const tournaments = scheduleQuery?.state?.data?.tournaments
+    if (!Array.isArray(tournaments) || tournaments.length === 0) {
+      logger.warn('PGA schedule tournaments list missing/empty')
+      return null
+    }
+
+    const candidates = tournaments
+      .map((t) => {
+        const { startDate, endDate } = this.parseTournamentDateRange({
+          displayDate: t.displayDate,
+          dateAccessibilityText: t.dateAccessibilityText,
+          year: t.year
+        })
+        return {
+          t,
+          startDate,
+          endDate
+        }
+      })
+      .filter((x) => x.startDate && x.endDate && x.startDate <= weekEnd && x.endDate >= weekStart)
+
+    if (candidates.length === 0) {
+      logger.warn('No current PGA tournament found (schedule page fallback)')
+      return null
+    }
+
+    // If multiple overlap, pick the one whose start is closest to the weekStart.
+    candidates.sort((a, b) => Math.abs(a.startDate - weekStart) - Math.abs(b.startDate - weekStart))
+    const picked = candidates[0]
+
+    const courseData = picked.t?.courseData || null
+    const locationParts = [courseData?.city, courseData?.stateCode, courseData?.countryCode]
+      .filter(Boolean)
+      .join(', ')
+
+    return {
+      tour: 'PGA',
+      eventName: picked.t.name,
+      startDate: picked.startDate,
+      endDate: picked.endDate,
+      location: locationParts || '',
+      courseName: courseData?.name || '',
+      sourceUrls: [picked.t?.tournamentSiteUrl || scheduleUrl]
     }
   }
 
