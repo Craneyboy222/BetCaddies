@@ -441,23 +441,41 @@ export default function Admin() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-bold text-white">Research Runs</h2>
-              <Button 
-                onClick={() => triggerRunMutation.mutate()}
-                disabled={triggerRunMutation.isPending}
-                className="bg-emerald-500 hover:bg-emerald-600"
-              >
-                {triggerRunMutation.isPending ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                    Running...
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-4 h-4 mr-2" />
-                    Trigger Run
-                  </>
-                )}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => checkPipelineHealthMutation.mutate()}
+                  disabled={checkPipelineHealthMutation.isPending}
+                  className="border-slate-700 text-slate-200"
+                >
+                  {checkPipelineHealthMutation.isPending ? 'Checking…' : 'Check Pipeline'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => checkDbHealthMutation.mutate()}
+                  disabled={checkDbHealthMutation.isPending}
+                  className="border-slate-700 text-slate-200"
+                >
+                  {checkDbHealthMutation.isPending ? 'Checking…' : 'Check DB'}
+                </Button>
+                <Button 
+                  onClick={() => triggerRunMutation.mutate()}
+                  disabled={triggerRunMutation.isPending}
+                  className="bg-emerald-500 hover:bg-emerald-600"
+                >
+                  {triggerRunMutation.isPending ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                      Running...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4 mr-2" />
+                      Trigger Run
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
             
             {runsLoading ? (

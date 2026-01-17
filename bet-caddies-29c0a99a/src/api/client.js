@@ -210,6 +210,16 @@ export class BetCaddiesApi {
   }
 
   entities = {
+    Health: {
+      db: async () => {
+        const response = await this.client.get('/api/health/db')
+        return response
+      },
+      pipeline: async () => {
+        const response = await this.client.get('/api/health/pipeline')
+        return response
+      }
+    },
     ResearchRun: {
       list: async (order, limit) => {
         const response = await this.client.get('/api/entities/research-runs')
