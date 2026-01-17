@@ -36,13 +36,14 @@ export class TheOddsApiClient extends BaseScraper {
         return null
       }
 
+      const stopwords = new Set(['the', 'in', 'at', 'and', 'of'])
       const normalizeTokens = (s) => {
         return String(s || '')
           .toLowerCase()
           .replace(/[^a-z0-9\s]/g, ' ')
           .split(/\s+/)
           .filter(Boolean)
-          .filter((t) => !new Set(['the', 'in', 'at', 'and', 'of']).has(t))
+          .filter((t) => !stopwords.has(t))
       }
 
       const tournamentTs = new Date(startDate).getTime()
