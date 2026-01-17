@@ -1,6 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import fs from 'fs';
+import { Blob as NodeBlob } from 'node:buffer'
 import jwt from 'jsonwebtoken'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
@@ -9,6 +10,20 @@ import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
 
 console.log('==== Starting BetCaddies server ====');
+
+// Railway may run an older Node version where `File` is not defined.
+// Some dependencies (and/or fetch-related code) expect a global `File`.
+if (typeof globalThis.File === 'undefined') {
+  const BaseBlob = globalThis.Blob || NodeBlob
+  globalThis.File = class File extends BaseBlob {
+    constructor(chunks = [], name = 'file', options = {}) {
+      super(chunks, options)
+      this.name = String(name)
+      this.lastModified = Number.isFinite(options.lastModified) ? options.lastModified : Date.now()
+      this.webkitRelativePath = ''
+    }
+  }
+}
 // Import WeeklyPipeline with error handling
 let WeeklyPipeline = null;
 let WeeklyPipelineLoadError = null;
@@ -17,7 +32,7 @@ try {
   WeeklyPipeline = pipelineModule.WeeklyPipeline;
   console.log('WeeklyPipeline loaded successfully');
 } catch (error) {
-  WeeklyPipelineLoadError = error?.message || String(error)
+  WeeklyPipelineLoadError = error?.stack || error?.message || String(error)
   console.error('Failed to load WeeklyPipeline:', error);
   if (logger && logger.error) logger.error('Failed to load WeeklyPipeline', { error });
 }
