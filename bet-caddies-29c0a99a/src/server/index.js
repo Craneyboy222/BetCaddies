@@ -843,20 +843,26 @@ app.get('/api/entities/research-runs', authRequired, adminOnly, async (req, res)
         dataIssues: {
           where: { severity: 'error' },
           orderBy: { createdAt: 'desc' },
-          take: 1
+          take: 5
         }
       }
     })
 
-    const formatted = runs.map(run => ({
-      id: run.id,
-      run_id: run.runKey,
-      week_start: run.weekStart?.toISOString?.() || run.weekStart,
-      week_end: run.weekEnd?.toISOString?.() || run.weekEnd,
-      status: run.status,
-      total_bets_published: run._count?.betRecommendations || 0,
-      error_summary: run.dataIssues?.[0]?.message || null
-    }))
+    const formatted = runs.map(run => {
+      // Prefer the most actionable error (non-generic pipeline step) when available.
+      // We still include the generic pipeline error as a fallback.
+      const mostActionableIssue = run.dataIssues?.find((i) => i.step !== 'pipeline') || run.dataIssues?.[0] || null
+
+      return {
+        id: run.id,
+        run_id: run.runKey,
+        week_start: run.weekStart?.toISOString?.() || run.weekStart,
+        week_end: run.weekEnd?.toISOString?.() || run.weekEnd,
+        status: run.status,
+        total_bets_published: run._count?.betRecommendations || 0,
+        error_summary: mostActionableIssue?.message || null
+      }
+    })
 
     res.json({ data: formatted })
   } catch (error) {
