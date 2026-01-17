@@ -345,8 +345,15 @@ export class WeeklyPipeline {
         logStep('field', `Ingested ${field.length} players for ${tourEvent.tour}`)
 
       } catch (error) {
-        await issueTracker.logIssue(tourEvent.tour, 'error', 'field',
-          `Failed to fetch field for ${tourEvent.eventName}: ${error.message}`)
+        const status = error?.response?.status
+        const severity = status === 404 ? 'warning' : 'error'
+        await issueTracker.logIssue(
+          tourEvent.tour,
+          severity,
+          'field',
+          `Failed to fetch field for ${tourEvent.eventName}: ${error.message}`,
+          status ? { httpStatus: status } : null
+        )
       }
     }
 

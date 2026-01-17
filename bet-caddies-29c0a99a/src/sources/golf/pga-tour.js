@@ -175,7 +175,8 @@ export class PGATourScraper extends BaseScraper {
       endDate: picked.endDate,
       location: locationParts || '',
       courseName: courseData?.name || '',
-      sourceUrls: [picked.t?.tournamentSiteUrl || scheduleUrl]
+      // Keep both the tournament site (often external) and the PGATOUR schedule page.
+      sourceUrls: [picked.t?.tournamentSiteUrl || scheduleUrl, scheduleUrl]
     }
   }
 
@@ -201,20 +202,35 @@ export class PGATourScraper extends BaseScraper {
 
   async fetchField(event) {
     try {
-      // PGA Tour field data
-      const fieldUrl = `${event.sourceUrls[0]}/field`
-      const $ = await this.fetchHtml(fieldUrl)
+      // The schedule fallback sets sourceUrls[0] to the tournament site, which is often external
+      // and does not expose a `/field` page. Until we have a stable official field endpoint,
+      // treat field ingestion as optional and avoid hard failing the pipeline.
+      const primaryUrl = event?.sourceUrls?.[0] || this.baseUrl
+
+      let host = null
+      try {
+        host = new URL(primaryUrl).hostname
+      } catch {
+        host = null
+      }
+
+      if (host && host !== 'www.pgatour.com') {
+        logger.info('Skipping PGA field scrape from external tournament site', {
+          eventName: event?.eventName,
+          url: primaryUrl
+        })
+        return []
+      }
+
+      // Best-effort attempt: some tournaments may expose a field route on pgatour.com.
+      const fieldUrl = `${String(primaryUrl).replace(/\/$/, '')}/field`
+      const $ = await this.fetchHtmlSafe(fieldUrl)
+      if (!$) return []
 
       const players = []
-      // Parse player list from HTML
       $('.player-name').each((i, el) => {
         const name = $(el).text().trim()
-        if (name) {
-          players.push({
-            name,
-            status: 'active'
-          })
-        }
+        if (name) players.push({ name, status: 'active' })
       })
 
       return players
