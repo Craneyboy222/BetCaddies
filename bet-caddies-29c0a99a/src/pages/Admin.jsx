@@ -208,6 +208,54 @@ export default function Admin() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dataQualityIssues'] })
   });
 
+  const checkPipelineHealthMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.entities.Health.pipeline()
+      return response
+    },
+    onSuccess: (result) => {
+      const ok = result?.ok === true
+      toast({
+        title: ok ? 'Pipeline module OK' : 'Pipeline module issue',
+        description: ok
+          ? 'Weekly pipeline module loaded successfully.'
+          : (result?.error || 'Pipeline module not available.'),
+        variant: ok ? undefined : 'destructive'
+      })
+    },
+    onError: (error) => {
+      toast({
+        title: 'Pipeline health check failed',
+        description: error?.message || 'Failed to check pipeline health',
+        variant: 'destructive'
+      })
+    }
+  })
+
+  const checkDbHealthMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.entities.Health.db()
+      return response
+    },
+    onSuccess: (result) => {
+      const ok = result?.ok === true
+      toast({
+        title: ok ? 'DB OK' : 'DB issue',
+        description: ok
+          ? 'Database connectivity looks good.'
+          : (result?.error || 'Database not available.'),
+        variant: ok ? undefined : 'destructive'
+      })
+    },
+    onError: (error) => {
+      toast({
+        title: 'DB health check failed',
+        description: error?.message || 'Failed to check DB health',
+        variant: 'destructive'
+      })
+    }
+  })
+
   const triggerRunMutation = useMutation({
     mutationFn: async () => {
       const response = await api.functions.invoke('weeklyResearchPipeline', { dryRun: false });
