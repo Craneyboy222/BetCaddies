@@ -18,7 +18,7 @@ export class BetCaddiesApi {
           headers: this.buildHeaders()
         })
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`)
+          throw await this.buildHttpError(response)
         }
         const data = await response.json()
         return data
@@ -33,7 +33,7 @@ export class BetCaddiesApi {
           body: JSON.stringify(body || {})
         })
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`)
+          throw await this.buildHttpError(response)
         }
         const data = await response.json()
         return data
@@ -48,7 +48,7 @@ export class BetCaddiesApi {
           body: JSON.stringify(body || {})
         })
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`)
+          throw await this.buildHttpError(response)
         }
         const data = await response.json()
         return data
@@ -60,12 +60,43 @@ export class BetCaddiesApi {
           headers: this.buildHeaders()
         })
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`)
+          throw await this.buildHttpError(response)
         }
         const data = await response.json()
         return data
       }
     }
+  }
+
+  async buildHttpError(response) {
+    const status = response?.status
+    const statusText = response?.statusText || ''
+    const contentType = response?.headers?.get?.('content-type') || ''
+
+    let body = null
+    try {
+      if (contentType.includes('application/json')) {
+        body = await response.json()
+      } else {
+        body = await response.text()
+      }
+    } catch {
+      body = null
+    }
+
+    const detail =
+      (body && typeof body === 'object' && (body.error || body.message))
+        ? (body.error || body.message)
+        : (typeof body === 'string' && body.trim() ? body.trim() : null)
+
+    const message = detail
+      ? `HTTP ${status} ${statusText}: ${detail}`.trim()
+      : `HTTP ${status} ${statusText}`.trim()
+
+    const error = new Error(message)
+    error.status = status
+    error.body = body
+    return error
   }
 
   buildHeaders(extra = {}) {

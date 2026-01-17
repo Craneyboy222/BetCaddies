@@ -26,6 +26,7 @@ import {
 import SubscriptionCRM from '@/components/admin/SubscriptionCRM';
 import HIOChallengeAdmin from '@/components/admin/HIOChallengeAdmin';
 import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/use-toast';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -200,9 +201,27 @@ export default function Admin() {
       const response = await api.functions.invoke('weeklyResearchPipeline', { dryRun: false });
       return response;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      toast({
+        title: 'Pipeline started',
+        description: result?.runKey ? `Run key: ${result.runKey}` : 'Run queued successfully.'
+      })
       queryClient.invalidateQueries({ queryKey: ['researchRuns'] });
       queryClient.invalidateQueries({ queryKey: ['allBets'] });
+
+      // Give the server a moment to persist initial rows before refetch.
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['researchRuns'] });
+        queryClient.invalidateQueries({ queryKey: ['allBets'] });
+      }, 1500)
+    },
+    onError: (error) => {
+      const msg = error?.message || 'Failed to start pipeline'
+      toast({
+        title: 'Trigger run failed',
+        description: msg,
+        variant: 'destructive'
+      })
     }
   });
 
