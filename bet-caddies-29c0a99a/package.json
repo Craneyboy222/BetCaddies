@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "pipeline:weekly": "node src/pipeline/index.js",
     "pipeline:smoke": "node src/pipeline/smoke-test.js",
+    "odds:smoke": "node src/sources/odds/odds-api-smoke.js",
     "server": "prisma migrate deploy && node src/server/index.js",
     "migrate:deploy": "prisma migrate deploy",
     "postinstall": "prisma generate",

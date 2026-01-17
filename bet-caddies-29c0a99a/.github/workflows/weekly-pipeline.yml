@@ -44,7 +44,7 @@ jobs:
       run: npm run pipeline:weekly
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+        ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         LOG_LEVEL: info
 
     - name: Upload pipeline logs

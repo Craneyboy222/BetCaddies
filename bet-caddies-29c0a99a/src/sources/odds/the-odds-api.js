@@ -4,56 +4,69 @@ import { logger } from '../../observability/logger.js'
 export class TheOddsApiClient extends BaseScraper {
   constructor() {
     super()
-    this.apiKey = process.env.SPORTSGAME_ODDS_API_KEY
-    this.baseUrl = 'https://api.sportsgameodds.com/v2'
-    this.sportId = 'GOLF'
-    this.defaultLimit = 50
+    this.apiKey = process.env.ODDS_API_KEY
+    this.baseUrl = 'https://api.the-odds-api.com/v4'
+    this.defaultRegions = process.env.ODDS_API_REGIONS || 'uk'
+    this.defaultMarkets = process.env.ODDS_API_MARKETS || 'outrights'
+    this.defaultOddsFormat = process.env.ODDS_API_ODDS_FORMAT || 'decimal'
+    this.defaultDateFormat = process.env.ODDS_API_DATE_FORMAT || 'iso'
   }
 
   async fetchOddsForTournament(tournamentName, startDate, leagueId = null) {
     try {
       if (!this.apiKey) {
-        throw new Error('SPORTSGAME_ODDS_API_KEY environment variable is required')
+        throw new Error('ODDS_API_KEY environment variable is required')
       }
+
+      const sportKey = this.mapLeagueIdToSportKey(leagueId)
 
       const params = new URLSearchParams({
-        oddsAvailable: 'true',
-        sportID: this.sportId,
-        limit: String(this.defaultLimit)
+        apiKey: this.apiKey,
+        regions: this.defaultRegions,
+        markets: this.defaultMarkets,
+        oddsFormat: this.defaultOddsFormat,
+        dateFormat: this.defaultDateFormat
       })
 
-      if (leagueId) {
-        params.set('leagueID', leagueId)
-      }
+      const url = `${this.baseUrl}/sports/${encodeURIComponent(sportKey)}/odds/?${params}`
+      const events = await this.fetchJson(url)
 
-      const url = `${this.baseUrl}/events?${params}`
-      const data = await this.fetchJson(url, {
-        headers: {
-          'x-api-key': this.apiKey
-        }
-      })
-
-      const events = data?.data || []
-
-      // Filter for events matching our tournament
-      const matchingEvents = events.filter(event => {
-        const eventDate = new Date(event?.status?.startsAt)
-        const tournamentDate = new Date(startDate)
-
-        // Match by date (within 1 day) and name similarity
-        const dateMatch = Math.abs(eventDate - tournamentDate) < 24 * 60 * 60 * 1000
-
-        return dateMatch
-      })
-
-      if (matchingEvents.length === 0) {
-        logger.warn(`No odds found for tournament: ${tournamentName}`)
+      if (!Array.isArray(events) || events.length === 0) {
+        logger.warn(`No odds events returned for sportKey=${sportKey}`)
         return null
       }
 
-      return matchingEvents[0] // Return the first date match
+      // Choose the closest commence_time to our tournament startDate.
+      const tournamentTs = new Date(startDate).getTime()
+      let best = null
+      let bestDelta = Number.POSITIVE_INFINITY
+
+      for (const event of events) {
+        const commenceTs = new Date(event?.commence_time).getTime()
+        if (!Number.isFinite(commenceTs)) continue
+
+        const delta = Math.abs(commenceTs - tournamentTs)
+
+        // Prefer events within ~3 days; otherwise still pick closest.
+        const name = String(event?.home_team || event?.sport_title || '')
+        const nameMatch = tournamentName
+          ? name.toLowerCase().includes(String(tournamentName).toLowerCase())
+          : false
+
+        if (delta < bestDelta || (delta === bestDelta && nameMatch)) {
+          best = event
+          bestDelta = delta
+        }
+      }
+
+      if (!best) {
+        logger.warn(`No matching odds found for tournament: ${tournamentName}`)
+        return null
+      }
+
+      return best
     } catch (error) {
-      logger.error('Failed to fetch odds from SportsGameOdds API', {
+      logger.error('Failed to fetch odds from Odds-API.io', {
         error: error.message,
         tournament: tournamentName
       })
@@ -61,46 +74,37 @@ export class TheOddsApiClient extends BaseScraper {
     }
   }
 
+  mapLeagueIdToSportKey(leagueId) {
+    // Pipeline currently passes these values:
+    // PGA: PGA_MEN, LPGA: PGA_WOMEN, LIV: LIV_TOUR
+    switch (String(leagueId || '').toUpperCase()) {
+      case 'PGA_WOMEN':
+        return 'golf_lpga'
+      case 'LIV_TOUR':
+        return 'golf_liv'
+      case 'PGA_MEN':
+      default:
+        return 'golf_pga'
+    }
+  }
+
   extractOffersFromEvent(event) {
     const offers = []
 
-    const odds = event?.odds || {}
-    const players = event?.players || {}
+    for (const bookmaker of event?.bookmakers || []) {
+      for (const market of bookmaker?.markets || []) {
+        const marketKey = market?.key || 'unknown'
+        for (const outcome of market?.outcomes || []) {
+          const decimal = Number(outcome?.price)
+          if (!Number.isFinite(decimal)) continue
 
-    for (const [oddId, oddData] of Object.entries(odds)) {
-      const { statEntityId } = this.parseOddId(oddId)
-      const playerName = players?.[statEntityId]?.name || statEntityId
-      const bookmakers = oddData?.byBookmaker || {}
-
-      for (const [bookmakerId, bookmakerOdds] of Object.entries(bookmakers)) {
-        if (!bookmakerOdds?.available) continue
-
-        const american = bookmakerOdds?.odds
-        if (!american) continue
-
-        const decimal = this.americanToDecimal(american)
-
-        offers.push({
-          selectionName: playerName,
-          bookmaker: bookmakerId,
-          oddsDecimal: decimal,
-          oddsDisplay: String(american),
-          deepLink: bookmakerOdds?.deeplink || null,
-          marketKey: oddId
-        })
-      }
-    }
-
-    for (const bookmaker of event.bookmakers || []) {
-      for (const market of bookmaker.markets || []) {
-        for (const outcome of market.outcomes || []) {
           offers.push({
-            selectionName: outcome.name,
-            bookmaker: bookmaker.key,
-            oddsDecimal: outcome.price,
-            oddsDisplay: this.decimalToFractional(outcome.price),
-            deepLink: bookmaker.link || null,
-            marketKey: market.key
+            selectionName: outcome?.name,
+            bookmaker: bookmaker?.title || bookmaker?.key,
+            oddsDecimal: decimal,
+            oddsDisplay: this.decimalToFractional(decimal),
+            deepLink: null,
+            marketKey
           })
         }
       }
@@ -125,33 +129,7 @@ export class TheOddsApiClient extends BaseScraper {
     return b === 0 ? a : this.greatestCommonDivisor(b, a % b)
   }
 
-  americanToDecimal(americanOdds) {
-    const odds = Number(String(americanOdds).replace('+', ''))
-    if (Number.isNaN(odds) || odds === 0) return null
-    if (odds > 0) return (odds / 100) + 1
-    return (100 / Math.abs(odds)) + 1
-  }
-
-  parseOddId(oddId) {
-    const parts = String(oddId).split('-')
-    if (parts.length < 5) {
-      return { statId: null, statEntityId: null, periodId: null, betTypeId: null, sideId: null }
-    }
-
-    const statId = parts.shift()
-    const sideId = parts.pop()
-    const betTypeId = parts.pop()
-    const periodId = parts.pop()
-    const statEntityId = parts.join('-')
-
-    return {
-      statId,
-      statEntityId,
-      periodId,
-      betTypeId,
-      sideId
-    }
-  }
+  // Note: Odds-API.io typically returns decimal odds directly.
 
   groupOffersByMarket(offers) {
     const grouped = {}

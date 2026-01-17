@@ -55,7 +55,7 @@ src/
 3. **Environment configuration**
    ```bash
    cp .env.example .env
-   # Edit .env with your DATABASE_URL and THE_ODDS_API_KEY
+   # Edit .env with your DATABASE_URL and ODDS_API_KEY
    ```
 
 4. **Run the pipeline**
@@ -79,7 +79,7 @@ src/
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `DATABASE_URL` | PostgreSQL connection string | Yes |
-| `THE_ODDS_API_KEY` | The Odds API key | Yes |
+| `ODDS_API_KEY` | The Odds API key | Yes |
 | `LOG_LEVEL` | Logging level (error, warn, info, debug) | No |
 | `USER_AGENT` | HTTP User-Agent header | No |
 
@@ -88,7 +88,7 @@ src/
 For automated pipeline runs, add these secrets to your GitHub repository:
 
 - `DATABASE_URL`: Your production database URL
-- `THE_ODDS_API_KEY`: Your The Odds API key
+- `ODDS_API_KEY`: Your The Odds API key
 
 ## 📊 Pipeline Commands
 
@@ -202,7 +202,7 @@ Each pipeline run generates a summary report including:
 ### Common Issues
 
 **Pipeline fails with "No odds found"**
-- Check THE_ODDS_API_KEY is valid
+- Check ODDS_API_KEY is valid
 - Verify The Odds API coverage for the tournament
 - Check tournament dates match API expectations
 

@@ -19,8 +19,10 @@ export class WeeklyPipeline {
       LPGA: new LPGAScraper(),
       LIV: new LIVScraper()
     }
-    const oddsProvider = process.env.ODDS_PROVIDER || 'oddschecker'
-    this.oddsClient = oddsProvider === 'sportsgameodds'
+    const oddsProvider = process.env.ODDS_PROVIDER
+      || (process.env.ODDS_API_KEY ? 'odds-api' : 'oddschecker')
+
+    this.oddsClient = (oddsProvider === 'odds-api' || oddsProvider === 'the-odds-api' || oddsProvider === 'sportsgameodds')
       ? new TheOddsApiClient()
       : new OddsCheckerClient()
     this.playerNormalizer = new PlayerNormalizer()

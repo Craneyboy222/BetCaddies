@@ -2,6 +2,32 @@ import axios from 'axios'
 import * as cheerio from 'cheerio'
 import { logger } from '../observability/logger.js'
 
+function redactUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl)
+    const sensitiveKeys = new Set([
+      'apikey',
+      'apiKey',
+      'key',
+      'token',
+      'access_token',
+      'authorization'
+    ])
+
+    for (const [k] of url.searchParams) {
+      if (sensitiveKeys.has(k) || sensitiveKeys.has(String(k).toLowerCase())) {
+        url.searchParams.set(k, '[REDACTED]')
+      }
+    }
+
+    return url.toString()
+  } catch {
+    // Fallback for non-absolute URLs
+    return String(rawUrl)
+      .replace(/([?&](?:apiKey|apikey|key|token|access_token)=)[^&]*/gi, '$1[REDACTED]')
+  }
+}
+
 export class BaseScraper {
   constructor(userAgent = process.env.USER_AGENT) {
     this.userAgent = userAgent
@@ -15,11 +41,11 @@ export class BaseScraper {
 
   async fetch(url, options = {}) {
     try {
-      logger.info(`Fetching ${url}`)
+      logger.info(`Fetching ${redactUrl(url)}`)
       const response = await this.client.get(url, options)
       return response.data
     } catch (error) {
-      logger.error(`Failed to fetch ${url}`, { error: error.message })
+      logger.error(`Failed to fetch ${redactUrl(url)}`, { error: error.message })
       throw error
     }
   }
