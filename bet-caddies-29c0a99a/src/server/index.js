@@ -23,6 +23,22 @@ try {
 const app = express()
 const PORT = process.env.PORT || 3000
 
+const summarizeDatabaseUrl = (raw) => {
+  if (!raw) return { configured: false }
+  try {
+    const u = new URL(raw)
+    return {
+      configured: true,
+      protocol: u.protocol.replace(':', ''),
+      host: u.host,
+      database: (u.pathname || '').replace(/^\//, '') || null,
+      sslmode: u.searchParams.get('sslmode') || null
+    }
+  } catch {
+    return { configured: true, parseError: true }
+  }
+}
+
 const JWT_SECRET = process.env.JWT_SECRET
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
@@ -356,6 +372,27 @@ app.get('/api/tournaments', async (req, res) => {
   } catch (error) {
     logger.error('Failed to fetch tournaments', { error: error.message })
     res.status(500).json({ error: 'Failed to fetch tournaments' })
+  }
+})
+
+// Health endpoints
+app.get('/health', (req, res) => {
+  res.json({ ok: true })
+})
+
+app.get('/api/health/db', authRequired, adminOnly, async (req, res) => {
+  const dbInfo = summarizeDatabaseUrl(process.env.DATABASE_URL)
+  try {
+    const startedAt = Date.now()
+    await prisma.$queryRaw`SELECT 1`
+    return res.json({ ok: true, db: dbInfo, latencyMs: Date.now() - startedAt })
+  } catch (error) {
+    logger.error('DB health check failed', { error: error.message, db: dbInfo })
+    return res.status(503).json({
+      ok: false,
+      db: dbInfo,
+      error: error.message
+    })
   }
 })
 
@@ -2223,11 +2260,13 @@ app.post(
     try {
       await prisma.run.count()
     } catch (dbError) {
-      logger.error('Cannot run pipeline: database is not reachable', { error: dbError.message })
+      const dbInfo = summarizeDatabaseUrl(process.env.DATABASE_URL)
+      logger.error('Cannot run pipeline: database is not reachable', { error: dbError.message, db: dbInfo })
       return res.status(503).json({
         success: false,
         message: 'Database is not reachable; cannot start pipeline',
-        error: dbError.message
+        error: dbError.message,
+        db: dbInfo
       })
     }
 
