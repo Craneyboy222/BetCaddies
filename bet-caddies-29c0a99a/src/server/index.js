@@ -11,11 +11,13 @@ import { logger } from '../observability/logger.js'
 console.log('==== Starting BetCaddies server ====');
 // Import WeeklyPipeline with error handling
 let WeeklyPipeline = null;
+let WeeklyPipelineLoadError = null;
 try {
   const pipelineModule = await import('../pipeline/weekly-pipeline.js');
   WeeklyPipeline = pipelineModule.WeeklyPipeline;
   console.log('WeeklyPipeline loaded successfully');
 } catch (error) {
+  WeeklyPipelineLoadError = error?.message || String(error)
   console.error('Failed to load WeeklyPipeline:', error);
   if (logger && logger.error) logger.error('Failed to load WeeklyPipeline', { error });
 }
@@ -394,6 +396,13 @@ app.get('/api/health/db', authRequired, adminOnly, async (req, res) => {
       error: error.message
     })
   }
+})
+
+app.get('/api/health/pipeline', authRequired, adminOnly, (req, res) => {
+  res.json({
+    ok: Boolean(WeeklyPipeline),
+    error: WeeklyPipeline ? null : (WeeklyPipelineLoadError || 'Pipeline module not loaded')
+  })
 })
 
 // Admin API endpoints
@@ -2252,7 +2261,7 @@ app.post(
       return res.status(503).json({ 
         success: false, 
         message: 'Pipeline module is not available',
-        error: 'Configuration issue - please check server logs' 
+        error: WeeklyPipelineLoadError || 'Configuration issue - please check server logs'
       })
     }
     
