@@ -7,9 +7,35 @@ export class BetSelectionEngine {
       BIRDIE: { minOdds: 6, maxOdds: 10 },
       EAGLE: { minOdds: 11, maxOdds: 100 }
     }
+
+    // Portfolio constraints
+    this.maxBetsPerPlayerPerTier = 2
+    this.minPerTourByTier = {
+      // Only enforce minimums when those tours have candidates.
+      PAR: { PGA: 2, LPGA: 2 },
+      BIRDIE: { PGA: 2, LPGA: 2 },
+      EAGLE: {}
+    }
   }
 
   generateRecommendations(tourEvents, oddsData, playerNormalizer) {
+    // First pass: only include positive-edge candidates.
+    let candidates = this.buildCandidates(tourEvents, oddsData, playerNormalizer, { requirePositiveEdge: true })
+
+    // Fallback: if we found nothing, relax edge constraint so we still publish a portfolio.
+    // This prevents the pipeline from producing 0 bets due to the simplistic placeholder model.
+    if (candidates.length === 0) {
+      logger.warn('No positive-edge candidates found; falling back to best-available odds candidates')
+      candidates = this.buildCandidates(tourEvents, oddsData, playerNormalizer, { requirePositiveEdge: false })
+    }
+
+    // Sort by edge (highest first)
+    candidates.sort((a, b) => b.edge - a.edge)
+
+    return this.selectPortfolio(candidates)
+  }
+
+  buildCandidates(tourEvents, oddsData, playerNormalizer, { requirePositiveEdge }) {
     const candidates = []
 
     for (const tourEvent of tourEvents) {
@@ -44,7 +70,8 @@ export class BetSelectionEngine {
             marketKey,
             bestOffer,
             altOffers,
-            playerNormalizer
+            playerNormalizer,
+            { requirePositiveEdge }
           )
 
           if (candidate) {
@@ -54,13 +81,10 @@ export class BetSelectionEngine {
       }
     }
 
-    // Sort by edge (highest first)
-    candidates.sort((a, b) => b.edge - a.edge)
-
-    return this.selectPortfolio(candidates)
+    return candidates
   }
 
-  createCandidate(tourEvent, marketKey, offer, altOffers, playerNormalizer) {
+  createCandidate(tourEvent, marketKey, offer, altOffers, playerNormalizer, { requirePositiveEdge } = {}) {
     try {
       // Calculate model probability (simplified - would use ML model)
       const modelProb = this.calculateModelProbability(tourEvent, offer.selectionName)
@@ -71,7 +95,7 @@ export class BetSelectionEngine {
       // Calculate edge
       const edge = modelProb - impliedProb
 
-      if (edge <= 0) return null // No edge, skip
+      if (requirePositiveEdge && edge <= 0) return null // No edge, skip
 
       return {
         tourEvent,
@@ -121,15 +145,15 @@ export class BetSelectionEngine {
 
     // Group candidates by tier
     const tieredCandidates = {
-      PAR: candidates.filter(c => c.bestOdds >= 1 && c.bestOdds <= 5),
-      BIRDIE: candidates.filter(c => c.bestOdds >= 6 && c.bestOdds <= 10),
-      EAGLE: candidates.filter(c => c.bestOdds >= 11)
+      PAR: candidates.filter(c => c.bestOdds >= this.tierConstraints.PAR.minOdds && c.bestOdds <= this.tierConstraints.PAR.maxOdds),
+      BIRDIE: candidates.filter(c => c.bestOdds >= this.tierConstraints.BIRDIE.minOdds && c.bestOdds <= this.tierConstraints.BIRDIE.maxOdds),
+      EAGLE: candidates.filter(c => c.bestOdds >= this.tierConstraints.EAGLE.minOdds)
     }
 
     // Select exactly 10 from each tier
-    for (const [tier, tierCandidates] of Object.entries(tieredCandidates)) {
-      const selected = this.selectFromTier(tierCandidates, 10, tier)
-      portfolio[tier] = selected
+    for (const tier of ['PAR', 'BIRDIE', 'EAGLE']) {
+      const tierCandidates = tieredCandidates[tier] || []
+      portfolio[tier] = this.selectFromTier(tierCandidates, 10, tier)
     }
 
     return portfolio
@@ -137,23 +161,47 @@ export class BetSelectionEngine {
 
   selectFromTier(candidates, count, tier) {
     const selected = []
+    const selectedIds = new Set()
     const tourCounts = {}
+    const playerCounts = {}
 
-    for (const candidate of candidates) {
-      // Check tour minimums
-      if (tier === 'PAR' || tier === 'BIRDIE') {
-        if (candidate.tour === 'PGA' && (tourCounts.PGA || 0) >= 2) continue
-        if (candidate.tour === 'LPGA' && (tourCounts.LPGA || 0) >= 2) continue
-      }
+    const canAdd = (candidate) => {
+      const key = `${candidate.tourEvent?.id || 'event'}:${candidate.marketKey}:${candidate.selection}`
+      if (selectedIds.has(key)) return false
 
-      // Check max 2 bets per player across all tiers
-      const playerBets = selected.filter(s => s.selection === candidate.selection).length
-      if (playerBets >= 2) continue
+      const currentPlayerCount = playerCounts[candidate.selection] || 0
+      if (currentPlayerCount >= this.maxBetsPerPlayerPerTier) return false
 
+      return true
+    }
+
+    const add = (candidate) => {
+      const key = `${candidate.tourEvent?.id || 'event'}:${candidate.marketKey}:${candidate.selection}`
+      selectedIds.add(key)
       selected.push(candidate)
       tourCounts[candidate.tour] = (tourCounts[candidate.tour] || 0) + 1
+      playerCounts[candidate.selection] = (playerCounts[candidate.selection] || 0) + 1
+    }
 
+    // Phase 1: satisfy per-tour minimums (when those tours exist in candidate set)
+    const mins = this.minPerTourByTier[tier] || {}
+    for (const [tour, minCount] of Object.entries(mins)) {
+      const tourPool = candidates.filter(c => c.tour === tour)
+      if (tourPool.length === 0) continue
+
+      for (const candidate of tourPool) {
+        if (selected.length >= count) break
+        if ((tourCounts[tour] || 0) >= minCount) break
+        if (!canAdd(candidate)) continue
+        add(candidate)
+      }
+    }
+
+    // Phase 2: fill remaining slots with best available
+    for (const candidate of candidates) {
       if (selected.length >= count) break
+      if (!canAdd(candidate)) continue
+      add(candidate)
     }
 
     // If we don't have enough, log the issue
@@ -183,6 +231,7 @@ export class BetSelectionEngine {
 
   calculateConfidence(edge) {
     // Simple confidence calculation based on edge
+    if (edge <= 0) return 1
     if (edge > 0.1) return 5
     if (edge > 0.07) return 4
     if (edge > 0.05) return 3
@@ -194,6 +243,13 @@ export class BetSelectionEngine {
     const player = candidate.selection
     const odds = candidate.bestOdds.toFixed(2)
     const edge = (candidate.edge * 100).toFixed(1)
+
+    if (candidate.edge <= 0) {
+      return `${player} is offered at ${odds} odds. ` +
+             `Our current model estimates ${(candidate.modelProb * 100).toFixed(1)}% win probability ` +
+             `vs ${(candidate.impliedProb * 100).toFixed(1)}% implied by the market. ` +
+             `This pick is included as a best-available option when positive-edge value is limited.`
+    }
 
     return `${player} represents a ${edge}% edge opportunity at ${odds} odds. ` +
            `Our model gives them a ${candidate.modelProb.toFixed(3)} probability of winning, ` +
