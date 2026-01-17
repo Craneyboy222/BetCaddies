@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/client';
 import { motion } from 'framer-motion';
 import {
   Trophy,
@@ -26,7 +26,8 @@ export default function HIOChallengeAdmin() {
   // Fetch challenges
   const { data: challenges = [], isLoading } = useQuery({
     queryKey: ['allHIOChallenges'],
-    queryFn: () => base44.entities.HIOChallenge.list('-created_date', 10)
+    queryFn: () => api.entities.HIOChallenge.list(),
+    retry: false
   });
 
   const activeChallenge = challenges.find(c => c.status === 'active');
@@ -34,46 +35,32 @@ export default function HIOChallengeAdmin() {
   // Fetch entries for active challenge
   const { data: entries = [] } = useQuery({
     queryKey: ['hioEntries', activeChallenge?.id],
-    queryFn: () => base44.entities.HIOEntry.filter({ challenge_id: activeChallenge.id }),
+    queryFn: () => api.entities.HIOEntry.listByChallenge(activeChallenge.id),
     enabled: !!activeChallenge
   });
 
-  // Regenerate single question
+  // Placeholder (Base44 AI generator removed)
   const regenerateQuestionMutation = useMutation({
-    mutationFn: async (questionIndex) => {
-      const response = await base44.functions.invoke('generateHIOQuestions', {
-        challengeId: activeChallenge.id,
-        regenerateIndex: questionIndex
-      });
-      return response.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['allHIOChallenges'] });
+    mutationFn: async () => {
+      alert('Question generation is not wired yet. Edit questions manually for now.')
     }
-  });
+  })
 
-  // Regenerate all questions
   const regenerateAllMutation = useMutation({
     mutationFn: async () => {
-      const response = await base44.functions.invoke('generateHIOQuestions', {
-        challengeId: activeChallenge.id
-      });
-      return response.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['allHIOChallenges'] });
+      alert('Question generation is not wired yet. Edit questions manually for now.')
     }
-  });
+  })
 
   // Update question
   const updateQuestionMutation = useMutation({
     mutationFn: async ({ index, question }) => {
-      const updatedQuestions = [...activeChallenge.questions];
+      const updatedQuestions = [...(activeChallenge.questions || [])];
       updatedQuestions[index] = question;
-      
-      return base44.entities.HIOChallenge.update(activeChallenge.id, {
+
+      return api.entities.HIOChallenge.update(activeChallenge.id, {
         questions: updatedQuestions
-      });
+      })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['allHIOChallenges'] });
@@ -84,12 +71,12 @@ export default function HIOChallengeAdmin() {
   // Set correct answer
   const setCorrectAnswerMutation = useMutation({
     mutationFn: async ({ index, answer }) => {
-      const updatedQuestions = [...activeChallenge.questions];
+      const updatedQuestions = [...(activeChallenge.questions || [])];
       updatedQuestions[index].correct_answer = answer;
-      
-      return base44.entities.HIOChallenge.update(activeChallenge.id, {
+
+      return api.entities.HIOChallenge.update(activeChallenge.id, {
         questions: updatedQuestions
-      });
+      })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['allHIOChallenges'] });
@@ -100,41 +87,7 @@ export default function HIOChallengeAdmin() {
   // Calculate scores
   const calculateScoresMutation = useMutation({
     mutationFn: async () => {
-      // Score all entries
-      for (const entry of entries) {
-        let score = 0;
-        for (let i = 0; i < activeChallenge.questions.length; i++) {
-          const correctAnswer = activeChallenge.questions[i].correct_answer;
-          if (correctAnswer && entry.answers[i] === correctAnswer) {
-            score++;
-          }
-        }
-
-        const isPerfect = score === 10;
-
-        await base44.entities.HIOEntry.update(entry.id, {
-          score,
-          is_perfect: isPerfect
-        });
-      }
-
-      // Update challenge stats
-      const perfectCount = entries.filter(e => {
-        let score = 0;
-        for (let i = 0; i < activeChallenge.questions.length; i++) {
-          if (activeChallenge.questions[i].correct_answer === e.answers[i]) {
-            score++;
-          }
-        }
-        return score === 10;
-      }).length;
-
-      await base44.entities.HIOChallenge.update(activeChallenge.id, {
-        perfect_scores: perfectCount,
-        status: 'settled'
-      });
-
-      return { perfectCount };
+      return api.entities.HIOChallenge.calculateScores(activeChallenge.id)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['allHIOChallenges'] });

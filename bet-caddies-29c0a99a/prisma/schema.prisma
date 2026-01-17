@@ -390,3 +390,36 @@ model MembershipSubscription {
 
   @@map("membership_subscriptions")
 }
+
+model HIOChallenge {
+  id               String   @id @default(cuid())
+  status           String   @default("active")
+  prizeDescription String?
+  tournamentNames  Json?
+  questions        Json
+  totalEntries     Int      @default(0)
+  perfectScores    Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  entries          HIOEntry[]
+
+  @@index([status])
+  @@map("hio_challenges")
+}
+
+model HIOEntry {
+  id          String   @id @default(cuid())
+  challengeId String
+  userEmail   String
+  answers     Json
+  submittedAt DateTime @default(now())
+  score       Int?
+  isPerfect   Boolean?
+
+  challenge   HIOChallenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+
+  @@unique([challengeId, userEmail])
+  @@index([userEmail])
+  @@map("hio_entries")
+}

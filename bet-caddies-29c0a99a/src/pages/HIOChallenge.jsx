@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
 import { api } from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
@@ -26,25 +25,21 @@ export default function HIOChallenge() {
   }, []);
 
   // Fetch active challenge
-  const { data: challenges = [], isLoading } = useQuery({
+  const { data: activeChallenge, isLoading } = useQuery({
     queryKey: ['activeHIOChallenge'],
-    queryFn: () => base44.entities.HIOChallenge.filter({ status: 'active' }, '-created_date', 1)
+    queryFn: () => api.hio.challenge.active(),
+    retry: false
   });
-
-  const activeChallenge = challenges[0];
 
   // Fetch user's entry for this challenge
-  const { data: userEntry } = useQuery({
+  const { data: myEntry } = useQuery({
     queryKey: ['myHIOEntry', activeChallenge?.id, user?.email],
-    queryFn: () => base44.entities.HIOEntry.filter({
-      challenge_id: activeChallenge.id,
-      user_email: user.email
-    }),
-    enabled: !!activeChallenge && !!user?.email
+    queryFn: () => api.hio.entry.me(activeChallenge.id),
+    enabled: !!activeChallenge?.id && !!user?.email,
+    retry: false
   });
 
-  const hasSubmitted = userEntry && userEntry.length > 0;
-  const myEntry = hasSubmitted ? userEntry[0] : null;
+  const hasSubmitted = !!myEntry;
 
   // Submit entry mutation
   const submitMutation = useMutation({
@@ -54,12 +49,10 @@ export default function HIOChallenge() {
         return;
       }
 
-      return base44.entities.HIOEntry.create({
-        challenge_id: activeChallenge.id,
-        user_email: user.email,
-        answers: answers,
-        submitted_at: new Date().toISOString()
-      });
+      return api.hio.entry.submit({
+        challengeId: activeChallenge.id,
+        answers
+      })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['myHIOEntry'] });

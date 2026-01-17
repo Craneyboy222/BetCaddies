@@ -134,6 +134,29 @@ export class BetCaddiesApi {
     }
   }
 
+  hio = {
+    challenge: {
+      active: async () => {
+        const response = await this.client.get('/api/hio/challenge/active')
+        return response.data || null
+      }
+    },
+    entry: {
+      me: async (challengeId) => {
+        const qs = new URLSearchParams({ challenge_id: String(challengeId || '') })
+        const response = await this.client.get(`/api/hio/entries/me?${qs.toString()}`)
+        return response.data || null
+      },
+      submit: async ({ challengeId, answers }) => {
+        const response = await this.client.post('/api/hio/entries', {
+          challenge_id: challengeId,
+          answers
+        })
+        return response.data || response
+      }
+    }
+  }
+
   // Admin API methods
   auth = {
     me: async () => {
@@ -316,6 +339,33 @@ export class BetCaddiesApi {
       update: async (id, data) => {
         const response = await this.client.put(`/api/entities/membership-subscriptions/${id}`, data)
         return response.data || response
+      }
+    },
+
+    HIOChallenge: {
+      list: async () => {
+        const response = await this.client.get('/api/entities/hio-challenges')
+        return response.data || []
+      },
+      create: async (data) => {
+        const response = await this.client.post('/api/entities/hio-challenges', data)
+        return response.data || response
+      },
+      update: async (id, data) => {
+        const response = await this.client.put(`/api/entities/hio-challenges/${id}`, data)
+        return response.data || response
+      },
+      calculateScores: async (id) => {
+        const response = await this.client.post(`/api/entities/hio-challenges/${id}/calculate-scores`, {})
+        return response.data || response
+      }
+    },
+
+    HIOEntry: {
+      listByChallenge: async (challengeId) => {
+        const qs = new URLSearchParams({ challenge_id: String(challengeId || '') })
+        const response = await this.client.get(`/api/entities/hio-entries?${qs.toString()}`)
+        return response.data || []
       }
     }
   }

@@ -473,6 +473,137 @@ app.get('/api/membership-subscriptions/me', authRequired, async (req, res) => {
   }
 })
 
+// Public: active Hole In One challenge
+app.get('/api/hio/challenge/active', async (req, res) => {
+  try {
+    const challenge = await prisma.hIOChallenge.findFirst({
+      where: { status: 'active' },
+      orderBy: { createdAt: 'desc' }
+    })
+
+    if (!challenge) return res.json({ data: null })
+
+    res.json({
+      data: {
+        id: challenge.id,
+        status: challenge.status,
+        prize_description: challenge.prizeDescription,
+        tournament_names: Array.isArray(challenge.tournamentNames) ? challenge.tournamentNames : null,
+        questions: Array.isArray(challenge.questions) ? challenge.questions : [],
+        total_entries: challenge.totalEntries,
+        perfect_scores: challenge.perfectScores,
+        created_at: challenge.createdAt?.toISOString?.() || challenge.createdAt,
+        updated_at: challenge.updatedAt?.toISOString?.() || challenge.updatedAt
+      }
+    })
+  } catch (error) {
+    logger.error('Error fetching active HIO challenge:', error)
+    res.status(500).json({ error: 'Failed to fetch active challenge' })
+  }
+})
+
+// User: get my entry for a challenge
+app.get('/api/hio/entries/me', authRequired, async (req, res) => {
+  try {
+    const email = req.user?.email
+    const challengeId = String(req.query?.challenge_id || '')
+    if (!email) return res.status(400).json({ error: 'Missing user email' })
+    if (!challengeId) return res.status(400).json({ error: 'Missing challenge_id' })
+
+    const entry = await prisma.hIOEntry.findUnique({
+      where: {
+        challengeId_userEmail: {
+          challengeId,
+          userEmail: email
+        }
+      }
+    })
+
+    if (!entry) return res.json({ data: null })
+
+    res.json({
+      data: {
+        id: entry.id,
+        challenge_id: entry.challengeId,
+        user_email: entry.userEmail,
+        answers: entry.answers,
+        submitted_at: entry.submittedAt?.toISOString?.() || entry.submittedAt,
+        score: entry.score,
+        is_perfect: entry.isPerfect
+      }
+    })
+  } catch (error) {
+    logger.error('Error fetching HIO entry for user:', error)
+    res.status(500).json({ error: 'Failed to fetch entry' })
+  }
+})
+
+// User: submit my entry for a challenge
+app.post(
+  '/api/hio/entries',
+  authRequired,
+  validateBody(z.object({
+    challenge_id: z.string().min(1),
+    answers: z.array(z.string()).length(10)
+  })),
+  async (req, res) => {
+    try {
+      const email = req.user?.email
+      if (!email) return res.status(400).json({ error: 'Missing user email' })
+
+      const { challenge_id, answers } = req.body
+
+      const result = await prisma.$transaction(async (tx) => {
+        const challenge = await tx.hIOChallenge.findUnique({ where: { id: challenge_id } })
+        if (!challenge) {
+          return { error: { status: 404, message: 'Challenge not found' } }
+        }
+        if (challenge.status !== 'active') {
+          return { error: { status: 400, message: 'Challenge is not active' } }
+        }
+
+        const entry = await tx.hIOEntry.create({
+          data: {
+            challengeId: challenge_id,
+            userEmail: email,
+            answers,
+            submittedAt: new Date()
+          }
+        })
+
+        await tx.hIOChallenge.update({
+          where: { id: challenge_id },
+          data: { totalEntries: { increment: 1 } }
+        })
+
+        return { entry }
+      })
+
+      if (result?.error) {
+        return res.status(result.error.status).json({ error: result.error.message })
+      }
+
+      res.json({
+        data: {
+          id: result.entry.id,
+          challenge_id: result.entry.challengeId,
+          user_email: result.entry.userEmail,
+          answers: result.entry.answers,
+          submitted_at: result.entry.submittedAt?.toISOString?.() || result.entry.submittedAt,
+          score: result.entry.score,
+          is_perfect: result.entry.isPerfect
+        }
+      })
+    } catch (error) {
+      if (error?.code === 'P2002') {
+        return res.status(409).json({ error: 'You have already entered this challenge' })
+      }
+      logger.error('Error submitting HIO entry:', error)
+      res.status(500).json({ error: 'Failed to submit entry' })
+    }
+  }
+)
+
 // User: update own profile/preferences
 app.put(
   '/api/users/me',
@@ -1234,6 +1365,227 @@ app.get('/api/entities/data-quality-issues', authRequired, adminOnly, async (req
   } catch (error) {
     logger.error('Error fetching data quality issues:', error)
     res.status(500).json({ error: 'Failed to fetch data quality issues' })
+  }
+})
+
+// Admin: HIO challenges
+app.get('/api/entities/hio-challenges', authRequired, adminOnly, async (req, res) => {
+  try {
+    const challenges = await prisma.hIOChallenge.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 20
+    })
+    res.json({
+      data: challenges.map(c => ({
+        id: c.id,
+        status: c.status,
+        prize_description: c.prizeDescription,
+        tournament_names: c.tournamentNames,
+        questions: c.questions,
+        total_entries: c.totalEntries,
+        perfect_scores: c.perfectScores,
+        created_at: c.createdAt?.toISOString?.() || c.createdAt,
+        updated_at: c.updatedAt?.toISOString?.() || c.updatedAt
+      }))
+    })
+  } catch (error) {
+    logger.error('Failed to fetch HIO challenges', { error: error?.message })
+    res.status(500).json({ error: 'Failed to fetch HIO challenges' })
+  }
+})
+
+app.post(
+  '/api/entities/hio-challenges',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    status: z.string().optional(),
+    prize_description: z.string().optional().nullable(),
+    tournament_names: z.array(z.string()).optional().nullable(),
+    questions: z.any().optional(),
+    perfect_scores: z.coerce.number().int().nonnegative().optional()
+  })),
+  async (req, res) => {
+    try {
+      const created = await prisma.hIOChallenge.create({
+        data: {
+          status: req.body.status || 'active',
+          prizeDescription: req.body.prize_description ?? null,
+          tournamentNames: req.body.tournament_names ?? null,
+          questions: req.body.questions ?? [],
+          perfectScores: Number.isFinite(req.body.perfect_scores) ? req.body.perfect_scores : 0
+        }
+      })
+
+      await writeAuditLog({
+        req,
+        action: 'hio_challenge.create',
+        entityType: 'HIOChallenge',
+        entityId: created.id,
+        beforeJson: null,
+        afterJson: created
+      })
+
+      res.json({
+        data: {
+          id: created.id,
+          status: created.status,
+          prize_description: created.prizeDescription,
+          tournament_names: created.tournamentNames,
+          questions: created.questions,
+          total_entries: created.totalEntries,
+          perfect_scores: created.perfectScores,
+          created_at: created.createdAt?.toISOString?.() || created.createdAt,
+          updated_at: created.updatedAt?.toISOString?.() || created.updatedAt
+        }
+      })
+    } catch (error) {
+      logger.error('Failed to create HIO challenge', { error: error?.message })
+      res.status(500).json({ error: 'Failed to create HIO challenge' })
+    }
+  }
+)
+
+app.put(
+  '/api/entities/hio-challenges/:id',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    status: z.string().optional(),
+    prize_description: z.string().optional().nullable(),
+    tournament_names: z.array(z.string()).optional().nullable(),
+    questions: z.any().optional(),
+    total_entries: z.coerce.number().int().nonnegative().optional(),
+    perfect_scores: z.coerce.number().int().nonnegative().optional()
+  })),
+  async (req, res) => {
+    try {
+      const { id } = req.params
+      const before = await prisma.hIOChallenge.findUnique({ where: { id } })
+      if (!before) return res.status(404).json({ error: 'HIO challenge not found' })
+
+      const updated = await prisma.hIOChallenge.update({
+        where: { id },
+        data: {
+          status: req.body.status ?? undefined,
+          prizeDescription: req.body.prize_description === null ? null : (req.body.prize_description ?? undefined),
+          tournamentNames: req.body.tournament_names === null ? null : (req.body.tournament_names ?? undefined),
+          questions: req.body.questions ?? undefined,
+          totalEntries: Number.isFinite(req.body.total_entries) ? req.body.total_entries : undefined,
+          perfectScores: Number.isFinite(req.body.perfect_scores) ? req.body.perfect_scores : undefined
+        }
+      })
+
+      await writeAuditLog({
+        req,
+        action: 'hio_challenge.update',
+        entityType: 'HIOChallenge',
+        entityId: updated.id,
+        beforeJson: before,
+        afterJson: updated
+      })
+
+      res.json({
+        data: {
+          id: updated.id,
+          status: updated.status,
+          prize_description: updated.prizeDescription,
+          tournament_names: updated.tournamentNames,
+          questions: updated.questions,
+          total_entries: updated.totalEntries,
+          perfect_scores: updated.perfectScores,
+          created_at: updated.createdAt?.toISOString?.() || updated.createdAt,
+          updated_at: updated.updatedAt?.toISOString?.() || updated.updatedAt
+        }
+      })
+    } catch (error) {
+      logger.error('Failed to update HIO challenge', { error: error?.message })
+      res.status(500).json({ error: 'Failed to update HIO challenge' })
+    }
+  }
+)
+
+// Admin: HIO entries (by challenge)
+app.get('/api/entities/hio-entries', authRequired, adminOnly, async (req, res) => {
+  try {
+    const challengeId = String(req.query?.challenge_id || '')
+    if (!challengeId) return res.status(400).json({ error: 'Missing challenge_id' })
+
+    const entries = await prisma.hIOEntry.findMany({
+      where: { challengeId },
+      orderBy: { submittedAt: 'desc' },
+      take: 500
+    })
+
+    res.json({
+      data: entries.map(e => ({
+        id: e.id,
+        challenge_id: e.challengeId,
+        user_email: e.userEmail,
+        answers: e.answers,
+        submitted_at: e.submittedAt?.toISOString?.() || e.submittedAt,
+        score: e.score,
+        is_perfect: e.isPerfect
+      }))
+    })
+  } catch (error) {
+    logger.error('Failed to fetch HIO entries', { error: error?.message })
+    res.status(500).json({ error: 'Failed to fetch HIO entries' })
+  }
+})
+
+app.post('/api/entities/hio-challenges/:id/calculate-scores', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const challenge = await prisma.hIOChallenge.findUnique({ where: { id } })
+    if (!challenge) return res.status(404).json({ error: 'HIO challenge not found' })
+
+    const questions = Array.isArray(challenge.questions) ? challenge.questions : []
+    const entries = await prisma.hIOEntry.findMany({ where: { challengeId: id } })
+
+    const scoringResult = await prisma.$transaction(async (tx) => {
+      let count = 0
+      let perfectCount = 0
+      for (const entry of entries) {
+        const answers = Array.isArray(entry.answers) ? entry.answers : []
+        let score = 0
+        for (let i = 0; i < Math.min(questions.length, answers.length); i++) {
+          const correct = questions?.[i]?.correct_answer
+          if (correct && answers[i] === correct) score++
+        }
+        const isPerfect = score === 10
+        if (isPerfect) perfectCount++
+        await tx.hIOEntry.update({
+          where: { id: entry.id },
+          data: { score, isPerfect }
+        })
+        count++
+      }
+
+      await tx.hIOChallenge.update({
+        where: { id },
+        data: {
+          perfectScores: perfectCount,
+          status: 'settled'
+        }
+      })
+
+      return { updatedCount: count, perfectCount }
+    })
+
+    await writeAuditLog({
+      req,
+      action: 'hio_challenge.calculate_scores',
+      entityType: 'HIOChallenge',
+      entityId: id,
+      beforeJson: null,
+      afterJson: scoringResult
+    })
+
+    res.json({ data: { updated_count: scoringResult.updatedCount, perfect_count: scoringResult.perfectCount } })
+  } catch (error) {
+    logger.error('Failed to calculate HIO scores', { error: error?.message })
+    res.status(500).json({ error: 'Failed to calculate scores' })
   }
 })
 
