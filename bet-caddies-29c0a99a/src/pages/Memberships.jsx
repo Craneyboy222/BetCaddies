@@ -37,16 +37,24 @@ export default function Memberships() {
   const heroTitle = membershipsContent?.json?.hero?.title || 'Premium Membership';
   const heroSubtitle = membershipsContent?.json?.hero?.subtitle || 'Unlock exclusive features and maximize your betting success';
 
-  const renewalDateText = activeSubscription?.next_payment_date
-    ? new Date(activeSubscription.next_payment_date).toLocaleDateString()
-    : null
-
   const { data: activeSubscription } = useQuery({
     queryKey: ['mySubscription', user?.email],
     queryFn: () => api.membershipSubscriptions.me(),
     enabled: !!user?.email,
     retry: false
   });
+
+  const renewalDateText = (() => {
+    const value = activeSubscription?.next_payment_date
+    if (!value) return null
+    const ts = Date.parse(value)
+    if (!Number.isFinite(ts)) return null
+    try {
+      return new Date(ts).toLocaleDateString()
+    } catch {
+      return null
+    }
+  })()
 
   const handleSelectPlan = async (pkg) => {
     if (!user) {
