@@ -166,14 +166,16 @@ export class WeeklyPipeline {
         null,
         'error',
         'discover',
-        'No tour events discovered for any tour; cannot generate bets',
+        'No tour events discovered for any tour; run will complete with 0 bets',
         {
           weekStart: run.weekStart instanceof Date ? run.weekStart.toISOString() : run.weekStart,
           weekEnd: run.weekEnd instanceof Date ? run.weekEnd.toISOString() : run.weekEnd,
           tours: Object.keys(this.scrapers)
         }
       )
-      throw new Error('No tour events discovered; pipeline aborted')
+
+      result.issues = await issueTracker.getTopIssues(10)
+      return result
     }
 
     // Step 2: Fetch field data
@@ -191,7 +193,7 @@ export class WeeklyPipeline {
         null,
         'error',
         'odds',
-        'No odds data fetched; cannot generate bets',
+        'No odds data fetched; run will complete with 0 bets',
         {
           events: tourEvents.map((e) => ({
             tour: e.tour,
@@ -200,7 +202,6 @@ export class WeeklyPipeline {
           }))
         }
       )
-      throw new Error('No odds data fetched; pipeline aborted')
     }
 
     // Step 4: Generate bet recommendations
@@ -211,16 +212,15 @@ export class WeeklyPipeline {
     if (recommendations.length === 0) {
       await issueTracker.logIssue(
         null,
-        'error',
+        'warning',
         'selection',
-        'Generated 0 bet recommendations; cannot publish bets',
+        'Generated 0 bet recommendations; run will complete with 0 bets',
         {
           eventsDiscovered: result.eventsDiscovered,
           playersIngested: result.playersIngested,
           oddsEventsFetched: oddsData.length
         }
       )
-      throw new Error('Generated 0 bet recommendations; pipeline aborted')
     }
 
     // Get top issues
