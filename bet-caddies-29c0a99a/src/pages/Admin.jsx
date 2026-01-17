@@ -49,6 +49,7 @@ import LoadingSpinner from '@/components/ui/LoadingSpinner';
 
 export default function Admin() {
   const [user, setUser] = useState(null);
+  const [authError, setAuthError] = useState(null);
   const [activeTab, setActiveTab] = useState('runs');
   const [editingBet, setEditingBet] = useState(null);
   const [editingProvider, setEditingProvider] = useState(null);
@@ -85,7 +86,7 @@ export default function Admin() {
         setUser(userData);
       } catch (e) {
         console.error('Auth error:', e)
-        api.auth.redirectToLogin();
+        setAuthError(e?.message || 'Failed to load admin session')
       }
     };
     loadUser();
@@ -94,56 +95,67 @@ export default function Admin() {
   // Queries
   const { data: runs = [], isLoading: runsLoading } = useQuery({
     queryKey: ['researchRuns'],
+    enabled: !!user,
     queryFn: () => api.entities.ResearchRun.list('-created_date', 20)
   });
 
   const { data: bets = [], isLoading: betsLoading } = useQuery({
     queryKey: ['allBets'],
+    enabled: !!user,
     queryFn: () => api.entities.GolfBet.list('-created_date', 100)
   });
 
   const { data: providers = [] } = useQuery({
     queryKey: ['allProviders'],
+    enabled: !!user,
     queryFn: () => api.entities.BettingProvider.list('priority', 50)
   });
 
   const { data: issues = [] } = useQuery({
     queryKey: ['dataQualityIssues'],
+    enabled: !!user,
     queryFn: () => api.entities.DataQualityIssue.filter({ resolved: false }, '-created_date', 50)
   });
 
   const { data: users = [] } = useQuery({
     queryKey: ['allUsers'],
+    enabled: !!user,
     queryFn: () => api.entities.User.list('-created_date', 100)
   });
 
   const { data: siteContentItems = [], isLoading: siteContentLoading } = useQuery({
     queryKey: ['siteContentAdmin'],
+    enabled: !!user,
     queryFn: () => api.entities.SiteContent.list()
   });
 
   const { data: auditLogs = [], isLoading: auditLogsLoading } = useQuery({
     queryKey: ['auditLogs'],
+    enabled: !!user,
     queryFn: () => api.entities.AuditLog.list(200)
   });
 
   const { data: memberships = [] } = useQuery({
     queryKey: ['memberships'],
+    enabled: !!user,
     queryFn: () => api.entities.MembershipPackage.list('price', 50)
   });
 
   const { data: tourEvents = [], isLoading: tourEventsLoading } = useQuery({
     queryKey: ['tourEvents'],
+    enabled: !!user,
     queryFn: () => api.entities.TourEvent.list('-start_date', 50)
   });
 
   const { data: oddsEvents = [], isLoading: oddsEventsLoading } = useQuery({
     queryKey: ['oddsEvents'],
+    enabled: !!user,
     queryFn: () => api.entities.OddsEvent.list('-fetched_at', 50)
   });
 
   const { data: oddsOffers = [], isLoading: oddsOffersLoading } = useQuery({
     queryKey: ['oddsOffers', oddsMarketIdFilter, oddsOffersLimit],
+    enabled: !!user,
     queryFn: () => api.entities.OddsOffer.list({
       odds_market_id: oddsMarketIdFilter?.trim() ? oddsMarketIdFilter.trim() : undefined,
       limit: oddsOffersLimit
@@ -152,7 +164,7 @@ export default function Admin() {
 
   const { data: oddsEventDetails, isLoading: oddsEventDetailsLoading } = useQuery({
     queryKey: ['oddsEventDetails', viewingOddsEventId],
-    enabled: !!viewingOddsEventId,
+    enabled: !!user && !!viewingOddsEventId,
     queryFn: () => api.entities.OddsEvent.get(viewingOddsEventId)
   });
 
@@ -337,6 +349,27 @@ export default function Admin() {
     mutationFn: (id) => api.entities.OddsOffer.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['oddsOffers'] })
   });
+
+  if (authError) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-10">
+        <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-6">
+          <h1 className="text-xl font-bold text-white">Admin access error</h1>
+          <p className="mt-2 text-sm text-slate-300">
+            {authError}
+          </p>
+          <div className="mt-5 flex gap-2">
+            <Button onClick={() => window.location.reload()} className="bg-emerald-500 hover:bg-emerald-600">
+              Retry
+            </Button>
+            <Button variant="outline" onClick={() => api.auth.redirectToLogin()} className="border-slate-700 text-slate-200">
+              Go Home
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) return <LoadingSpinner text="Loading admin..." />;
 
