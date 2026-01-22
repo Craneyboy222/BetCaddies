@@ -1,5 +1,6 @@
 import { BaseScraper } from '../base-scraper.js'
 import { logger } from '../../observability/logger.js'
+import * as cheerio from 'cheerio'
 
 export class PGATourScraper extends BaseScraper {
   constructor() {
@@ -208,6 +209,67 @@ export class PGATourScraper extends BaseScraper {
     return null
   }
 
+  extractPlayersFromNextData(html) {
+    const match = String(html).match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s)
+    if (!match) return []
+
+    let nextData
+    try {
+      nextData = JSON.parse(match[1])
+    } catch (error) {
+      logger.warn('PGA field page has invalid __NEXT_DATA__ JSON', { error: error.message })
+      return []
+    }
+
+    const queries = nextData?.props?.pageProps?.dehydratedState?.queries
+    if (!Array.isArray(queries)) return []
+
+    const lists = []
+    const isPlayerEntry = (entry) => Boolean(
+      entry && typeof entry === 'object' && (
+        entry.player || entry.playerProfile || entry.displayName || entry.firstName || entry.lastName
+      )
+    )
+
+    const collectLists = (obj) => {
+      if (!obj) return
+      if (Array.isArray(obj)) {
+        if (obj.length > 0 && isPlayerEntry(obj[0])) lists.push(obj)
+        for (const item of obj) collectLists(item)
+        return
+      }
+      if (typeof obj === 'object') {
+        if (Array.isArray(obj.players) && obj.players.length > 0 && isPlayerEntry(obj.players[0])) {
+          lists.push(obj.players)
+        }
+        for (const value of Object.values(obj)) collectLists(value)
+      }
+    }
+
+    for (const query of queries) {
+      collectLists(query?.state?.data)
+    }
+
+    if (lists.length === 0) return []
+
+    lists.sort((a, b) => b.length - a.length)
+    const best = lists[0]
+    const names = new Set()
+
+    for (const entry of best) {
+      const player = entry?.player || entry?.playerProfile || entry
+      const displayName = player?.displayName
+        || [player?.firstName, player?.lastName].filter(Boolean).join(' ')
+        || player?.shortName
+
+      if (displayName) names.add(displayName.trim())
+    }
+
+    return Array.from(names)
+      .filter(Boolean)
+      .map((name) => ({ name, status: 'active' }))
+  }
+
   async fetchField(event) {
     try {
       const urls = Array.isArray(event?.sourceUrls) ? event.sourceUrls : []
@@ -223,21 +285,21 @@ export class PGATourScraper extends BaseScraper {
         ? pgatourUrls
         : [`${this.baseUrl}/tournaments/${this.slugifyTournament(event?.eventName)}/field`]
 
-      let $ = null
       for (const fieldUrl of candidates) {
-        $ = await this.fetchHtmlSafe(fieldUrl)
-        if ($) break
+        const html = await this.fetch(fieldUrl)
+        const players = this.extractPlayersFromNextData(html)
+        if (players.length > 0) return players
+
+        const $ = cheerio.load(html)
+        const fallback = []
+        $('.player-name').each((i, el) => {
+          const name = $(el).text().trim()
+          if (name) fallback.push({ name, status: 'active' })
+        })
+        if (fallback.length > 0) return fallback
       }
 
-      if (!$) return []
-
-      const players = []
-      $('.player-name').each((i, el) => {
-        const name = $(el).text().trim()
-        if (name) players.push({ name, status: 'active' })
-      })
-
-      return players
+      return []
     } catch (error) {
       logger.error('Failed to fetch PGA field', { error: error.message })
       throw error
