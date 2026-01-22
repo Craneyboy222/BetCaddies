@@ -10,6 +10,7 @@ export class TheOddsApiClient extends BaseScraper {
     this.defaultMarkets = process.env.ODDS_API_MARKETS || 'outrights'
     this.defaultOddsFormat = process.env.ODDS_API_ODDS_FORMAT || 'decimal'
     this.defaultDateFormat = process.env.ODDS_API_DATE_FORMAT || 'iso'
+    this.providerKey = 'the_odds_api'
   }
 
   async fetchOddsForTournament(tournamentName, startDate, leagueId = null) {

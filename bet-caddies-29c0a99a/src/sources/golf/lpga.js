@@ -76,15 +76,8 @@ export class LPGAScraper extends BaseScraper {
   }
 
   extractCurrentTournament($, weekWindow) {
-    const now = new Date()
-    return {
-      name: 'LPGA Championship',
-      startDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000),
-      location: 'Orlando, FL',
-      course: 'Holes Creek Course',
-      url: `${this.baseUrl}/tournaments/lpga-championship`
-    }
+    logger.warn('LPGA extractCurrentTournament is disabled (no mock data permitted)')
+    return null
   }
 
   async fetchField(event) {

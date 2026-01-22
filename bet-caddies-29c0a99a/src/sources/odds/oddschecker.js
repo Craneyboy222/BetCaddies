@@ -6,6 +6,7 @@ export class OddsCheckerClient extends BaseScraper {
     super()
     this.baseUrl = 'https://www.oddschecker.com/golf'
     this.marketKey = 'outright_winner'
+    this.providerKey = 'oddschecker'
   }
 
   async fetchOddsForTournament(tournamentName) {

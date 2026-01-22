@@ -1,48 +1,59 @@
 #!/usr/bin/env node
 
 import 'dotenv/config'
-import { TheOddsApiClient } from './the-odds-api.js'
+import { OddsApiIoClient } from './odds-api-io.js'
 
 async function main() {
-  const sportKey = process.argv[2] || process.env.ODDS_API_SPORT_KEY || 'golf_pga'
+  const tournamentName = process.argv.slice(2).join(' ') || process.env.ODDS_API_TOURNAMENT_NAME
+  const startDate = process.env.ODDS_API_TOURNAMENT_START_DATE || new Date().toISOString()
 
-  const client = new TheOddsApiClient()
+  const client = new OddsApiIoClient()
 
   if (!client.apiKey) {
     console.error('Missing ODDS_API_KEY (set it in env or .env).')
     process.exit(1)
   }
 
-  const params = new URLSearchParams({
-    apiKey: client.apiKey,
-    regions: client.defaultRegions,
-    markets: client.defaultMarkets,
-    oddsFormat: client.defaultOddsFormat,
-    dateFormat: client.defaultDateFormat
-  })
-
-  const url = `${client.baseUrl}/sports/${encodeURIComponent(sportKey)}/odds/?${params}`
-
   try {
-    const events = await client.fetchJson(url)
-    const eventCount = Array.isArray(events) ? events.length : 0
+    const result = tournamentName
+      ? await client.fetchOddsForTournament(tournamentName, startDate)
+      : null
 
-    const first = Array.isArray(events) && events[0]
+    if (!result) {
+      const note = tournamentName
+        ? 'Tournament query provided but no matching odds were found. Check ODDS_API_TOURNAMENT_START_DATE and consider widening the window or setting ODDS_API_BOOKMAKERS.'
+        : 'No tournament query provided. Set ODDS_API_TOURNAMENT_NAME or pass args. If using `npm run odds:smoke`, pass args after `--` (e.g. `npm run odds:smoke -- "Sony Open"`).'
+
+      console.log(JSON.stringify({
+        ok: true,
+        provider: client.providerKey,
+        baseUrl: client.baseUrl,
+        tournamentName: tournamentName || null,
+        startDate,
+        note
+      }, null, 2))
+      process.exit(0)
+    }
+
+    const offerCount = client.extractOffersFromEvent(result).length
+
+    const sampleEvent = Array.isArray(result?.events) && result.events[0]
       ? {
-          id: events[0]?.id,
-          commence_time: events[0]?.commence_time,
-          sport_title: events[0]?.sport_title,
-          home_team: events[0]?.home_team,
-          bookmakers: Array.isArray(events[0]?.bookmakers) ? events[0].bookmakers.length : 0
+          id: result.events[0]?.id,
+          date: result.events[0]?.date,
+          league: result.events[0]?.league?.slug,
+          home: result.events[0]?.home,
+          away: result.events[0]?.away,
+          bookmakers: result.events[0]?.bookmakers ? Object.keys(result.events[0].bookmakers).length : 0
         }
       : null
 
-    console.log(JSON.stringify({ ok: true, sportKey, eventCount, sample: first }, null, 2))
+    console.log(JSON.stringify({ ok: true, provider: client.providerKey, tournamentName, startDate, matchedEvents: result.events.length, offerCount, sampleEvent }, null, 2))
     process.exit(0)
   } catch (error) {
     const status = error?.response?.status
     const message = error?.response?.data ? JSON.stringify(error.response.data) : error.message
-    console.error(JSON.stringify({ ok: false, sportKey, status: status || null, error: message }, null, 2))
+    console.error(JSON.stringify({ ok: false, provider: client.providerKey, status: status || null, error: message }, null, 2))
     process.exit(1)
   }
 }

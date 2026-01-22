@@ -1,19 +1,20 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { PlayerNormalizer } from '../domain/player-normalizer.js'
 
 // Mock Prisma
-const mockPrisma = {
+const mockPrisma = vi.hoisted(() => ({
   player: {
     findFirst: vi.fn(),
     create: vi.fn(),
     update: vi.fn()
   }
-}
+}))
 
 // Mock the prisma import
 vi.mock('../db/client.js', () => ({
   prisma: mockPrisma
 }))
+
+import { PlayerNormalizer } from '../domain/player-normalizer.js'
 
 describe('PlayerNormalizer', () => {
   let normalizer

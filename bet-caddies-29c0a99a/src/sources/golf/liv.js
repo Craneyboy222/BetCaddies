@@ -73,15 +73,8 @@ export class LIVScraper extends BaseScraper {
   }
 
   extractCurrentTournament($, weekWindow) {
-    const now = new Date()
-    return {
-      name: 'LIV Golf Event',
-      startDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() + 9 * 24 * 60 * 60 * 1000),
-      location: 'Various Locations',
-      course: 'Premium Golf Course',
-      url: `${this.baseUrl}/events/current-event`
-    }
+    logger.warn('LIV extractCurrentTournament is disabled (no mock data permitted)')
+    return null
   }
 
   async fetchField(event) {

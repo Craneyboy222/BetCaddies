@@ -181,23 +181,8 @@ export class PGATourScraper extends BaseScraper {
   }
 
   extractCurrentTournament($, weekWindow) {
-    // This is a simplified implementation
-    // In reality, you'd parse the PGA Tour schedule page
-    // For now, return a mock tournament for the current week
-
-    const now = new Date()
-    const weekStart = new Date(weekWindow.start)
-    const weekEnd = new Date(weekWindow.end)
-
-    // Mock data - replace with actual scraping logic
-    return {
-      name: 'PGA Championship',
-      startDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000), // Next week
-      endDate: new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000),
-      location: 'Valhalla Golf Club, Louisville, KY',
-      course: 'Valhalla Golf Club',
-      url: `${this.baseUrl}/tournaments/pga-championship`
-    }
+    logger.warn('PGA extractCurrentTournament is disabled (no mock data permitted)')
+    return null
   }
 
   async fetchField(event) {

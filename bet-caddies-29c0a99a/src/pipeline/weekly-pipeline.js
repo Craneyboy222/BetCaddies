@@ -1,4 +1,4 @@
-import { format, startOfWeek, endOfWeek } from 'date-fns'
+import { format, startOfWeek, endOfWeek, addDays } from 'date-fns'
 import { prisma } from '../db/client.js'
 import { logger, logStep, logError } from '../observability/logger.js'
 import { DataIssueTracker } from '../observability/data-issue-tracker.js'
@@ -7,6 +7,7 @@ import {
   LPGAScraper,
   LIVScraper
 } from '../sources/golf/index.js'
+import { OddsApiIoClient } from '../sources/odds/odds-api-io.js'
 import { TheOddsApiClient } from '../sources/odds/the-odds-api.js'
 import { OddsCheckerClient } from '../sources/odds/oddschecker.js'
 import { PlayerNormalizer } from '../domain/player-normalizer.js'
@@ -20,11 +21,22 @@ export class WeeklyPipeline {
       LIV: new LIVScraper()
     }
     const oddsProvider = process.env.ODDS_PROVIDER
-      || (process.env.ODDS_API_KEY ? 'odds-api' : 'oddschecker')
+      || (process.env.ODDS_API_KEY ? 'odds-api-io' : 'oddschecker')
 
-    this.oddsClient = (oddsProvider === 'odds-api' || oddsProvider === 'the-odds-api' || oddsProvider === 'sportsgameodds')
-      ? new TheOddsApiClient()
-      : new OddsCheckerClient()
+    if (oddsProvider === 'odds-api-io' || oddsProvider === 'odds-api' || oddsProvider === 'oddsapiio') {
+      this.oddsClient = new OddsApiIoClient()
+    } else if (oddsProvider === 'the-odds-api' || oddsProvider === 'sportsgameodds') {
+      this.oddsClient = new TheOddsApiClient()
+    } else if (String(process.env.ALLOW_SCRAPING_ODDSCHECKER || '').toLowerCase() === 'true') {
+      this.oddsClient = new OddsCheckerClient()
+    } else {
+      this.oddsClient = null
+      logger.warn('No odds provider configured (set ODDS_API_KEY or ALLOW_SCRAPING_ODDSCHECKER=true)')
+    }
+
+    this.minPicksPerTier = Number(process.env.MIN_PICKS_PER_TIER || 5)
+    this.maxOddsAgeHours = Number(process.env.ODDS_FRESHNESS_HOURS || 6)
+    this.lookaheadDays = Number(process.env.TOUR_LOOKAHEAD_DAYS || 7)
     this.playerNormalizer = new PlayerNormalizer()
     this.betEngine = new BetSelectionEngine()
   }
@@ -126,7 +138,9 @@ export class WeeklyPipeline {
 
   getWeekEnd() {
     // Sunday of current week
-    return endOfWeek(new Date(), { weekStartsOn: 1 })
+    const end = endOfWeek(new Date(), { weekStartsOn: 1 })
+    const lookahead = Number.isFinite(this.lookaheadDays) ? this.lookaheadDays : 7
+    return addDays(end, lookahead)
   }
 
   async cleanupExistingRun(runKey) {
@@ -145,9 +159,9 @@ export class WeeklyPipeline {
   }
 
   async executePipeline(run, issueTracker) {
+    const oddsProviderKey = this.oddsClient?.providerKey || 'unknown'
     const result = {
       runId: run.id,
-      runKey: run.runKey,
       eventsDiscovered: 0,
       playersIngested: 0,
       oddsMarketsIngested: 0,
@@ -170,7 +184,8 @@ export class WeeklyPipeline {
         {
           weekStart: run.weekStart instanceof Date ? run.weekStart.toISOString() : run.weekStart,
           weekEnd: run.weekEnd instanceof Date ? run.weekEnd.toISOString() : run.weekEnd,
-          tours: Object.keys(this.scrapers)
+          tours: Object.keys(this.scrapers),
+          oddsProvider: oddsProviderKey
         }
       )
 
@@ -327,22 +342,45 @@ export class WeeklyPipeline {
         const scraper = this.scrapers[tourEvent.tour]
         const field = await scraper.fetchField(tourEvent)
 
-        for (const playerData of field) {
-          const player = await this.playerNormalizer.normalizePlayerName(playerData.name)
-
-          await prisma.fieldEntry.create({
-            data: {
-              runId: tourEvent.runId,
-              tourEventId: tourEvent.id,
-              playerId: player.id,
-              status: playerData.status
-            }
-          })
-
-          totalPlayers++
+        if (!Array.isArray(field) || field.length === 0) {
+          await issueTracker.logIssue(
+            tourEvent.tour,
+            'warning',
+            'field',
+            `No field entries found for ${tourEvent.eventName}`,
+            { eventName: tourEvent.eventName }
+          )
+          continue
         }
 
-        logStep('field', `Ingested ${field.length} players for ${tourEvent.tour}`)
+        const unique = new Map()
+        for (const playerData of field) {
+          const rawName = String(playerData?.name || '').trim()
+          if (!rawName) continue
+          const cleaned = this.playerNormalizer.cleanPlayerName(rawName)
+          if (!cleaned || unique.has(cleaned)) continue
+          unique.set(cleaned, { rawName, status: playerData?.status || 'active' })
+        }
+
+        const entries = []
+        for (const { rawName, status } of unique.values()) {
+          const player = await this.playerNormalizer.normalizePlayerName(rawName)
+          entries.push({
+            runId: tourEvent.runId,
+            tourEventId: tourEvent.id,
+            playerId: player.id,
+            status
+          })
+        }
+
+        const created = await prisma.fieldEntry.createMany({
+          data: entries,
+          skipDuplicates: true
+        })
+
+        totalPlayers += created?.count || 0
+
+        logStep('field', `Ingested ${created?.count || 0} players for ${tourEvent.tour}`)
 
       } catch (error) {
         const status = error?.response?.status
@@ -363,6 +401,23 @@ export class WeeklyPipeline {
   async fetchOdds(tourEvents, issueTracker) {
     const oddsData = []
 
+    if (!this.oddsClient) {
+      await issueTracker.logIssue(
+        null,
+        'error',
+        'odds',
+        'No odds provider configured; cannot fetch odds',
+        {
+          provider: null,
+          configuredProvider: process.env.ODDS_PROVIDER || null,
+          hasOddsApiKey: Boolean(process.env.ODDS_API_KEY)
+        }
+      )
+      return oddsData
+    }
+
+    const oddsProviderKey = String(this.oddsClient?.providerKey || 'unknown')
+
     const leagueIdsByTour = {
       PGA: 'PGA_MEN',
       LPGA: 'PGA_WOMEN',
@@ -382,8 +437,8 @@ export class WeeklyPipeline {
             data: {
               runId: tourEvent.runId,
               tourEventId: tourEvent.id,
-              oddsProvider: 'the_odds_api',
-              externalEventId: oddsEvent.id,
+              oddsProvider: oddsProviderKey,
+              externalEventId: String(oddsEvent.id),
               raw: oddsEvent
             }
           })
@@ -438,9 +493,105 @@ export class WeeklyPipeline {
   }
 
   async generateRecommendations(run, tourEvents, oddsData, issueTracker) {
+    const maxAgeMs = this.maxOddsAgeHours * 60 * 60 * 1000
+    const now = Date.now()
+
+    const fieldEntries = await prisma.fieldEntry.findMany({
+      where: { runId: run.id },
+      include: { player: true, tourEvent: true }
+    })
+
+    const fieldIndex = new Map()
+    for (const entry of fieldEntries) {
+      const key = entry.tourEventId
+      if (!fieldIndex.has(key)) fieldIndex.set(key, new Set())
+      const name = entry.player?.canonicalName || entry.playerId
+      if (name) fieldIndex.get(key).add(name)
+    }
+
+    const eligibleEvents = []
+    const eligibleOddsData = []
+
+    for (const event of tourEvents) {
+      const fieldSet = fieldIndex.get(event.id)
+      if (!fieldSet || fieldSet.size === 0) {
+        await issueTracker.logIssue(
+          event.tour,
+          'error',
+          'selection',
+          `Skipping ${event.eventName}: no verified field entries`,
+          { eventName: event.eventName }
+        )
+        continue
+      }
+
+      const eventOdds = oddsData.find((odds) => odds.tourEventId === event.id)
+      if (!eventOdds || !Array.isArray(eventOdds.markets) || eventOdds.markets.length === 0) {
+        await issueTracker.logIssue(
+          event.tour,
+          'error',
+          'selection',
+          `Skipping ${event.eventName}: no odds markets available`,
+          { eventName: event.eventName }
+        )
+        continue
+      }
+
+      const freshMarkets = []
+      for (const market of eventOdds.markets) {
+        const offers = Array.isArray(market.oddsOffers) ? market.oddsOffers : []
+        const freshOffers = offers.filter((offer) => {
+          const fetchedAt = offer.fetchedAt ? new Date(offer.fetchedAt).getTime() : NaN
+          return Number.isFinite(fetchedAt) ? (now - fetchedAt) <= maxAgeMs : false
+        })
+
+        if (freshOffers.length > 0) {
+          freshMarkets.push({ ...market, oddsOffers: freshOffers })
+        }
+      }
+
+      if (freshMarkets.length === 0) {
+        await issueTracker.logIssue(
+          event.tour,
+          'error',
+          'selection',
+          `Skipping ${event.eventName}: odds are stale or missing`,
+          { maxOddsAgeHours: this.maxOddsAgeHours }
+        )
+        continue
+      }
+
+      eligibleEvents.push(event)
+      eligibleOddsData.push({ tourEventId: event.id, markets: freshMarkets })
+    }
+
     const recommendations = this.betEngine.generateRecommendations(
-      tourEvents, oddsData, this.playerNormalizer
+      eligibleEvents,
+      eligibleOddsData,
+      this.playerNormalizer,
+      { fieldIndex }
     )
+
+    const tierCounts = Object.fromEntries(
+      Object.entries(recommendations).map(([tier, list]) => [tier, list.length])
+    )
+
+    const insufficient = Object.entries(tierCounts)
+      .filter(([, count]) => count < this.minPicksPerTier)
+
+    if (insufficient.length > 0) {
+      await issueTracker.logIssue(
+        null,
+        'error',
+        'selection',
+        'Insufficient picks to publish; minimum per tier not met',
+        {
+          minPicksPerTier: this.minPicksPerTier,
+          counts: tierCounts
+        }
+      )
+      return []
+    }
 
     const savedRecommendations = []
 

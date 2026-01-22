@@ -18,15 +18,21 @@ export class BetSelectionEngine {
     }
   }
 
-  generateRecommendations(tourEvents, oddsData, playerNormalizer) {
+  generateRecommendations(tourEvents, oddsData, playerNormalizer, options = {}) {
     // First pass: only include positive-edge candidates.
-    let candidates = this.buildCandidates(tourEvents, oddsData, playerNormalizer, { requirePositiveEdge: true })
+    let candidates = this.buildCandidates(tourEvents, oddsData, playerNormalizer, {
+      requirePositiveEdge: true,
+      fieldIndex: options.fieldIndex || null
+    })
 
     // Fallback: if we found nothing, relax edge constraint so we still publish a portfolio.
     // This prevents the pipeline from producing 0 bets due to the simplistic placeholder model.
     if (candidates.length === 0) {
       logger.warn('No positive-edge candidates found; falling back to best-available odds candidates')
-      candidates = this.buildCandidates(tourEvents, oddsData, playerNormalizer, { requirePositiveEdge: false })
+      candidates = this.buildCandidates(tourEvents, oddsData, playerNormalizer, {
+        requirePositiveEdge: false,
+        fieldIndex: options.fieldIndex || null
+      })
     }
 
     // Sort by edge (highest first)
@@ -35,7 +41,7 @@ export class BetSelectionEngine {
     return this.selectPortfolio(candidates)
   }
 
-  buildCandidates(tourEvents, oddsData, playerNormalizer, { requirePositiveEdge }) {
+  buildCandidates(tourEvents, oddsData, playerNormalizer, { requirePositiveEdge, fieldIndex }) {
     const candidates = []
 
     for (const tourEvent of tourEvents) {
@@ -49,17 +55,25 @@ export class BetSelectionEngine {
         const offersBySelection = offers.reduce((acc, offer) => {
           const selectionName = offer.selectionName || offer.selection
           if (!selectionName) return acc
-          if (!acc[selectionName]) acc[selectionName] = []
-          acc[selectionName].push(offer)
+          const selectionKey = playerNormalizer.cleanPlayerName(selectionName)
+          if (!selectionKey) return acc
+          if (!acc[selectionKey]) acc[selectionKey] = []
+          acc[selectionKey].push({ ...offer, selectionName })
           return acc
         }, {})
 
-        for (const selectionOffers of Object.values(offersBySelection)) {
+        for (const [selectionKey, selectionOffers] of Object.entries(offersBySelection)) {
+          if (fieldIndex) {
+            const fieldSet = fieldIndex.get(tourEvent.id)
+            if (!fieldSet || !fieldSet.has(selectionKey)) continue
+          }
+
           const bestOffer = selectionOffers.reduce((best, current) => {
             return (current.oddsDecimal || 0) > (best?.oddsDecimal || 0) ? current : best
           }, null)
 
           if (!bestOffer) continue
+          if (!Number.isFinite(bestOffer.oddsDecimal) || bestOffer.oddsDecimal <= 1) continue
 
           const altOffers = selectionOffers
             .filter(offer => offer.bookmaker !== bestOffer.bookmaker)
@@ -70,6 +84,7 @@ export class BetSelectionEngine {
             marketKey,
             bestOffer,
             altOffers,
+            selectionOffers,
             playerNormalizer,
             { requirePositiveEdge }
           )
@@ -84,16 +99,16 @@ export class BetSelectionEngine {
     return candidates
   }
 
-  createCandidate(tourEvent, marketKey, offer, altOffers, playerNormalizer, { requirePositiveEdge } = {}) {
+  createCandidate(tourEvent, marketKey, offer, altOffers, allOffers, playerNormalizer, { requirePositiveEdge } = {}) {
     try {
-      // Calculate model probability (simplified - would use ML model)
-      const modelProb = this.calculateModelProbability(tourEvent, offer.selectionName)
+      const consensusProb = this.calculateConsensusProbability(allOffers)
+      if (!Number.isFinite(consensusProb) || consensusProb <= 0) return null
 
       // Calculate implied probability from odds
       const impliedProb = 1 / offer.oddsDecimal
 
       // Calculate edge
-      const edge = modelProb - impliedProb
+      const edge = consensusProb - impliedProb
 
       if (requirePositiveEdge && edge <= 0) return null // No edge, skip
 
@@ -101,13 +116,15 @@ export class BetSelectionEngine {
         tourEvent,
         marketKey,
         selection: offer.selectionName,
-        modelProb,
+        modelProb: consensusProb,
         impliedProb,
         edge,
         bestBookmaker: offer.bookmaker,
         bestOdds: offer.oddsDecimal,
         altOffers: altOffers || [],
-        tour: tourEvent.tour
+        tour: tourEvent.tour,
+        offerCount: allOffers?.length || 0,
+        capturedAt: offer.fetchedAt || null
       }
     } catch (error) {
       logger.error('Failed to create bet candidate', {
@@ -118,22 +135,16 @@ export class BetSelectionEngine {
     }
   }
 
-  calculateModelProbability(tourEvent, playerName) {
-    // Simplified model - in reality this would use:
-    // - Recent form data
-    // - Course history
-    // - Weather factors
-    // - Field strength
-    // - etc.
+  calculateConsensusProbability(allOffers) {
+    if (!Array.isArray(allOffers) || allOffers.length === 0) return NaN
+    const implied = allOffers
+      .map((offer) => Number(offer?.oddsDecimal))
+      .filter((odds) => Number.isFinite(odds) && odds > 1)
+      .map((odds) => 1 / odds)
 
-    // For now, return a random-ish probability based on player name
-    const hash = playerName.split('').reduce((a, b) => {
-      a = ((a << 5) - a) + b.charCodeAt(0)
-      return a & a
-    }, 0)
-
-    // Generate probability between 0.01 and 0.3
-    return Math.abs(hash) % 30 / 100 + 0.01
+    if (implied.length === 0) return NaN
+    const sum = implied.reduce((a, b) => a + b, 0)
+    return sum / implied.length
   }
 
   selectPortfolio(candidates) {
@@ -243,27 +254,31 @@ export class BetSelectionEngine {
     const player = candidate.selection
     const odds = candidate.bestOdds.toFixed(2)
     const edge = (candidate.edge * 100).toFixed(1)
+    const capturedAt = candidate.capturedAt ? new Date(candidate.capturedAt).toISOString() : 'unknown time'
+    const offerCount = candidate.offerCount || 0
 
     if (candidate.edge <= 0) {
       return `${player} is offered at ${odds} odds. ` +
-             `Our current model estimates ${(candidate.modelProb * 100).toFixed(1)}% win probability ` +
-             `vs ${(candidate.impliedProb * 100).toFixed(1)}% implied by the market. ` +
-             `This pick is included as a best-available option when positive-edge value is limited.`
+             `Consensus implied probability from ${offerCount} bookmakers is ${(candidate.modelProb * 100).toFixed(1)}% ` +
+             `vs ${(candidate.impliedProb * 100).toFixed(1)}% implied by the best price. ` +
+             `Odds captured at ${capturedAt}.`
     }
 
     return `${player} represents a ${edge}% edge opportunity at ${odds} odds. ` +
-           `Our model gives them a ${candidate.modelProb.toFixed(3)} probability of winning, ` +
-           `compared to the ${candidate.impliedProb.toFixed(3)} implied by the odds. ` +
-           `This value bet is available from ${candidate.bestBookmaker} with competitive odds.`
+           `Consensus implied probability from ${offerCount} bookmakers is ${(candidate.modelProb * 100).toFixed(1)}%, ` +
+           `compared to ${(candidate.impliedProb * 100).toFixed(1)}% implied by the best price. ` +
+           `Odds captured at ${capturedAt}.`
   }
 
   generateAnalysisBullets(candidate) {
+    const capturedAt = candidate.capturedAt ? new Date(candidate.capturedAt).toISOString() : 'unknown'
     return [
       `Model probability: ${(candidate.modelProb * 100).toFixed(1)}%`,
       `Market probability: ${(candidate.impliedProb * 100).toFixed(1)}%`,
       `Edge: ${(candidate.edge * 100).toFixed(1)}%`,
       `Best odds: ${candidate.bestOdds.toFixed(2)} (${candidate.bestBookmaker})`,
-      `Alternative bookmakers available: ${candidate.altOffers.length}`
+      `Offers analyzed: ${candidate.offerCount || 0}`,
+      `Odds captured at: ${capturedAt}`
     ]
   }
 }
