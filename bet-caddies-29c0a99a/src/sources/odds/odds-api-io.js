@@ -35,7 +35,7 @@ export class OddsApiIoClient extends BaseScraper {
     // Prefer direct search when possible (typically yields tournament-specific league slugs).
     const [searchCandidates, windowCandidates] = await Promise.all([
       this.fetchEventsBySearch(tournamentName),
-      this.fetchGolfEventsInWindow(window)
+      this.fetchGolfEventsInWindow(window, bookmakers)
     ])
 
     const seen = new Set()
@@ -143,16 +143,32 @@ export class OddsApiIoClient extends BaseScraper {
     }
   }
 
-  async fetchGolfEventsInWindow(window) {
-    const url = new URL(this.baseUrl + '/events')
-    url.searchParams.set('apiKey', this.apiKey)
-    url.searchParams.set('sport', this.defaultSport)
-    url.searchParams.set('status', 'pending,live')
-    url.searchParams.set('from', window.from)
-    url.searchParams.set('to', window.to)
+  async fetchGolfEventsInWindow(window, bookmakers = []) {
+    const unique = new Map()
+    const bookmakerList = Array.isArray(bookmakers) ? bookmakers.filter(Boolean) : []
 
-    const data = await this.fetchJson(url.toString())
-    return Array.isArray(data) ? data : []
+    const queries = bookmakerList.length > 0
+      ? bookmakerList
+      : [null]
+
+    for (const bookmaker of queries) {
+      const url = new URL(this.baseUrl + '/events')
+      url.searchParams.set('apiKey', this.apiKey)
+      url.searchParams.set('sport', this.defaultSport)
+      url.searchParams.set('status', 'pending,live')
+      url.searchParams.set('from', window.from)
+      url.searchParams.set('to', window.to)
+      if (bookmaker) url.searchParams.set('bookmaker', bookmaker)
+
+      const data = await this.fetchJson(url.toString())
+      const events = Array.isArray(data) ? data : []
+      for (const ev of events) {
+        if (ev?.id === undefined || ev?.id === null) continue
+        if (!unique.has(ev.id)) unique.set(ev.id, ev)
+      }
+    }
+
+    return Array.from(unique.values())
   }
 
   async fetchEventsBySearch(query) {
