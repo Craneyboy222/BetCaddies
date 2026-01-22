@@ -168,6 +168,26 @@ export class OddsApiIoClient extends BaseScraper {
       }
     }
 
+    if (unique.size === 0 && bookmakerList.length > 0) {
+      logger.warn('Odds-API.io: bookmaker-filtered event list empty; retrying without bookmaker filter', {
+        bookmakers: bookmakerList
+      })
+
+      const url = new URL(this.baseUrl + '/events')
+      url.searchParams.set('apiKey', this.apiKey)
+      url.searchParams.set('sport', this.defaultSport)
+      url.searchParams.set('status', 'pending,live')
+      url.searchParams.set('from', window.from)
+      url.searchParams.set('to', window.to)
+
+      const data = await this.fetchJson(url.toString())
+      const events = Array.isArray(data) ? data : []
+      for (const ev of events) {
+        if (ev?.id === undefined || ev?.id === null) continue
+        if (!unique.has(ev.id)) unique.set(ev.id, ev)
+      }
+    }
+
     return Array.from(unique.values())
   }
 
