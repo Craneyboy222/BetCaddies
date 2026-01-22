@@ -281,9 +281,14 @@ export class PGATourScraper extends BaseScraper {
         }
       })
 
-      const candidates = pgatourUrls.length > 0
-        ? pgatourUrls
-        : [`${this.baseUrl}/tournaments/${this.slugifyTournament(event?.eventName)}/field`]
+      const fieldUrls = pgatourUrls.filter((url) => url.includes('/field'))
+      const fallbackUrls = pgatourUrls.filter((url) => !url.includes('/field'))
+
+      const candidates = fieldUrls.length > 0
+        ? [...fieldUrls, ...fallbackUrls]
+        : (pgatourUrls.length > 0
+          ? pgatourUrls
+          : [`${this.baseUrl}/tournaments/${this.slugifyTournament(event?.eventName)}/field`])
 
       for (const fieldUrl of candidates) {
         const html = await this.fetch(fieldUrl)
