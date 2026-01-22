@@ -8,6 +8,7 @@ import {
   Target, 
   Zap, 
   Trophy, 
+  Sparkles,
   ArrowRight, 
   TrendingUp,
   Calendar,
@@ -43,13 +44,22 @@ const categoryCards = [
     icon: Trophy,
     color: 'violet',
     page: 'EagleBets'
+  },
+  {
+    id: 'longshots',
+    label: 'The Long Shots',
+    description: '50/1+',
+    icon: Sparkles,
+    color: 'rose',
+    page: 'LongShots'
   }
 ];
 
 const colorClasses = {
   emerald: 'from-emerald-500/20 to-emerald-600/10 border-emerald-500/30 text-emerald-400',
   amber: 'from-amber-500/20 to-amber-600/10 border-amber-500/30 text-amber-400',
-  violet: 'from-violet-500/20 to-violet-600/10 border-violet-500/30 text-violet-400'
+  violet: 'from-violet-500/20 to-violet-600/10 border-violet-500/30 text-violet-400',
+  rose: 'from-rose-500/20 to-rose-600/10 border-rose-500/30 text-rose-400'
 };
 
 export default function Home() {
@@ -116,7 +126,8 @@ export default function Home() {
   const categoryCounts = {
     par: filteredBets.filter(b => b.tier === 'PAR').length,
     birdie: filteredBets.filter(b => b.tier === 'BIRDIE').length,
-    eagle: filteredBets.filter(b => b.tier === 'EAGLE').length
+    eagle: filteredBets.filter(b => b.tier === 'EAGLE').length,
+    longshots: filteredBets.filter(b => (b.odds_decimal_best || b.bestOdds || 0) >= 51).length
   };
 
   const featuredBets = filteredBets.slice(0, 6);

@@ -12,6 +12,8 @@ import Home from "./Home";
 
 import Join from "./Join";
 
+import LongShots from "./LongShots";
+
 import Memberships from "./Memberships";
 
 import MyBets from "./MyBets";
@@ -37,6 +39,8 @@ const PAGES = {
     Home: Home,
     
     Join: Join,
+
+    LongShots: LongShots,
     
     Memberships: Memberships,
     
@@ -86,6 +90,8 @@ function PagesContent() {
                 <Route path="/Home" element={<Home />} />
                 
                 <Route path="/Join" element={<Join />} />
+
+                <Route path="/LongShots" element={<LongShots />} />
                 
                 <Route path="/Memberships" element={<Memberships />} />
                 

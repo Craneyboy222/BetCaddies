@@ -9,6 +9,7 @@ import {
   Target,
   Zap,
   Trophy,
+  Sparkles,
   List,
   User,
   Settings,
@@ -24,6 +25,7 @@ const navItems = [
   { id: 'ParBets', icon: Target, label: 'Par' },
   { id: 'BirdieBets', icon: Zap, label: 'Birdie' },
   { id: 'EagleBets', icon: Trophy, label: 'Eagle' },
+  { id: 'LongShots', icon: Sparkles, label: 'The Long Shots' },
   { id: 'MyBets', icon: List, label: 'My Bets' }
 ];
 
