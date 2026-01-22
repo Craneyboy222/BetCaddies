@@ -19,28 +19,32 @@ export class PlayerNormalizer {
       where: {
         OR: [
           { canonicalName: cleaned },
-          { aliases: { has: cleaned } }
+          { aliases: { array_contains: [cleaned] } },
+          { aliases: { array_contains: [rawName] } }
         ]
       }
     })
 
     if (!player) {
       // Create new player
+      const aliases = Array.from(new Set([rawName, cleaned].filter(Boolean)))
       player = await prisma.player.create({
         data: {
           canonicalName: cleaned,
-          aliases: [rawName], // Store original as alias
+          aliases,
           tourIds: []
         }
       })
       logger.info(`Created new player: ${cleaned}`)
     } else {
       // Update aliases if this is a new variant
-      if (!player.aliases.includes(rawName)) {
+      const aliases = Array.isArray(player.aliases) ? player.aliases : []
+      const updatedAliases = Array.from(new Set([...aliases, rawName, cleaned].filter(Boolean)))
+      if (updatedAliases.length !== aliases.length) {
         await prisma.player.update({
           where: { id: player.id },
           data: {
-            aliases: [...player.aliases, rawName]
+            aliases: updatedAliases
           }
         })
       }
