@@ -132,8 +132,7 @@ export class BetCaddiesApi {
       window?.localStorage?.setItem(this.tokenKey, token)
     } else {
       window?.localStorage?.removeItem(this.tokenKey)
-          const payload = await readErrorPayload(response)
-          throw new Error(toErrorMessage(response.status, payload))
+    }
   }
 
   async getLatestBets() {
@@ -148,8 +147,7 @@ export class BetCaddiesApi {
 
   async getTournaments() {
     const response = await this.client.get('/api/tournaments')
-          const payload = await readErrorPayload(response)
-          throw new Error(toErrorMessage(response.status, payload))
+    return response.data || response
   }
 
   siteContent = {
@@ -164,8 +162,7 @@ export class BetCaddiesApi {
   }
 
   membershipPackages = {
-          const payload = await readErrorPayload(response)
-          throw new Error(toErrorMessage(response.status, payload))
+    list: async () => {
       const response = await this.client.get('/api/membership-packages')
       return response.data || []
     }
@@ -177,8 +174,7 @@ export class BetCaddiesApi {
       return response.data || null
     }
   }
-          const payload = await readErrorPayload(response)
-          throw new Error(toErrorMessage(response.status, payload))
+
   users = {
     me: {
       update: async (data) => {
