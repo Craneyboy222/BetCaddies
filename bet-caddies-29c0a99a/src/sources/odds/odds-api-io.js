@@ -33,10 +33,10 @@ export class OddsApiIoClient extends BaseScraper {
     const window = this.buildTournamentWindow(startDate)
 
     // Prefer direct search when possible (typically yields tournament-specific league slugs).
-    const [searchCandidates, windowCandidates] = await Promise.all([
-      this.fetchEventsBySearch(tournamentName),
-      this.fetchGolfEventsInWindow(window, bookmakers)
-    ])
+    const windowCandidates = await this.fetchGolfEventsInWindow(window, bookmakers)
+    const searchCandidates = windowCandidates.length === 0
+      ? await this.fetchEventsBySearch(tournamentName)
+      : []
 
     const seen = new Set()
     const candidates = []
