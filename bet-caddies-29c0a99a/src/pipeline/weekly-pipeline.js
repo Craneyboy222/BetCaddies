@@ -248,14 +248,20 @@ export class WeeklyPipeline {
       try {
         const payload = await DataGolfClient.getSchedule(tourCode, { season, upcomingOnly: true })
         const schedule = normalizeDataGolfArray(payload)
-        logStep('discover', `Schedule rows returned: ${schedule.length} (tour=${tourCode})`)
+        logStep('discover', `Schedule rows returned: ${schedule.length} (tour=${tourCode}, internal=${tour})`)
         if (schedule.length > 0) {
-          const sample = schedule.slice(0, 2).map((event) => ({
-            event_id: event.event_id || event.id || event.dg_event_id,
-            event_name: event.event_name || event.name || event.tournament_name,
-            start_date: event.start_date || event.start_date_utc || event.start,
-            end_date: event.end_date || event.end_date_utc || event.end
-          }))
+          const sample = schedule.slice(0, 2).map((event) => {
+            const startValue = event.start_date || event.start_date_utc || event.start
+            const endValue = event.end_date || event.end_date_utc || event.end
+            return {
+              event_id: event.event_id || event.id || event.dg_event_id,
+              event_name: event.event_name || event.name || event.tournament_name,
+              start_date: startValue,
+              end_date: endValue,
+              parsed_start: this.parseDate(startValue)?.toISOString() || null,
+              parsed_end: this.parseDate(endValue)?.toISOString() || null
+            }
+          })
           logStep('discover', `Schedule sample: ${JSON.stringify(sample)}`)
         }
         const upcoming = schedule.filter((event) => {
