@@ -4,6 +4,9 @@ const mockPrisma = vi.hoisted(() => ({
   fieldEntry: {
     findMany: vi.fn()
   },
+  oddsMarket: {
+    findMany: vi.fn()
+  },
   betRecommendation: {
     create: vi.fn()
   }
@@ -37,6 +40,14 @@ describe('WeeklyPipeline dry run', () => {
         status: 'active',
         player: { canonicalName: 'player one' },
         tourEvent: { id: 'event-1' }
+      }
+    ])
+    mockPrisma.oddsMarket.findMany.mockResolvedValue([
+      {
+        marketKey: 'win',
+        oddsOffers: [
+          { selectionName: 'player one', selectionKey: 'player one', bookmaker: 'book', oddsDecimal: 5, oddsDisplay: '5.0', fetchedAt: new Date() }
+        ]
       }
     ])
     mockPrisma.betRecommendation.create.mockResolvedValue({ id: 'bet-1' })

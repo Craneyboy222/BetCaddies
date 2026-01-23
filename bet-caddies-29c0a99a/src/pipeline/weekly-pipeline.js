@@ -9,7 +9,7 @@ import { logger, logStep, logError } from '../observability/logger.js'
 import { DataIssueTracker } from '../observability/data-issue-tracker.js'
 import { PlayerNormalizer } from '../domain/player-normalizer.js'
 import { DataGolfClient, normalizeDataGolfArray, safeLogDataGolfError } from '../sources/datagolf/index.js'
-import { parseOddsPayload } from '../sources/datagolf/parsers.js'
+import { parseOddsPayload, parseOutrightsOffers } from '../sources/datagolf/parsers.js'
 import { ProbabilityEngineV2 } from '../engine/v2/probability-engine.js'
 import { buildPlayerParams } from '../engine/v2/player-params.js'
 import { simulateTournament } from '../engine/v2/tournamentSim.js'
@@ -56,7 +56,7 @@ export class WeeklyPipeline {
       top_10: 'top_10',
       top_20: 'top_20',
       make_cut: 'make_cut',
-      miss_cut: 'mc',
+      mc: 'mc',
       frl: 'frl'
     }
     this.matchupMarketMap = {
@@ -455,7 +455,7 @@ export class WeeklyPipeline {
           const debugKey = debugEnabled && marketKey === 'win' && !debugToursLogged.has(event.tour)
             ? `${event.tour}:${tourCode}:betting-tools/outrights:${marketKey}`
             : null
-          const parsed = parseOddsPayload('betting-tools/outrights', payload, { debugKey })
+          const parsed = parseOutrightsOffers(payload, { market: marketCode, debugKey })
           if (debugKey) debugToursLogged.add(event.tour)
           if (parsed.errorMessage) {
             logger.warn('DataGolf access error', {
@@ -484,8 +484,8 @@ export class WeeklyPipeline {
             continue
           }
 
-          const offers = this.parseOddsOffers(rows)
-          const bookCount = this.countBooks(rows)
+          const offers = parsed.offers
+          const bookCount = this.countBooksFromOffers(offers)
           const attachInfo = this.resolveOddsAttachment(event, parsed.meta)
           if (parsed.meta.eventId && parsed.meta.eventId !== oddsEvent.externalEventId) {
             await prisma.oddsEvent.update({
@@ -493,7 +493,22 @@ export class WeeklyPipeline {
               data: { externalEventId: parsed.meta.eventId }
             })
           }
-          logStep('odds', `Outrights rows=${rows.length} books=${bookCount} eventId=${attachInfo.eventIdPresent} eventName=${attachInfo.eventNamePresent} attach=${attachInfo.method} (${marketKey}, ${event.tour}/${tourCode})`)
+          if (offers.length === 0 && rows.length > 0) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'No sportsbook offers parsed; cannot generate picks', {
+              eventName: event.eventName,
+              market: marketKey,
+              internalTour: event.tour,
+              dgTour: tourCode,
+              firstRowKeys: parsed.firstRowKeys
+            })
+          }
+          if (offers.length === 0) {
+            continue
+          }
+          if (attachInfo.method === 'tour-default' && !attachInfo.eventIdPresent && !attachInfo.eventNamePresent) {
+            logStep('odds', `Outrights attach fallback (no event id/name in payload) (${marketKey}, ${event.tour}/${tourCode})`)
+          }
+          logStep('odds', `Outrights rows=${rows.length} offers=${offers.length} books=${bookCount} eventId=${attachInfo.eventIdPresent} eventName=${attachInfo.eventNamePresent} attach=${attachInfo.method} (${marketKey}, ${event.tour}/${tourCode})`)
 
           const market = await prisma.oddsMarket.create({
             data: {
@@ -515,9 +530,9 @@ export class WeeklyPipeline {
               data: {
                 oddsMarketId: market.id,
                 selectionName: offer.selectionName,
-                bookmaker: offer.bookmaker,
+                bookmaker: offer.book,
                 oddsDecimal: offer.oddsDecimal,
-                oddsDisplay: offer.oddsDisplay,
+                oddsDisplay: Number.isFinite(offer.oddsDecimal) ? offer.oddsDecimal.toFixed(2) : String(offer.oddsDecimal),
                 deepLink: offer.deepLink ?? null,
                 fetchedAt: offer.fetchedAt || new Date()
               }
@@ -596,7 +611,7 @@ export class WeeklyPipeline {
           }
 
           const offers = this.parseMatchupOffers(rows)
-          const bookCount = this.countBooks(rows)
+          const bookCount = this.countBooksFromOffers(offers)
           const attachInfo = this.resolveOddsAttachment(event, parsed.meta)
           if (parsed.meta.eventId && parsed.meta.eventId !== oddsEvent.externalEventId) {
             await prisma.oddsEvent.update({
@@ -604,7 +619,13 @@ export class WeeklyPipeline {
               data: { externalEventId: parsed.meta.eventId }
             })
           }
-          logStep('odds', `Matchups rows=${rows.length} books=${bookCount} eventId=${attachInfo.eventIdPresent} eventName=${attachInfo.eventNamePresent} attach=${attachInfo.method} (${marketKey}, ${event.tour}/${tourCode})`)
+          if (attachInfo.method === 'tour-default' && !attachInfo.eventIdPresent && !attachInfo.eventNamePresent) {
+            logStep('odds', `Matchups attach fallback (no event id/name in payload) (${marketKey}, ${event.tour}/${tourCode})`)
+          }
+          logStep('odds', `Matchups rows=${rows.length} offers=${offers.length} books=${bookCount} eventId=${attachInfo.eventIdPresent} eventName=${attachInfo.eventNamePresent} attach=${attachInfo.method} (${marketKey}, ${event.tour}/${tourCode})`)
+          if (offers.length === 0) {
+            continue
+          }
 
           const market = await prisma.oddsMarket.create({
             data: {
@@ -790,7 +811,7 @@ export class WeeklyPipeline {
           const modelProbs = probabilityModel.getPlayerProbs(selectionKey)
           const derivedModelProb = this.deriveModelProbability(market.marketKey, modelProbs)
           let simProb = simProbabilities.get(selectionKey)?.[this.mapMarketKeyToSim(market.marketKey)] || derivedModelProb || marketProb
-          if (market.marketKey === 'miss_cut' && Number.isFinite(simProb)) {
+          if (market.marketKey === 'mc' && Number.isFinite(simProb)) {
             simProb = clampProbability(1 - simProb)
           }
           const dgProb = derivedModelProb || null
@@ -939,7 +960,7 @@ export class WeeklyPipeline {
         return 'top20'
       case 'make_cut':
         return 'makeCut'
-      case 'miss_cut':
+      case 'mc':
         return 'makeCut'
       case 'frl':
         return 'frl'
@@ -950,7 +971,7 @@ export class WeeklyPipeline {
 
   deriveModelProbability(marketKey, modelProbs) {
     if (!modelProbs) return null
-    if (marketKey === 'miss_cut') {
+    if (marketKey === 'mc') {
       const makeCut = modelProbs.makeCut
       if (!Number.isFinite(makeCut)) return null
       return clampProbability(1 - makeCut)
@@ -1136,18 +1157,11 @@ export class WeeklyPipeline {
     return offers.filter((offer) => Number.isFinite(offer.oddsDecimal) && offer.oddsDecimal > 1)
   }
 
-  countBooks(rows = []) {
+  countBooksFromOffers(offers = []) {
     const books = new Set()
-    for (const row of rows) {
-      if (row?.book) books.add(String(row.book))
-      if (Array.isArray(row?.books)) {
-        for (const book of row.books) {
-          if (book?.book) books.add(String(book.book))
-        }
-      }
-      if (row?.odds && typeof row.odds === 'object') {
-        for (const key of Object.keys(row.odds)) books.add(String(key))
-      }
+    for (const offer of offers) {
+      if (offer?.book) books.add(String(offer.book))
+      if (offer?.bookmaker) books.add(String(offer.bookmaker))
     }
     return books.size
   }
