@@ -416,8 +416,22 @@ export class WeeklyPipeline {
       for (const [marketKey, marketCode] of Object.entries(this.outrightMarketMap)) {
         try {
           const payload = await DataGolfClient.getOutrightsOdds(tourCode, marketCode)
+          if (!payload) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Outrights odds not supported for tour', {
+              eventName: event.eventName,
+              market: marketKey,
+              tour: event.tour
+            })
+            continue
+          }
           const offers = this.parseOddsOffers(payload)
-          if (offers.length === 0) continue
+          if (offers.length === 0) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Outrights odds returned empty payload', {
+              eventName: event.eventName,
+              market: marketKey
+            })
+            continue
+          }
 
           const market = await prisma.oddsMarket.create({
             data: {
@@ -461,8 +475,22 @@ export class WeeklyPipeline {
       for (const [marketKey, marketCode] of Object.entries(this.matchupMarketMap)) {
         try {
           const payload = await DataGolfClient.getMatchupsOdds(tourCode, marketCode)
+          if (!payload) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Matchups odds not supported for tour', {
+              eventName: event.eventName,
+              market: marketKey,
+              tour: event.tour
+            })
+            continue
+          }
           const offers = this.parseMatchupOffers(payload)
-          if (offers.length === 0) continue
+          if (offers.length === 0) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Matchups odds returned empty payload', {
+              eventName: event.eventName,
+              market: marketKey
+            })
+            continue
+          }
 
           const market = await prisma.oddsMarket.create({
             data: {

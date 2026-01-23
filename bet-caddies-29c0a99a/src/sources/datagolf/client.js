@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { logger } from '../../observability/logger.js'
-import { toDgTour } from './tourMap.js'
+import { toDgTour, assertSupported } from './tourMap.js'
 
 const BASE_URL = 'https://feeds.datagolf.com'
 const DEFAULT_TIMEOUT_MS = Number(process.env.DATAGOLF_TIMEOUT_MS || 20000)
@@ -75,6 +75,7 @@ export const DataGolfClient = {
     return request('/preds/approach-skill', { period })
   },
   async getPlayerDecompositions(tour) {
+    if (!assertSupported('preds/player-decompositions', tour)) return null
     return request('/preds/player-decompositions', { tour })
   },
   async getPreTournamentPreds(tour, { addPosition = true, deadHeat = true } = {}) {
@@ -86,6 +87,7 @@ export const DataGolfClient = {
     })
   },
   async getOutrightsOdds(tour, market) {
+    if (!assertSupported('betting-tools/outrights', tour)) return null
     return request('/betting-tools/outrights', {
       tour,
       market,
@@ -93,6 +95,7 @@ export const DataGolfClient = {
     })
   },
   async getMatchupsOdds(tour, market) {
+    if (!assertSupported('betting-tools/matchups', tour)) return null
     return request('/betting-tools/matchups', {
       tour,
       market,
@@ -100,6 +103,7 @@ export const DataGolfClient = {
     })
   },
   async getMatchupsAllPairings(tour) {
+    if (!assertSupported('betting-tools/matchups', tour)) return null
     return request('/betting-tools/matchups-all-pairings', {
       tour,
       odds_format: 'decimal'
