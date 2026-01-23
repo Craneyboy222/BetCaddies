@@ -1,4 +1,4 @@
-import { format, startOfWeek, endOfWeek } from 'date-fns'
+import { format, startOfWeek, endOfWeek, addDays } from 'date-fns'
 import { toZonedTime, fromZonedTime } from 'date-fns-tz'
 import fs from 'fs'
 import path from 'path'
@@ -261,8 +261,8 @@ export class WeeklyPipeline {
         }
         const upcoming = schedule.filter((event) => {
           const startDate = this.parseDate(event.start_date || event.start_date_utc || event.start)
-          const endDate = this.parseDate(event.end_date || event.end_date_utc || event.end)
-          if (!startDate || !endDate) return false
+          if (!startDate) return false
+          const endDate = this.parseDate(event.end_date || event.end_date_utc || event.end) || addDays(startDate, 4)
           return startDate <= weekEnd && endDate >= weekStart
         })
 
