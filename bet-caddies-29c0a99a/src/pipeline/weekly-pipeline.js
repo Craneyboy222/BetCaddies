@@ -228,6 +228,26 @@ export class WeeklyPipeline {
     const recommendations = await this.generateRecommendations(run, tourEvents, oddsData, issueTracker)
     result.finalBets = recommendations.length
 
+    const eventsByTour = tourEvents.reduce((acc, event) => {
+      acc[event.tour] = (acc[event.tour] || 0) + 1
+      return acc
+    }, {})
+    const oddsByMarket = oddsData.reduce((acc, entry) => {
+      for (const market of entry.markets || []) {
+        acc[market.marketKey] = (acc[market.marketKey] || 0) + 1
+      }
+      return acc
+    }, {})
+    const recsByTier = recommendations.reduce((acc, rec) => {
+      const tier = rec.tier || 'UNKNOWN'
+      acc[tier] = (acc[tier] || 0) + 1
+      return acc
+    }, {})
+
+    logStep('summary', `Events discovered by tour: ${JSON.stringify(eventsByTour)}`)
+    logStep('summary', `Odds markets fetched: ${JSON.stringify(oddsByMarket)}`)
+    logStep('summary', `Recommendations by tier: ${JSON.stringify(recsByTier)}`)
+
     result.issues = await issueTracker.getTopIssues(10)
     return result
   }
