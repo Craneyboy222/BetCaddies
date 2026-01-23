@@ -40,6 +40,8 @@ try {
 const app = express()
 const PORT = process.env.PORT || 3000
 
+app.set('trust proxy', process.env.NODE_ENV === 'production' ? 1 : 0)
+
 const summarizeDatabaseUrl = (raw) => {
   if (!raw) return { configured: false }
   try {

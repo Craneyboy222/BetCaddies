@@ -249,6 +249,16 @@ export class WeeklyPipeline {
       try {
         const payload = await DataGolfClient.getSchedule(tourCode, { season, upcomingOnly: true })
         const schedule = normalizeDataGolfArray(payload)
+        logStep('discover', `Schedule rows returned: ${schedule.length} (tour=${tourCode})`)
+        if (schedule.length > 0) {
+          const sample = schedule.slice(0, 2).map((event) => ({
+            event_id: event.event_id || event.id || event.dg_event_id,
+            event_name: event.event_name || event.name || event.tournament_name,
+            start_date: event.start_date || event.start_date_utc || event.start,
+            end_date: event.end_date || event.end_date_utc || event.end
+          }))
+          logStep('discover', `Schedule sample: ${JSON.stringify(sample)}`)
+        }
         const upcoming = schedule.filter((event) => {
           const startDate = this.parseDate(event.start_date || event.start_date_utc || event.start)
           const endDate = this.parseDate(event.end_date || event.end_date_utc || event.end)
