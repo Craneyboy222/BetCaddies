@@ -57,7 +57,7 @@ export default function LongShots() {
   });
 
   let filteredBets = bets.filter(bet =>
-    (selectedTour === 'all' || bet.tour === selectedTour) && (bet.odds_decimal_best || 0) >= 51
+    (selectedTour === 'all' || bet.tour === selectedTour) && (bet.odds_decimal_best || 0) >= 61
   );
 
   if (sortBy === 'confidence') {
@@ -84,7 +84,7 @@ export default function LongShots() {
           </div>
           <div>
             <h1 className="text-3xl font-bold text-white">The Long Shots</h1>
-            <p className="text-slate-400">50/1 odds and over • Extreme longshot selections</p>
+            <p className="text-slate-400">60/1 odds and over • Extreme longshot selections</p>
           </div>
         </div>
       </motion.div>

@@ -235,7 +235,7 @@ app.get('/api/bets/latest', async (req, res) => {
       const displayTier = bet.override?.tierOverride || bet.tier
       return ({
       id: bet.id,
-      category: displayTier.toLowerCase(),
+      category: displayTier.toLowerCase().replace(/_/g, ''),
       tier: displayTier,
       selection_name: bet.override?.selectionName || bet.selection,
       confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
@@ -280,7 +280,10 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
     const tierMap = {
       'par': 'PAR',
       'birdie': 'BIRDIE',
-      'eagle': 'EAGLE'
+      'eagle': 'EAGLE',
+      'longshots': 'LONG_SHOTS',
+      'long_shots': 'LONG_SHOTS',
+      'long-shots': 'LONG_SHOTS'
     }
 
     const requestedTier = tierMap[tier] || tier.toUpperCase()
@@ -322,7 +325,7 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
       const displayTier = bet.override?.tierOverride || bet.tier
       return ({
       id: bet.id,
-      category: displayTier.toLowerCase(),
+      category: displayTier.toLowerCase().replace(/_/g, ''),
       tier: displayTier,
       selection_name: bet.override?.selectionName || bet.selection,
       confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
@@ -924,7 +927,7 @@ app.put(
     course_fit_score: z.coerce.number().int().min(0).max(10).optional(),
     form_label: z.string().optional(),
     weather_label: z.string().optional(),
-    tier_override: z.enum(['PAR', 'BIRDIE', 'EAGLE']).optional().or(z.literal('')),
+    tier_override: z.enum(['PAR', 'BIRDIE', 'EAGLE', 'LONG_SHOTS']).optional().or(z.literal('')),
     pinned: z.boolean().optional(),
     pin_order: z.coerce.number().int().optional().nullable()
   })),
@@ -2317,7 +2320,7 @@ app.post(
     })
 
     // Start the pipeline asynchronously to avoid request timeouts.
-    pipeline.run(runKey).catch(err => {
+    pipeline.run(runKey, { dryRun }).catch(err => {
       logger.error('Pipeline execution failed', { error: err.message, runKey })
     })
     

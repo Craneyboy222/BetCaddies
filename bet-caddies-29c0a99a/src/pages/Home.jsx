@@ -48,7 +48,7 @@ const categoryCards = [
   {
     id: 'longshots',
     label: 'The Long Shots',
-    description: '50/1+',
+    description: '60/1+',
     icon: Sparkles,
     color: 'rose',
     page: 'LongShots'
@@ -127,7 +127,7 @@ export default function Home() {
     par: filteredBets.filter(b => b.tier === 'PAR').length,
     birdie: filteredBets.filter(b => b.tier === 'BIRDIE').length,
     eagle: filteredBets.filter(b => b.tier === 'EAGLE').length,
-    longshots: filteredBets.filter(b => (b.odds_decimal_best || b.bestOdds || 0) >= 51).length
+    longshots: filteredBets.filter(b => (b.odds_decimal_best || b.bestOdds || 0) >= 61).length
   };
 
   const featuredBets = filteredBets.slice(0, 6);

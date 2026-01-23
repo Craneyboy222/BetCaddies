@@ -27,8 +27,44 @@ model Run {
   oddsEvents         OddsEvent[]
   betRecommendations BetRecommendation[]
   dataIssues         DataIssue[]
+  runArtifacts       RunArtifact[]
 
   @@map("runs")
+}
+
+model RunArtifact {
+  id           String   @id @default(cuid())
+  runId        String
+  tour         String?
+  endpoint     String
+  paramsJson   Json
+  payloadJson  Json?
+  payloadHash  String?
+  payloadBytes Int?
+  artifactRef  String?
+  fetchedAt    DateTime @default(now())
+
+  run          Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@map("run_artifacts")
+}
+
+model HistoricalRound {
+  id               String   @id @default(cuid())
+  tour             String
+  eventId          String
+  year             Int
+  playerId         String
+  round            Int
+  statsJson        Json
+  strokesGainedJson Json?
+  teeTimeUtc       DateTime?
+  createdAt        DateTime @default(now())
+
+  @@index([tour, eventId, year])
+  @@index([playerId])
+  @@map("historical_rounds")
 }
 
 model TourEvent {
@@ -220,7 +256,7 @@ model Prediction {
 model BetRecommendation {
   id                String   @id @default(cuid())
   runId             String
-  tier              String   // 'PAR', 'BIRDIE', 'EAGLE'
+  tier              String   // 'PAR', 'BIRDIE', 'EAGLE', 'LONG_SHOTS'
   tourEventId       String
   marketKey         String
   selection         String   // Player name or outcome

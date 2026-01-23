@@ -51,7 +51,7 @@ describe('PlayerNormalizer', () => {
       expect(mockPrisma.player.create).toHaveBeenCalledWith({
         data: {
           canonicalName: 'tiger woods',
-          aliases: ['Tiger Woods'],
+          aliases: ['Tiger Woods', 'tiger woods'],
           tourIds: []
         }
       })
@@ -76,7 +76,7 @@ describe('PlayerNormalizer', () => {
       expect(mockPrisma.player.update).toHaveBeenCalledWith({
         where: { id: '1' },
         data: {
-          aliases: ['Tiger Woods', 'T. Woods']
+          aliases: ['Tiger Woods', 'T. Woods', 't woods']
         }
       })
     })
