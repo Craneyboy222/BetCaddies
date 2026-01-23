@@ -1,5 +1,5 @@
 import { format, startOfWeek, endOfWeek } from 'date-fns'
-import { utcToZonedTime, zonedTimeToUtc } from 'date-fns-tz'
+import { toZonedTime, fromZonedTime } from 'date-fns-tz'
 import fs from 'fs'
 import path from 'path'
 import crypto from 'node:crypto'
@@ -153,18 +153,18 @@ export class WeeklyPipeline {
   }
 
   getWeekStart() {
-    const zonedNow = utcToZonedTime(new Date(), TIME_ZONE)
+    const zonedNow = toZonedTime(new Date(), TIME_ZONE)
     const weekStart = startOfWeek(zonedNow, { weekStartsOn: 1 })
-    return zonedTimeToUtc(weekStart, TIME_ZONE)
+    return fromZonedTime(weekStart, TIME_ZONE)
   }
 
   getWeekEnd() {
-    const zonedNow = utcToZonedTime(new Date(), TIME_ZONE)
+    const zonedNow = toZonedTime(new Date(), TIME_ZONE)
     const weekEnd = endOfWeek(zonedNow, { weekStartsOn: 1 })
     if (this.lookaheadDays > 0) {
-      return new Date(zonedTimeToUtc(weekEnd, TIME_ZONE).getTime() + this.lookaheadDays * 86400000)
+      return new Date(fromZonedTime(weekEnd, TIME_ZONE).getTime() + this.lookaheadDays * 86400000)
     }
-    return zonedTimeToUtc(weekEnd, TIME_ZONE)
+    return fromZonedTime(weekEnd, TIME_ZONE)
   }
 
   async cleanupExistingRun(runKey) {
@@ -237,7 +237,7 @@ export class WeeklyPipeline {
     const discovered = []
     const weekStart = run.weekStart
     const weekEnd = run.weekEnd
-    const season = utcToZonedTime(new Date(), TIME_ZONE).getFullYear()
+    const season = toZonedTime(new Date(), TIME_ZONE).getFullYear()
 
     for (const tour of this.tours) {
       const tourCode = DataGolfClient.resolveTourCode(tour, 'schedule')
