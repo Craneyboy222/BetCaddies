@@ -10,18 +10,24 @@ const normalizeProb = (value) => {
 
 const buildMapFromPreds = (preds = []) => {
   const map = new Map()
+  const idMap = new Map()
   for (const row of preds) {
     const name = normalizeName(row.player_name || row.player || row.name)
     if (!name) continue
-    map.set(name, {
+    const entry = {
       win: normalizeProb(Number(row.win) || Number(row.win_prob) || Number(row.p_win)),
       top5: normalizeProb(Number(row.top_5) || Number(row.top5) || Number(row.p_top5)),
       top10: normalizeProb(Number(row.top_10) || Number(row.top10) || Number(row.p_top10)),
       top20: normalizeProb(Number(row.top_20) || Number(row.top20) || Number(row.p_top20)),
       makeCut: normalizeProb(Number(row.make_cut) || Number(row.p_make_cut))
-    })
+    }
+    map.set(name, entry)
+    const dgId = row.dg_id || row.player_id || row.id
+    if (dgId != null) {
+      idMap.set(String(dgId), entry)
+    }
   }
-  return map
+  return { map, idMap }
 }
 
 const buildRatingMap = (ratings = []) => {
@@ -61,16 +67,19 @@ const buildFallbackProbabilities = (ratingsMap) => {
 
 export class ProbabilityEngineV2 {
   build({ preTournamentPreds = [], skillRatings = [] } = {}) {
-    const dgMap = buildMapFromPreds(preTournamentPreds)
+    const { map: dgMap, idMap: dgIdMap } = buildMapFromPreds(preTournamentPreds)
     const ratingMap = buildRatingMap(skillRatings)
     const fallback = buildFallbackProbabilities(ratingMap)
 
     return {
-      getPlayerProbs: (playerName) => {
-        const key = normalizeName(playerName)
-        const dg = dgMap.get(key)
+      getPlayerProbs: (player) => {
+        const nameKey = typeof player === 'string' ? normalizeName(player) : normalizeName(player?.name)
+        const idKey = typeof player === 'object' && player?.id != null ? String(player.id) : null
+        const dg = idKey ? dgIdMap.get(idKey) : null
         if (dg) return dg
-        return fallback.get(key) || null
+        const fromName = nameKey ? dgMap.get(nameKey) : null
+        if (fromName) return fromName
+        return nameKey ? fallback.get(nameKey) || null : null
       }
     }
   }
