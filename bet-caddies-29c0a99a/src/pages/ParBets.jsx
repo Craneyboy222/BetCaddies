@@ -34,7 +34,7 @@ export default function ParBets() {
 
   const { data: bets = [], isLoading } = useQuery({
     queryKey: ['golfBets', 'par'],
-    queryFn: () => base44.entities.GolfBet.filter({ status: 'active', category: 'par' }, '-confidence_rating', 50)
+    queryFn: () => api.getBetsByTier('par')
   });
 
   const { data: providers = [] } = useQuery({

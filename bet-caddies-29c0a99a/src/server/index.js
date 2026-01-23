@@ -320,7 +320,7 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
 
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       })
-      .slice(0, 10)
+      .slice(0, 200)
 
     // Transform to frontend format (same as above)
     const formattedBets = filtered.map(bet => {

@@ -34,7 +34,7 @@ export default function LongShots() {
 
   const { data: bets = [], isLoading } = useQuery({
     queryKey: ['golfBets', 'longshots'],
-    queryFn: () => base44.entities.GolfBet.filter({ status: 'active' }, '-confidence_rating', 100)
+    queryFn: () => api.getBetsByTier('longshots')
   });
 
   const { data: providers = [] } = useQuery({
@@ -57,7 +57,7 @@ export default function LongShots() {
   });
 
   let filteredBets = bets.filter(bet =>
-    (selectedTour === 'all' || bet.tour === selectedTour) && (bet.odds_decimal_best || 0) >= 61
+    (selectedTour === 'all' || bet.tour === selectedTour) && (bet.odds_decimal_best || 0) > 60
   );
 
   if (sortBy === 'confidence') {

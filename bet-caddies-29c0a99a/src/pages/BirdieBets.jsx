@@ -34,7 +34,7 @@ export default function BirdieBets() {
 
   const { data: bets = [], isLoading } = useQuery({
     queryKey: ['golfBets', 'birdie'],
-    queryFn: () => base44.entities.GolfBet.filter({ status: 'active', category: 'birdie' }, '-confidence_rating', 50)
+    queryFn: () => api.getBetsByTier('birdie')
   });
 
   const { data: providers = [] } = useQuery({

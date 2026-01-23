@@ -34,7 +34,7 @@ export default function EagleBets() {
 
   const { data: bets = [], isLoading } = useQuery({
     queryKey: ['golfBets', 'eagle'],
-    queryFn: () => base44.entities.GolfBet.filter({ status: 'active', category: 'eagle' }, '-confidence_rating', 50)
+    queryFn: () => api.getBetsByTier('eagle')
   });
 
   const { data: providers = [] } = useQuery({
