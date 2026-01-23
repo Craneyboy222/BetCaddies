@@ -30,6 +30,7 @@ const ARTIFACT_DIR = path.join(process.cwd(), 'logs', 'artifacts')
 export class WeeklyPipeline {
   constructor() {
     this.minPicksPerTier = Number(process.env.MIN_PICKS_PER_TIER || 5)
+    this.maxPicksPerTier = Number(process.env.MAX_PICKS_PER_TIER || 8)
     this.maxOddsAgeHours = Number(process.env.ODDS_FRESHNESS_HOURS || 6)
     this.lookaheadDays = Number(process.env.TOUR_LOOKAHEAD_DAYS || 0)
     this.maxPicksPerPlayer = Number(process.env.MAX_PICKS_PER_PLAYER || 2)
@@ -807,9 +808,10 @@ export class WeeklyPipeline {
           market: market.marketKey,
           offers: offers.length,
           selections: selectionKeys.length,
-          validProb: 0,
-          ev: 0,
-          passing: 0
+          validFair: 0,
+          validMarket: 0,
+          validEv: 0,
+          positive: 0
         }
 
         for (const [selectionKey, selectionOffers] of Object.entries(offersBySelection)) {
@@ -830,17 +832,22 @@ export class WeeklyPipeline {
           if (market.marketKey === 'mc' && Number.isFinite(simProb)) {
             simProb = clampProbability(1 - simProb)
           }
-          const blendedProb = this.blendProbabilities({ sim: simProb, dg: dgProb ?? derivedModelProb, mkt: marketProb })
-          const fairProb = applyCalibration(blendedProb, market.marketKey, event.tour)
-          if (!Number.isFinite(fairProb)) continue
-          stat.validProb += 1
+          const baseFairProb = Number.isFinite(dgProb)
+            ? dgProb
+            : (Number.isFinite(derivedModelProb) ? derivedModelProb : marketProb)
+          const fairProb = applyCalibration(baseFairProb, market.marketKey, event.tour)
 
-          const edge = fairProb - impliedProb
+          if (Number.isFinite(marketProb)) stat.validMarket += 1
+          if (Number.isFinite(fairProb)) stat.validFair += 1
+
+          if (!Number.isFinite(fairProb) || !Number.isFinite(marketProb) || !Number.isFinite(bestOffer.oddsDecimal)) {
+            continue
+          }
+
+          const edge = fairProb - marketProb
           const ev = this.computeEv(fairProb, bestOffer.oddsDecimal)
-          if (Number.isFinite(ev)) stat.ev += 1
-          const tier = this.getTierForOdds(bestOffer.oddsDecimal)
-          const minEdge = this.getTierMinEdge(tier)
-          if (Number.isFinite(minEdge) && edge >= minEdge) stat.passing += 1
+          if (Number.isFinite(ev)) stat.validEv += 1
+          if (ev > 0 && edge > 0) stat.positive += 1
 
           if (!Number.isFinite(derivedModelProb) && Number.isFinite(marketProb)) {
             usedMarketFallback = true
@@ -855,6 +862,7 @@ export class WeeklyPipeline {
             altOffers: selectionOffers.filter((offer) => offer.bookmaker !== bestOffer.bookmaker).slice(0, 5),
             impliedProb,
             fairProb,
+            marketProb,
             edge,
             ev
           })
@@ -864,7 +872,7 @@ export class WeeklyPipeline {
       }
 
       for (const stat of marketStats) {
-        logStep('selection', `Selection stats ${event.tour}/${event.eventName} market=${stat.market} offers=${stat.offers} selections=${stat.selections} fairProb=${stat.validProb} ev=${stat.ev} pass=${stat.passing}`)
+        logStep('selection', `Selection stats ${event.tour}/${event.eventName} market=${stat.market} offers=${stat.offers} selections=${stat.selections} fairProb=${stat.validFair} marketProb=${stat.validMarket} ev=${stat.validEv} positive=${stat.positive}`)
       }
 
       if (usedMarketFallback) {
@@ -876,15 +884,17 @@ export class WeeklyPipeline {
       if (candidates.length === 0) {
         const totalOffers = marketStats.reduce((sum, stat) => sum + stat.offers, 0)
         const totalSelections = marketStats.reduce((sum, stat) => sum + stat.selections, 0)
-        const totalValidProb = marketStats.reduce((sum, stat) => sum + stat.validProb, 0)
-        const totalEv = marketStats.reduce((sum, stat) => sum + stat.ev, 0)
-        const totalPass = marketStats.reduce((sum, stat) => sum + stat.passing, 0)
+        const totalValidFair = marketStats.reduce((sum, stat) => sum + stat.validFair, 0)
+        const totalValidMarket = marketStats.reduce((sum, stat) => sum + stat.validMarket, 0)
+        const totalEv = marketStats.reduce((sum, stat) => sum + stat.validEv, 0)
+        const totalPositive = marketStats.reduce((sum, stat) => sum + stat.positive, 0)
         let reason = 'unknown'
         if (totalOffers === 0) reason = 'no-offers'
         else if (totalSelections === 0) reason = 'no-selections'
-        else if (totalValidProb === 0) reason = 'missing-probabilities'
+        else if (totalValidFair === 0) reason = 'missing-fair-probabilities'
+        else if (totalValidMarket === 0) reason = 'missing-market-probabilities'
         else if (totalEv === 0) reason = 'ev-unavailable'
-        else if (totalPass === 0) reason = 'thresholds-too-strict'
+        else if (totalPositive === 0) reason = 'no-positive-ev'
 
         await issueTracker.logIssue(event.tour, 'warning', 'selection', 'No candidate selections available', {
           eventName: event.eventName,
@@ -892,7 +902,7 @@ export class WeeklyPipeline {
         })
       }
 
-      const tiered = await this.selectTieredPortfolio(candidates, issueTracker, event.tour)
+      const tiered = await this.selectTieredPortfolio(candidates, issueTracker, event, marketStats)
       for (const entry of tiered) {
         const formatted = this.formatRecommendation(entry)
         if (this.dryRun) {
@@ -1052,26 +1062,39 @@ export class WeeklyPipeline {
     return clampProbability(invLogit(blended))
   }
 
-  async selectTieredPortfolio(candidates, issueTracker, tour) {
+  async selectTieredPortfolio(candidates, issueTracker, event, marketStats = []) {
     const tierOrder = ['PAR', 'BIRDIE', 'EAGLE', 'LONG_SHOTS']
     const selected = []
 
     for (const tier of tierOrder) {
       const tierCandidates = candidates.filter((candidate) => this.getTierForOdds(candidate.bestOffer.oddsDecimal) === tier)
-      const { picks, relaxed, reason } = this.selectTierCandidates(tierCandidates, tier)
+      const result = this.selectTierCandidates(tierCandidates, tier)
+      const picks = result.recommended.concat(result.fallback)
+
       if (picks.length < this.minPicksPerTier) {
-        await issueTracker?.logIssue?.(tour, 'warning', 'selection', `Tier ${tier} below minimum picks`, {
+        await issueTracker?.logIssue?.(event.tour, 'warning', 'selection', `Tier ${tier} below minimum picks`, {
           tier,
+          eventName: event.eventName,
           count: picks.length,
-          reason: reason || 'insufficient candidates'
+          availablePositive: result.availablePositive,
+          selectedPositive: result.recommended.length,
+          selectedFallback: result.fallback.length,
+          marketStats
         })
       }
-      if (relaxed) {
-        await issueTracker?.logIssue?.(tour, 'warning', 'selection', `Tier ${tier} used relaxed thresholds`, {
+
+      if (result.fallback.length > 0) {
+        await issueTracker?.logIssue?.(event.tour, 'warning', 'selection', `Tier ${tier} used fallback picks`, {
           tier,
-          reason
+          eventName: event.eventName,
+          availablePositive: result.availablePositive,
+          selectedPositive: result.recommended.length,
+          selectedFallback: result.fallback.length,
+          reason: result.fallbackReason,
+          marketStats
         })
       }
+
       selected.push(...picks.map((pick) => ({ ...pick, tier })))
     }
 
@@ -1079,41 +1102,49 @@ export class WeeklyPipeline {
   }
 
   selectTierCandidates(candidates, tier) {
-    const minEdge = this.getTierMinEdge(tier)
     const allowFrl = tier === 'EAGLE' || tier === 'LONG_SHOTS'
-    const filteredBase = candidates
+    const valid = candidates
       .filter((candidate) => allowFrl || candidate.marketKey !== 'frl')
-      .filter((candidate) => Number.isFinite(candidate.edge))
+      .filter((candidate) => Number.isFinite(candidate.fairProb) && Number.isFinite(candidate.marketProb))
+      .filter((candidate) => Number.isFinite(candidate.bestOffer?.oddsDecimal))
 
-    let picks = this.applyExposureCaps(
-      filteredBase
-        .filter((candidate) => candidate.edge >= minEdge)
-        .sort((a, b) => b.ev - a.ev || b.edge - a.edge)
+    const positive = valid.filter((candidate) => candidate.ev > 0 && candidate.edge > 0)
+    const sortedPositive = this.applyExposureCaps(
+      positive.sort((a, b) => b.ev - a.ev || b.edge - a.edge || b.bestOffer.oddsDecimal - a.bestOffer.oddsDecimal)
     )
 
-    if (picks.length >= this.minPicksPerTier) {
-      return { picks: picks.slice(0, this.minPicksPerTier), relaxed: false }
+    const recommended = sortedPositive.slice(0, this.maxPicksPerTier).map((candidate) => ({
+      ...candidate,
+      isFallback: false,
+      fallbackReason: null
+    }))
+
+    if (recommended.length >= this.minPicksPerTier) {
+      return {
+        recommended,
+        fallback: [],
+        availablePositive: positive.length,
+        fallbackReason: null
+      }
     }
 
-    const relaxedThreshold = minEdge * 0.5
-    picks = this.applyExposureCaps(
-      filteredBase
-        .filter((candidate) => candidate.edge >= relaxedThreshold)
-        .sort((a, b) => b.ev - a.ev || b.edge - a.edge)
+    const remaining = valid.filter((candidate) => !recommended.includes(candidate))
+    const fallbackCandidates = this.applyExposureCaps(
+      remaining.sort((a, b) => b.ev - a.ev || b.edge - a.edge || b.bestOffer.oddsDecimal - a.bestOffer.oddsDecimal)
     )
 
-    if (picks.length >= this.minPicksPerTier) {
-      return { picks: picks.slice(0, this.minPicksPerTier), relaxed: true, reason: 'edge-threshold-50pct' }
-    }
-
-    const fallback = this.applyExposureCaps(
-      filteredBase.sort((a, b) => b.ev - a.ev || b.edge - a.edge)
-    )
+    const fallbackSlots = Math.max(0, this.maxPicksPerTier - recommended.length)
+    const fallback = fallbackCandidates.slice(0, fallbackSlots).map((candidate) => ({
+      ...candidate,
+      isFallback: true,
+      fallbackReason: 'Insufficient +EV bets to meet minimum tier count'
+    }))
 
     return {
-      picks: fallback.slice(0, Math.max(this.minPicksPerTier, fallback.length)),
-      relaxed: true,
-      reason: 'top-ev-fill'
+      recommended,
+      fallback,
+      availablePositive: positive.length,
+      fallbackReason: 'Insufficient +EV bets to meet minimum tier count'
     }
   }
 
@@ -1140,18 +1171,25 @@ export class WeeklyPipeline {
   formatRecommendation(candidate) {
     const analysisParagraph = this.generateAnalysisParagraph(candidate)
     const analysisBullets = this.generateAnalysisBullets(candidate)
+    const isFallback = candidate.isFallback === true
 
     return {
       tier: candidate.tier,
       tourEventId: candidate.tourEvent.id,
       marketKey: candidate.marketKey,
       selection: candidate.selection,
-      confidence1To5: this.calculateConfidence(candidate.edge),
+      confidence1To5: isFallback ? 1 : this.calculateConfidence(candidate.edge),
       bestBookmaker: candidate.bestOffer.bookmaker,
       bestOdds: candidate.bestOffer.oddsDecimal,
       altOffersJson: candidate.altOffers,
       analysisParagraph,
-      analysisBullets
+      analysisBullets,
+      fairProb: candidate.fairProb,
+      marketProb: candidate.marketProb,
+      edge: candidate.edge,
+      ev: candidate.ev,
+      isFallback,
+      fallbackReason: candidate.fallbackReason || null
     }
   }
 
@@ -1167,7 +1205,10 @@ export class WeeklyPipeline {
   generateAnalysisParagraph(candidate) {
     const odds = candidate.bestOffer.oddsDecimal.toFixed(2)
     const edge = (candidate.edge * 100).toFixed(1)
-    return `${candidate.selection} is priced at ${odds} with an estimated ${edge}% edge based on DataGolf + market blending.`
+    if (candidate.isFallback) {
+      return `${candidate.selection} is priced at ${odds}. This is a fallback pick (not +EV) due to limited positive-EV options.`
+    }
+    return `${candidate.selection} is priced at ${odds} with an estimated ${edge}% edge based on DataGolf + market probabilities.`
   }
 
   generateAnalysisBullets(candidate) {
