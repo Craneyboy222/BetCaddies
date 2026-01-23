@@ -20,10 +20,12 @@ vi.mock('../sources/datagolf/index.js', () => ({
   DataGolfClient: {
     resolveTourCode: () => 'pga',
     getPreTournamentPreds: vi.fn(async () => ([
-      { player_name: 'player one', win: 0.2, top_5: 0.4, top_10: 0.6, top_20: 0.8, make_cut: 0.9 }
+      { player_name: 'player one', win: 0.2, top_5: 0.4, top_10: 0.6, top_20: 0.8, make_cut: 0.9 },
+      { player_name: 'player two', win: 0.15, top_5: 0.3, top_10: 0.5, top_20: 0.7, make_cut: 0.85 }
     ])),
     getSkillRatings: vi.fn(async () => ([
-      { player_name: 'player one', rating: 1.5 }
+      { player_name: 'player one', rating: 1.5 },
+      { player_name: 'player two', rating: 1.2 }
     ]))
   },
   normalizeDataGolfArray: (payload) => payload,
@@ -40,13 +42,20 @@ describe('WeeklyPipeline dry run', () => {
         status: 'active',
         player: { canonicalName: 'player one' },
         tourEvent: { id: 'event-1' }
+      },
+      {
+        tourEventId: 'event-1',
+        status: 'active',
+        player: { canonicalName: 'player two' },
+        tourEvent: { id: 'event-1' }
       }
     ])
     mockPrisma.oddsMarket.findMany.mockResolvedValue([
       {
         marketKey: 'win',
         oddsOffers: [
-          { selectionName: 'player one', selectionKey: 'player one', bookmaker: 'book', oddsDecimal: 5, oddsDisplay: '5.0', fetchedAt: new Date() }
+          { selectionName: 'player one', selectionKey: 'player one', bookmaker: 'book', oddsDecimal: 5, oddsDisplay: '5.0', fetchedAt: new Date() },
+          { selectionName: 'player two', selectionKey: 'player two', bookmaker: 'book', oddsDecimal: 7, oddsDisplay: '7.0', fetchedAt: new Date() }
         ]
       }
     ])

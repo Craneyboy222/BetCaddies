@@ -813,6 +813,15 @@ export class WeeklyPipeline {
           validMarket: 0,
           validEv: 0,
           positive: 0
+          ,
+          invalid: {
+            missingOdds: 0,
+            missingFair: 0,
+            missingMarket: 0,
+            outOfRangeProb: 0
+          },
+          marketFallbackUsed: 0,
+          marketProbMissing: 0
         }
 
         for (const [selectionKey, selectionOffers] of Object.entries(offersBySelection)) {
@@ -821,8 +830,17 @@ export class WeeklyPipeline {
           }, null)
           if (!bestOffer) continue
 
+          if (!Number.isFinite(bestOffer.oddsDecimal) || bestOffer.oddsDecimal <= 1) {
+            stat.invalid.missingOdds += 1
+            continue
+          }
+
           const impliedProb = impliedProbability(bestOffer.oddsDecimal)
+          const hasConsensus = marketFairProbs.has(selectionKey)
           const marketProb = marketFairProbs.get(selectionKey) ?? normalizedImplied.get(selectionKey)
+          const marketProbSource = hasConsensus
+            ? 'vig_removed_consensus'
+            : (normalizedImplied.has(selectionKey) ? 'normalized_implied' : 'missing')
           const modelProbs = probabilityModel.getPlayerProbs({
             name: selectionKey,
             id: bestOffer.selectionId || null
@@ -841,7 +859,19 @@ export class WeeklyPipeline {
           if (Number.isFinite(marketProb)) stat.validMarket += 1
           if (Number.isFinite(fairProb)) stat.validFair += 1
 
-          if (!Number.isFinite(fairProb) || !Number.isFinite(marketProb) || !Number.isFinite(bestOffer.oddsDecimal)) {
+          if (!Number.isFinite(marketProb)) {
+            stat.invalid.missingMarket += 1
+            stat.marketProbMissing += 1
+            continue
+          }
+
+          if (!Number.isFinite(fairProb)) {
+            stat.invalid.missingFair += 1
+            continue
+          }
+
+          if (fairProb <= 0 || fairProb >= 1 || marketProb <= 0 || marketProb >= 1) {
+            stat.invalid.outOfRangeProb += 1
             continue
           }
 
@@ -850,8 +880,9 @@ export class WeeklyPipeline {
           if (Number.isFinite(ev)) stat.validEv += 1
           if (ev > 0 && edge > 0) stat.positive += 1
 
-          if (!Number.isFinite(derivedModelProb) && Number.isFinite(marketProb)) {
+          if (!Number.isFinite(dgProb) && !Number.isFinite(derivedModelProb) && Number.isFinite(marketProb)) {
             usedMarketFallback = true
+            stat.marketFallbackUsed += 1
           }
 
           const fairProbFallback = !Number.isFinite(dgProb) && !Number.isFinite(derivedModelProb) && Number.isFinite(marketProb)
@@ -877,8 +908,11 @@ export class WeeklyPipeline {
             marketProb,
             edge,
             ev,
+            probSource: fairProbFallback ? 'market_fallback' : 'DG',
+            marketProbSource,
             isFallback: fairProbFallback,
-            fallbackReason: fairProbFallback ? 'Fair prob fallback to market (DG missing)' : null
+            fallbackReason: fairProbFallback ? 'Fair prob fallback to market (DG missing)' : null,
+            fallbackType: fairProbFallback ? 'fair_prob_fallback' : null
           })
         }
 
@@ -886,7 +920,22 @@ export class WeeklyPipeline {
       }
 
       for (const stat of marketStats) {
-        logStep('selection', `Selection stats ${event.tour}/${event.eventName} market=${stat.market} offers=${stat.offers} selections=${stat.selections} fairProb=${stat.validFair} marketProb=${stat.validMarket} ev=${stat.validEv} positive=${stat.positive}`)
+        logStep('selection', `Selection stats ${event.tour}/${event.eventName} market=${stat.market} offers=${stat.offers} selections=${stat.selections} fairProb=${stat.validFair} marketProb=${stat.validMarket} ev=${stat.validEv} positive=${stat.positive} invalid=${JSON.stringify(stat.invalid)}`)
+        if (stat.marketFallbackUsed > 0) {
+          await issueTracker.logIssue(event.tour, 'warning', 'selection', 'FAIR_PROB_FALLBACK_TO_MARKET', {
+            eventName: event.eventName,
+            market: stat.market,
+            reason: 'DG missing for market',
+            count: stat.marketFallbackUsed
+          })
+        }
+        if (stat.marketProbMissing > 0) {
+          await issueTracker.logIssue(event.tour, 'warning', 'selection', 'MARKET_PROB_MISSING', {
+            eventName: event.eventName,
+            market: stat.market,
+            count: stat.marketProbMissing
+          })
+        }
       }
 
       if (usedMarketFallback) {
@@ -1115,6 +1164,12 @@ export class WeeklyPipeline {
           selectedFallback: result.fallback.length,
           marketStats
         })
+        await issueTracker?.logIssue?.(event.tour, 'warning', 'selection', 'INSUFFICIENT_CANDIDATES_FOR_MIN', {
+          tier,
+          eventName: event.eventName,
+          availableEligible: result.availableEligible,
+          count: picks.length
+        })
       }
 
       if (result.fallback.length > 0) {
@@ -1172,13 +1227,15 @@ export class WeeklyPipeline {
     const fallback = fallbackCandidates.slice(0, fallbackSlots).map((candidate) => ({
       ...candidate,
       isFallback: true,
-      fallbackReason: candidate.fallbackReason || 'Insufficient +EV bets to meet minimum tier count'
+      fallbackReason: candidate.fallbackReason || 'Insufficient +EV bets to meet minimum tier count',
+      fallbackType: 'tier_min_fill'
     }))
 
     return {
       recommended,
       fallback,
       availablePositive: positive.length,
+      availableEligible: valid.length,
       fallbackReason: 'Insufficient +EV bets to meet minimum tier count'
     }
   }
@@ -1223,8 +1280,11 @@ export class WeeklyPipeline {
       marketProb: candidate.marketProb,
       edge: candidate.edge,
       ev: candidate.ev,
+      probSource: candidate.probSource || 'DG',
+      marketProbSource: candidate.marketProbSource || 'missing',
       isFallback,
-      fallbackReason: candidate.fallbackReason || null
+      fallbackReason: candidate.fallbackReason || null,
+      fallbackType: candidate.fallbackType || (isFallback ? 'tier_min_fill' : null)
     }
   }
 

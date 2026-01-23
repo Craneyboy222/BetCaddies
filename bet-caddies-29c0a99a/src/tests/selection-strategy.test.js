@@ -100,6 +100,23 @@ describe('Selection strategy', () => {
     expect(result.fallback.some((pick) => pick.fallbackReason)).toBe(true)
   })
 
+  it('filters invalid candidates missing market or fair probabilities', () => {
+    const pipeline = new WeeklyPipeline()
+    pipeline.minPicksPerTier = 2
+    pipeline.maxPicksPerTier = 4
+    pipeline.maxPicksPerPlayer = 10
+    pipeline.maxPicksPerMarket = 10
+
+    const candidates = [
+      { selectionKey: 'a', selection: 'a', marketKey: 'win', fairProb: 0.2, marketProb: null, edge: 0, ev: 0, bestOffer: { oddsDecimal: 5.0 } },
+      { selectionKey: 'b', selection: 'b', marketKey: 'win', fairProb: null, marketProb: 0.2, edge: 0, ev: 0, bestOffer: { oddsDecimal: 5.0 } },
+      { selectionKey: 'c', selection: 'c', marketKey: 'win', fairProb: 0.2, marketProb: 0.18, edge: 0.02, ev: 0.1, bestOffer: { oddsDecimal: 5.0 } }
+    ]
+
+    const result = pipeline.selectTierCandidates(candidates, 'PAR')
+    expect(result.recommended.length).toBe(1)
+  })
+
   it('sorts recommended picks by EV desc', () => {
     const pipeline = new WeeklyPipeline()
     pipeline.minPicksPerTier = 2

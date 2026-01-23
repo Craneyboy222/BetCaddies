@@ -73,9 +73,14 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
             <Badge variant="outline" className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">
               Active
             </Badge>
-            {bet.is_fallback && (
+            {bet.is_fallback && bet.fallback_type === 'tier_min_fill' && (
               <Badge variant="outline" className="bg-rose-500/20 text-rose-400 border-rose-500/30 text-xs">
                 Not +EV (fallback)
+              </Badge>
+            )}
+            {bet.prob_source === 'market_fallback' && (
+              <Badge variant="outline" className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-xs">
+                Fair prob fallback
               </Badge>
             )}
             <Badge variant="outline" className={`${tourColors[bet.tour]} text-xs`}>
@@ -210,9 +215,11 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
             >
               <div className="pb-4">
                 <p className="text-slate-300 leading-relaxed mb-4">
-                  {bet.is_fallback
+                  {bet.is_fallback && bet.fallback_type === 'tier_min_fill'
                     ? `Fallback pick (not +EV): ${bet.fallback_reason || 'Insufficient +EV bets to meet minimum tier count.'}`
-                    : bet.ai_analysis_paragraph}
+                    : bet.prob_source === 'market_fallback'
+                      ? `Fair prob fallback to market (DG missing). ${bet.ai_analysis_paragraph || ''}`
+                      : bet.ai_analysis_paragraph}
                 </p>
                 {bet.ai_analysis_bullets?.length > 0 && (
                   <ul className="space-y-2">

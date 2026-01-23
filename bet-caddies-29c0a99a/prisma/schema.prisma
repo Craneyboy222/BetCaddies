@@ -266,10 +266,13 @@ model BetRecommendation {
   altOffersJson     Json     // JSON array of alternative offers (exactly 5)
   fairProb          Float?
   marketProb        Float?
+  probSource        String?
+  marketProbSource  String?
   edge              Float?
   ev                Float?
   isFallback        Boolean  @default(false)
   fallbackReason    String?
+  fallbackType      String?
   analysisParagraph String
   analysisBullets   Json     // JSON array of bullet points
   createdAt         DateTime @default(now())
