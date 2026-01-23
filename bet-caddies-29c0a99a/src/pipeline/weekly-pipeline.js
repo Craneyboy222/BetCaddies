@@ -55,7 +55,6 @@ export class WeeklyPipeline {
       top_10: 'top_10',
       top_20: 'top_20',
       make_cut: 'make_cut',
-      miss_cut: 'miss_cut',
       frl: 'frl'
     }
     this.matchupMarketMap = {
@@ -910,21 +909,26 @@ export class WeeklyPipeline {
   }
 
   parseOddsOffers(payload) {
-    const rows = normalizeDataGolfArray(payload)
+    let rows = normalizeDataGolfArray(payload)
+    if (rows.length === 0) {
+      if (Array.isArray(payload?.data?.odds)) rows = payload.data.odds
+      if (Array.isArray(payload?.odds?.data)) rows = payload.odds.data
+      if (Array.isArray(payload?.odds?.offers)) rows = payload.odds.offers
+    }
     const offers = []
 
     for (const row of rows) {
       const selection = row.player_name || row.player || row.name || row.selection
       if (!selection) continue
 
-      if (row.book && row.odds) {
+      if (row.book && row.odds != null) {
         offers.push(this.buildOffer(selection, row.book, row.odds))
         continue
       }
 
       if (Array.isArray(row.books)) {
         for (const book of row.books) {
-          if (!book?.book || !book?.odds) continue
+          if (!book?.book || book?.odds == null) continue
           offers.push(this.buildOffer(selection, book.book, book.odds))
         }
         continue
@@ -941,21 +945,26 @@ export class WeeklyPipeline {
   }
 
   parseMatchupOffers(payload) {
-    const rows = normalizeDataGolfArray(payload)
+    let rows = normalizeDataGolfArray(payload)
+    if (rows.length === 0) {
+      if (Array.isArray(payload?.data?.odds)) rows = payload.data.odds
+      if (Array.isArray(payload?.odds?.data)) rows = payload.odds.data
+      if (Array.isArray(payload?.odds?.offers)) rows = payload.odds.offers
+    }
     const offers = []
     for (const row of rows) {
       const players = row.players || row.matchup || row.selection
       const selection = Array.isArray(players) ? players.join(' vs ') : players
       if (!selection) continue
 
-      if (row.book && row.odds) {
+      if (row.book && row.odds != null) {
         offers.push(this.buildOffer(selection, row.book, row.odds))
         continue
       }
 
       if (Array.isArray(row.books)) {
         for (const book of row.books) {
-          if (!book?.book || !book?.odds) continue
+          if (!book?.book || book?.odds == null) continue
           offers.push(this.buildOffer(selection, book.book, book.odds))
         }
       }
@@ -964,7 +973,7 @@ export class WeeklyPipeline {
   }
 
   buildOffer(selection, bookmaker, odds) {
-    const oddsDecimal = Number(odds)
+    const oddsDecimal = this.normalizeOddsValue(odds)
     return {
       selectionName: String(selection),
       selectionKey: this.playerNormalizer.cleanPlayerName(String(selection)),
@@ -973,6 +982,17 @@ export class WeeklyPipeline {
       oddsDisplay: Number.isFinite(oddsDecimal) ? oddsDecimal.toFixed(2) : String(odds),
       fetchedAt: new Date()
     }
+  }
+
+  normalizeOddsValue(odds) {
+    if (odds == null) return NaN
+    if (typeof odds === 'number') return odds
+    if (typeof odds === 'string') return Number(odds)
+    if (typeof odds === 'object') {
+      const candidate = odds.decimal ?? odds.odds_decimal ?? odds.price ?? odds.value ?? odds.odds
+      if (candidate != null) return Number(candidate)
+    }
+    return NaN
   }
 
   parseDate(value) {
