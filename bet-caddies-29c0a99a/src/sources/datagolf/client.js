@@ -1,16 +1,10 @@
 import axios from 'axios'
 import { logger } from '../../observability/logger.js'
+import { toDgTour } from './tourMap.js'
 
 const BASE_URL = 'https://feeds.datagolf.com'
 const DEFAULT_TIMEOUT_MS = Number(process.env.DATAGOLF_TIMEOUT_MS || 20000)
 const DEFAULT_RETRIES = Number(process.env.DATAGOLF_RETRIES || 3)
-
-export const tourMap = {
-  PGA: { preds: 'pga', odds: 'pga', schedule: 'pga', field: 'pga', raw: 'pga', histOdds: 'pga' },
-  DPWT: { preds: 'euro', odds: 'euro', schedule: 'euro', field: 'euro', raw: 'euro', histOdds: 'euro' },
-  KFT: { preds: 'kft', odds: 'kft', schedule: 'kft', field: 'kft', raw: 'kft', histOdds: null },
-  LIV: { preds: 'alt', odds: 'alt', schedule: 'alt', field: null, raw: 'liv', histOdds: 'alt' }
-}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -53,8 +47,7 @@ const request = async (path, params = {}) => {
 }
 
 const resolveTourCode = (tour, category) => {
-  if (!tourMap[tour]) return null
-  return tourMap[tour][category] ?? null
+  return toDgTour(tour, category)
 }
 
 export const DataGolfClient = {

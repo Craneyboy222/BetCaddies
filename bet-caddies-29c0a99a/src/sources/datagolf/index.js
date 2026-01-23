@@ -1,1 +1,2 @@
-export { DataGolfClient, tourMap, normalizeDataGolfArray, safeLogDataGolfError } from './client.js'
+export { DataGolfClient, normalizeDataGolfArray, safeLogDataGolfError } from './client.js'
+export { tourMap, toDgTour, assertSupported } from './tourMap.js'
