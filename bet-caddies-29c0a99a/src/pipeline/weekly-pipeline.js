@@ -9,6 +9,7 @@ import { logger, logStep, logError } from '../observability/logger.js'
 import { DataIssueTracker } from '../observability/data-issue-tracker.js'
 import { PlayerNormalizer } from '../domain/player-normalizer.js'
 import { DataGolfClient, normalizeDataGolfArray, safeLogDataGolfError } from '../sources/datagolf/index.js'
+import { parseOddsPayload } from '../sources/datagolf/parsers.js'
 import { ProbabilityEngineV2 } from '../engine/v2/probability-engine.js'
 import { buildPlayerParams } from '../engine/v2/player-params.js'
 import { simulateTournament } from '../engine/v2/tournamentSim.js'
@@ -55,11 +56,13 @@ export class WeeklyPipeline {
       top_10: 'top_10',
       top_20: 'top_20',
       make_cut: 'make_cut',
+      miss_cut: 'mc',
       frl: 'frl'
     }
     this.matchupMarketMap = {
-      tournament_matchups: 'tournament',
-      round_matchups: 'round_1'
+      tournament_matchups: 'tournament_matchups',
+      round_matchups: 'round_matchups',
+      '3_balls': '3_balls'
     }
   }
 
@@ -407,6 +410,8 @@ export class WeeklyPipeline {
 
   async fetchOdds(run, tourEvents, issueTracker) {
     const oddsData = []
+    const debugToursLogged = new Set()
+    const debugEnabled = String(process.env.DEBUG_DATAGOLF || '').toLowerCase() === 'true'
 
     for (const event of tourEvents) {
       const tourCode = DataGolfClient.resolveTourCode(event.tour, 'odds')
@@ -421,12 +426,13 @@ export class WeeklyPipeline {
         where: { runId: run.id, tourEventId: event.id }
       })
 
+      const eventMeta = this.getEventMeta(event)
       const oddsEvent = await prisma.oddsEvent.create({
         data: {
           runId: run.id,
           tourEventId: event.id,
           oddsProvider: 'datagolf',
-          externalEventId: String(this.getEventMeta(event)?.eventId || ''),
+          externalEventId: String(eventMeta?.eventId || ''),
           raw: { source: 'datagolf' }
         }
       })
@@ -440,24 +446,66 @@ export class WeeklyPipeline {
             await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Outrights odds not supported for tour', {
               eventName: event.eventName,
               market: marketKey,
-              tour: event.tour
+              internalTour: event.tour,
+              dgTour: tourCode,
+              endpoint: 'betting-tools/outrights'
             })
             continue
           }
-          const offers = this.parseOddsOffers(payload)
-          if (offers.length === 0) {
+          const debugKey = debugEnabled && marketKey === 'win' && !debugToursLogged.has(event.tour)
+            ? `${event.tour}:${tourCode}:betting-tools/outrights:${marketKey}`
+            : null
+          const parsed = parseOddsPayload('betting-tools/outrights', payload, { debugKey })
+          if (debugKey) debugToursLogged.add(event.tour)
+          if (parsed.errorMessage) {
+            logger.warn('DataGolf access error', {
+              endpoint: 'betting-tools/outrights',
+              internalTour: event.tour,
+              dgTour: tourCode,
+              market: marketKey,
+              message: parsed.errorMessage
+            })
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'DataGolf access error on outrights odds', {
+              eventName: event.eventName,
+              market: marketKey,
+              message: parsed.errorMessage
+            })
+          }
+
+          const rows = parsed.rows
+          if (rows.length === 0 && !parsed.errorMessage) {
             await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Outrights odds returned empty payload', {
               eventName: event.eventName,
-              market: marketKey
+              market: marketKey,
+              internalTour: event.tour,
+              dgTour: tourCode,
+              endpoint: 'betting-tools/outrights'
             })
             continue
           }
+
+          const offers = this.parseOddsOffers(rows)
+          const bookCount = this.countBooks(rows)
+          const attachInfo = this.resolveOddsAttachment(event, parsed.meta)
+          if (parsed.meta.eventId && parsed.meta.eventId !== oddsEvent.externalEventId) {
+            await prisma.oddsEvent.update({
+              where: { id: oddsEvent.id },
+              data: { externalEventId: parsed.meta.eventId }
+            })
+          }
+          logStep('odds', `Outrights rows=${rows.length} books=${bookCount} eventId=${attachInfo.eventIdPresent} eventName=${attachInfo.eventNamePresent} attach=${attachInfo.method} (${marketKey}, ${event.tour}/${tourCode})`)
 
           const market = await prisma.oddsMarket.create({
             data: {
               oddsEventId: oddsEvent.id,
               marketKey,
-              raw: { source: 'datagolf', market: marketCode },
+              raw: {
+                source: 'datagolf',
+                market: marketCode,
+                payloadEventId: parsed.meta.eventId,
+                payloadEventName: parsed.meta.eventName,
+                attachMethod: attachInfo.method
+              },
               fetchedAt: new Date()
             }
           })
@@ -483,7 +531,12 @@ export class WeeklyPipeline {
 
           await this.storeArtifact(run.id, event.tour, 'betting-tools/outrights', { tourCode, market: marketCode }, payload)
         } catch (error) {
-          safeLogDataGolfError('odds-outrights', error, { tour: event.tour, market: marketKey })
+          safeLogDataGolfError('odds-outrights', error, {
+            internalTour: event.tour,
+            dgTour: tourCode,
+            endpoint: 'betting-tools/outrights',
+            market: marketKey
+          })
           await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Failed to fetch outrights odds', {
             eventName: event.eventName,
             market: marketKey,
@@ -492,31 +545,78 @@ export class WeeklyPipeline {
         }
       }
 
+      if (event.tour === 'KFT') {
+        await issueTracker.logIssue(event.tour, 'warning', 'odds', 'DataGolf matchups not supported for KFT', {
+          eventName: event.eventName,
+          internalTour: event.tour,
+          dgTour: tourCode
+        })
+      }
+
       for (const [marketKey, marketCode] of Object.entries(this.matchupMarketMap)) {
         try {
+          if (event.tour === 'KFT') continue
           const payload = await DataGolfClient.getMatchupsOdds(tourCode, marketCode)
           if (!payload) {
             await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Matchups odds not supported for tour', {
               eventName: event.eventName,
               market: marketKey,
-              tour: event.tour
+              internalTour: event.tour,
+              dgTour: tourCode,
+              endpoint: 'betting-tools/matchups'
             })
             continue
           }
-          const offers = this.parseMatchupOffers(payload)
-          if (offers.length === 0) {
+          const parsed = parseOddsPayload('betting-tools/matchups', payload, { debugKey: null })
+          if (parsed.errorMessage) {
+            logger.warn('DataGolf access error', {
+              endpoint: 'betting-tools/matchups',
+              internalTour: event.tour,
+              dgTour: tourCode,
+              market: marketKey,
+              message: parsed.errorMessage
+            })
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'DataGolf access error on matchups odds', {
+              eventName: event.eventName,
+              market: marketKey,
+              message: parsed.errorMessage
+            })
+          }
+
+          const rows = parsed.rows
+          if (rows.length === 0 && !parsed.errorMessage) {
             await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Matchups odds returned empty payload', {
               eventName: event.eventName,
-              market: marketKey
+              market: marketKey,
+              internalTour: event.tour,
+              dgTour: tourCode,
+              endpoint: 'betting-tools/matchups'
             })
             continue
           }
+
+          const offers = this.parseMatchupOffers(rows)
+          const bookCount = this.countBooks(rows)
+          const attachInfo = this.resolveOddsAttachment(event, parsed.meta)
+          if (parsed.meta.eventId && parsed.meta.eventId !== oddsEvent.externalEventId) {
+            await prisma.oddsEvent.update({
+              where: { id: oddsEvent.id },
+              data: { externalEventId: parsed.meta.eventId }
+            })
+          }
+          logStep('odds', `Matchups rows=${rows.length} books=${bookCount} eventId=${attachInfo.eventIdPresent} eventName=${attachInfo.eventNamePresent} attach=${attachInfo.method} (${marketKey}, ${event.tour}/${tourCode})`)
 
           const market = await prisma.oddsMarket.create({
             data: {
               oddsEventId: oddsEvent.id,
               marketKey,
-              raw: { source: 'datagolf', market: marketCode },
+              raw: {
+                source: 'datagolf',
+                market: marketCode,
+                payloadEventId: parsed.meta.eventId,
+                payloadEventName: parsed.meta.eventName,
+                attachMethod: attachInfo.method
+              },
               fetchedAt: new Date()
             }
           })
@@ -544,7 +644,12 @@ export class WeeklyPipeline {
 
           await this.storeArtifact(run.id, event.tour, 'betting-tools/matchups', { tourCode, market: marketCode }, payload)
         } catch (error) {
-          safeLogDataGolfError('odds-matchups', error, { tour: event.tour, market: marketKey })
+          safeLogDataGolfError('odds-matchups', error, {
+            internalTour: event.tour,
+            dgTour: tourCode,
+            endpoint: 'betting-tools/matchups',
+            market: marketKey
+          })
           await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Failed to fetch matchup odds', {
             eventName: event.eventName,
             market: marketKey,
@@ -594,9 +699,26 @@ export class WeeklyPipeline {
     const recommendations = []
 
     for (const event of tourEvents) {
-      const eventOdds = oddsData.find((odds) => odds.tourEventId === event.id)
-      if (!eventOdds || eventOdds.markets.length === 0) {
-        await issueTracker.logIssue(event.tour, 'warning', 'selection', 'No odds markets for event', {
+      const storedMarkets = await prisma.oddsMarket.findMany({
+        where: {
+          oddsEvent: {
+            runId: run.id,
+            tourEventId: event.id
+          }
+        },
+        include: { oddsOffers: true }
+      })
+
+      const eventOdds = {
+        tourEventId: event.id,
+        markets: storedMarkets.map((market) => ({
+          marketKey: market.marketKey,
+          oddsOffers: market.oddsOffers || []
+        }))
+      }
+
+      if (eventOdds.markets.length === 0) {
+        await issueTracker.logIssue(event.tour, 'warning', 'selection', 'No odds offers stored after fetch', {
           eventName: event.eventName
         })
         continue
@@ -776,7 +898,7 @@ export class WeeklyPipeline {
   }
 
   removeVig(offers, marketKey) {
-    if (marketKey === 'tournament_matchups' || marketKey === 'round_matchups') {
+    if (marketKey === 'tournament_matchups' || marketKey === 'round_matchups' || marketKey === '3_balls') {
       return removeVigNormalize(offers)
     }
     return removeVigPower(offers, this.powerMethodK)
@@ -962,13 +1084,7 @@ export class WeeklyPipeline {
     ]
   }
 
-  parseOddsOffers(payload) {
-    let rows = normalizeDataGolfArray(payload)
-    if (rows.length === 0) {
-      if (Array.isArray(payload?.data?.odds)) rows = payload.data.odds
-      if (Array.isArray(payload?.odds?.data)) rows = payload.odds.data
-      if (Array.isArray(payload?.odds?.offers)) rows = payload.odds.offers
-    }
+  parseOddsOffers(rows = []) {
     const offers = []
 
     for (const row of rows) {
@@ -998,13 +1114,7 @@ export class WeeklyPipeline {
     return offers.filter((offer) => Number.isFinite(offer.oddsDecimal) && offer.oddsDecimal > 1)
   }
 
-  parseMatchupOffers(payload) {
-    let rows = normalizeDataGolfArray(payload)
-    if (rows.length === 0) {
-      if (Array.isArray(payload?.data?.odds)) rows = payload.data.odds
-      if (Array.isArray(payload?.odds?.data)) rows = payload.odds.data
-      if (Array.isArray(payload?.odds?.offers)) rows = payload.odds.offers
-    }
+  parseMatchupOffers(rows = []) {
     const offers = []
     for (const row of rows) {
       const players = row.players || row.matchup || row.selection
@@ -1024,6 +1134,44 @@ export class WeeklyPipeline {
       }
     }
     return offers.filter((offer) => Number.isFinite(offer.oddsDecimal) && offer.oddsDecimal > 1)
+  }
+
+  countBooks(rows = []) {
+    const books = new Set()
+    for (const row of rows) {
+      if (row?.book) books.add(String(row.book))
+      if (Array.isArray(row?.books)) {
+        for (const book of row.books) {
+          if (book?.book) books.add(String(book.book))
+        }
+      }
+      if (row?.odds && typeof row.odds === 'object') {
+        for (const key of Object.keys(row.odds)) books.add(String(key))
+      }
+    }
+    return books.size
+  }
+
+  resolveOddsAttachment(event, payloadMeta = {}) {
+    const eventMeta = this.getEventMeta(event)
+    const eventId = eventMeta?.eventId ? String(eventMeta.eventId) : null
+    const eventName = event.eventName ? String(event.eventName).toLowerCase() : null
+    const payloadEventId = payloadMeta?.eventId ? String(payloadMeta.eventId) : null
+    const payloadEventName = payloadMeta?.eventName ? String(payloadMeta.eventName).toLowerCase() : null
+
+    if (payloadEventId && eventId && payloadEventId === eventId) {
+      return { method: 'event_id', eventIdPresent: true, eventNamePresent: Boolean(payloadEventName) }
+    }
+
+    if (payloadEventName && eventName && payloadEventName === eventName) {
+      return { method: 'event_name', eventIdPresent: Boolean(payloadEventId), eventNamePresent: true }
+    }
+
+    return {
+      method: 'tour-default',
+      eventIdPresent: Boolean(payloadEventId),
+      eventNamePresent: Boolean(payloadEventName)
+    }
   }
 
   buildOffer(selection, bookmaker, odds) {

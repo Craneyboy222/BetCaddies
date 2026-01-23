@@ -5,6 +5,8 @@ import { toDgTour, assertSupported } from './tourMap.js'
 const BASE_URL = 'https://feeds.datagolf.com'
 const DEFAULT_TIMEOUT_MS = Number(process.env.DATAGOLF_TIMEOUT_MS || 20000)
 const DEFAULT_RETRIES = Number(process.env.DATAGOLF_RETRIES || 3)
+const DEBUG_DATAGOLF = String(process.env.DEBUG_DATAGOLF || '').toLowerCase() === 'true'
+const debugLoggedRequests = new Set()
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -34,6 +36,15 @@ const getApiKey = () => {
   return key
 }
 
+const maybeLogRequest = (endpoint, params) => {
+  if (!DEBUG_DATAGOLF) return
+  const tour = params?.tour || 'none'
+  const key = `${endpoint}:${tour}`
+  if (debugLoggedRequests.has(key)) return
+  debugLoggedRequests.add(key)
+  logger.info('DataGolf request', { endpoint, params })
+}
+
 const request = async (path, params = {}, { endpointName } = {}) => {
   const key = getApiKey()
   const finalParams = { ...params, key, file_format: 'json' }
@@ -42,7 +53,7 @@ const request = async (path, params = {}, { endpointName } = {}) => {
   }
   const logParams = { ...finalParams }
   delete logParams.key
-  logger.info('DataGolf request', { endpoint: endpointName || path, params: logParams })
+  maybeLogRequest(endpointName || path, logParams)
   return await withRetries(async () => {
     const response = await axios.get(`${BASE_URL}${path}`, {
       params: finalParams,
