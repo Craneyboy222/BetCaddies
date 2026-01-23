@@ -803,6 +803,7 @@ export class WeeklyPipeline {
         const offersBySelection = this.groupOffersBySelection(offers, event, fieldIndex)
         const offersByBook = this.groupOffersByBook(offers)
         const marketFairProbs = this.computeMarketProbabilities(offersBySelection, offersByBook, market.marketKey)
+        const normalizedImplied = this.computeNormalizedImplied(offersBySelection)
         const selectionKeys = Object.keys(offersBySelection)
         const stat = {
           market: market.marketKey,
@@ -821,7 +822,7 @@ export class WeeklyPipeline {
           if (!bestOffer) continue
 
           const impliedProb = impliedProbability(bestOffer.oddsDecimal)
-          const marketProb = marketFairProbs.get(selectionKey)
+          const marketProb = marketFairProbs.get(selectionKey) ?? normalizedImplied.get(selectionKey)
           const modelProbs = probabilityModel.getPlayerProbs({
             name: selectionKey,
             id: bestOffer.selectionId || null
@@ -853,6 +854,17 @@ export class WeeklyPipeline {
             usedMarketFallback = true
           }
 
+          const fairProbFallback = !Number.isFinite(dgProb) && !Number.isFinite(derivedModelProb) && Number.isFinite(marketProb)
+          const tierInfo = this.classifyTier(bestOffer.oddsDecimal)
+          if (tierInfo.gap) {
+            await issueTracker.logIssue(event.tour, 'warning', 'selection', 'Tier gap candidate assigned to nearest tier', {
+              eventName: event.eventName,
+              market: market.marketKey,
+              odds: bestOffer.oddsDecimal,
+              gap: tierInfo.gap
+            })
+          }
+
           candidates.push({
             tourEvent: event,
             marketKey: market.marketKey,
@@ -864,7 +876,9 @@ export class WeeklyPipeline {
             fairProb,
             marketProb,
             edge,
-            ev
+            ev,
+            isFallback: fairProbFallback,
+            fallbackReason: fairProbFallback ? 'Fair prob fallback to market (DG missing)' : null
           })
         }
 
@@ -986,6 +1000,26 @@ export class WeeklyPipeline {
     }
 
     return results
+  }
+
+  computeNormalizedImplied(offersBySelection) {
+    const impliedMap = new Map()
+    let sum = 0
+    for (const [selection, offers] of Object.entries(offersBySelection)) {
+      const bestOdds = offers.reduce((best, offer) => (offer.oddsDecimal > best ? offer.oddsDecimal : best), -Infinity)
+      if (!Number.isFinite(bestOdds) || bestOdds <= 1) continue
+      const implied = impliedProbability(bestOdds)
+      if (!Number.isFinite(implied)) continue
+      impliedMap.set(selection, implied)
+      sum += implied
+    }
+
+    if (sum <= 0) return new Map()
+    const normalized = new Map()
+    for (const [selection, implied] of impliedMap.entries()) {
+      normalized.set(selection, implied / sum)
+    }
+    return normalized
   }
 
   removeVig(offers, marketKey) {
@@ -1115,8 +1149,8 @@ export class WeeklyPipeline {
 
     const recommended = sortedPositive.slice(0, this.maxPicksPerTier).map((candidate) => ({
       ...candidate,
-      isFallback: false,
-      fallbackReason: null
+      isFallback: candidate.isFallback === true,
+      fallbackReason: candidate.isFallback ? (candidate.fallbackReason || 'Fair prob fallback to market (DG missing)') : null
     }))
 
     if (recommended.length >= this.minPicksPerTier) {
@@ -1133,11 +1167,12 @@ export class WeeklyPipeline {
       remaining.sort((a, b) => b.ev - a.ev || b.edge - a.edge || b.bestOffer.oddsDecimal - a.bestOffer.oddsDecimal)
     )
 
-    const fallbackSlots = Math.max(0, this.maxPicksPerTier - recommended.length)
+    const target = Math.min(this.maxPicksPerTier, Math.max(this.minPicksPerTier, recommended.length))
+    const fallbackSlots = Math.max(0, target - recommended.length)
     const fallback = fallbackCandidates.slice(0, fallbackSlots).map((candidate) => ({
       ...candidate,
       isFallback: true,
-      fallbackReason: 'Insufficient +EV bets to meet minimum tier count'
+      fallbackReason: candidate.fallbackReason || 'Insufficient +EV bets to meet minimum tier count'
     }))
 
     return {
@@ -1351,12 +1386,31 @@ export class WeeklyPipeline {
     return datagolf || {}
   }
 
+  classifyTier(oddsDecimal) {
+    if (!Number.isFinite(oddsDecimal)) {
+      return { tier: 'LONG_SHOTS', gap: null }
+    }
+
+    if (oddsDecimal < 6) return { tier: 'PAR', gap: null }
+    if (oddsDecimal >= 7 && oddsDecimal <= 10) return { tier: 'BIRDIE', gap: null }
+    if (oddsDecimal >= 11 && oddsDecimal <= 60) return { tier: 'EAGLE', gap: null }
+    if (oddsDecimal >= 61) return { tier: 'LONG_SHOTS', gap: null }
+
+    if (oddsDecimal >= 6 && oddsDecimal < 7) {
+      return { tier: 'BIRDIE', gap: 'gap-6-6.99-assigned-birdie' }
+    }
+    if (oddsDecimal > 10 && oddsDecimal < 11) {
+      return { tier: 'EAGLE', gap: 'gap-10.01-10.99-assigned-eagle' }
+    }
+    if (oddsDecimal > 60 && oddsDecimal < 61) {
+      return { tier: 'LONG_SHOTS', gap: 'gap-60.01-60.99-assigned-longshots' }
+    }
+
+    return { tier: 'LONG_SHOTS', gap: 'gap-unknown-assigned-longshots' }
+  }
+
   getTierForOdds(oddsDecimal) {
-    if (!Number.isFinite(oddsDecimal)) return 'LONG_SHOTS'
-    if (oddsDecimal < 6) return 'PAR'
-    if (oddsDecimal < 11) return 'BIRDIE'
-    if (oddsDecimal <= 60) return 'EAGLE'
-    return 'LONG_SHOTS'
+    return this.classifyTier(oddsDecimal).tier
   }
 
   getTierMinEdge(tier) {

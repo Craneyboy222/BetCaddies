@@ -7,10 +7,12 @@ describe('Selection strategy', () => {
 
     expect(pipeline.getTierForOdds(5.99)).toBe('PAR')
     expect(pipeline.getTierForOdds(6.0)).toBe('BIRDIE')
-    expect(pipeline.getTierForOdds(10.99)).toBe('BIRDIE')
+    expect(pipeline.getTierForOdds(7.0)).toBe('BIRDIE')
+    expect(pipeline.getTierForOdds(10.0)).toBe('BIRDIE')
+    expect(pipeline.getTierForOdds(10.5)).toBe('EAGLE')
     expect(pipeline.getTierForOdds(11.0)).toBe('EAGLE')
     expect(pipeline.getTierForOdds(60.0)).toBe('EAGLE')
-    expect(pipeline.getTierForOdds(60.01)).toBe('LONG_SHOTS')
+    expect(pipeline.getTierForOdds(61.0)).toBe('LONG_SHOTS')
   })
 
   it('computes EV from fair probability and odds', () => {
@@ -79,6 +81,23 @@ describe('Selection strategy', () => {
     expect(result.fallback.length).toBeGreaterThan(0)
     expect(result.recommended.length + result.fallback.length).toBeLessThanOrEqual(8)
     expect(result.fallback.every((pick) => pick.isFallback)).toBe(true)
+  })
+
+  it('flags fair-probability fallback candidates', () => {
+    const pipeline = new WeeklyPipeline()
+    pipeline.minPicksPerTier = 2
+    pipeline.maxPicksPerTier = 4
+    pipeline.maxPicksPerPlayer = 10
+    pipeline.maxPicksPerMarket = 10
+
+    const candidates = [
+      { selectionKey: 'a', selection: 'a', marketKey: 'win', fairProb: 0.18, marketProb: 0.18, edge: 0, ev: -0.1, bestOffer: { oddsDecimal: 5.0 }, isFallback: true, fallbackReason: 'Fair prob fallback to market (DG missing)' },
+      { selectionKey: 'b', selection: 'b', marketKey: 'win', fairProb: 0.2, marketProb: 0.18, edge: 0.02, ev: 0.1, bestOffer: { oddsDecimal: 5.0 } }
+    ]
+
+    const result = pipeline.selectTierCandidates(candidates, 'PAR')
+    expect(result.recommended.some((pick) => pick.isFallback)).toBe(false)
+    expect(result.fallback.some((pick) => pick.fallbackReason)).toBe(true)
   })
 
   it('sorts recommended picks by EV desc', () => {
