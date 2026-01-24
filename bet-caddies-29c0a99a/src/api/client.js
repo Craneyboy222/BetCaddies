@@ -172,6 +172,12 @@ export class BetCaddiesApi {
     me: async () => {
       const response = await this.client.get('/api/membership-subscriptions/me')
       return response.data || null
+    },
+    checkout: async (packageId) => {
+      const response = await this.client.post('/api/membership-subscriptions/checkout', {
+        package_id: packageId
+      })
+      return response.data || response
     }
   }
 

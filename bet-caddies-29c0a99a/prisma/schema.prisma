@@ -415,6 +415,7 @@ model MembershipPackage {
   features      Json
   badges        Json
   stripePriceId String?
+  stripeProductId String?
   displayOrder  Int      @default(0)
   enabled       Boolean  @default(true)
   createdAt     DateTime @default(now())
@@ -432,6 +433,9 @@ model MembershipSubscription {
   status           String
   billingPeriod    String
   pricePaid        Float
+  stripeCustomerId String?
+  stripeSubscriptionId String? @unique
+  stripePriceId    String?
   lifetimeValue    Float?
   nextPaymentDate  DateTime?
   createdDate      DateTime @default(now())

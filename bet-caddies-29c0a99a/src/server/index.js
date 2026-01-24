@@ -5,6 +5,7 @@ import { Blob as NodeBlob } from 'node:buffer'
 import jwt from 'jsonwebtoken'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
+import Stripe from 'stripe'
 import { z } from 'zod'
 import cron from 'node-cron'
 import { prisma } from '../db/client.js'
@@ -62,6 +63,14 @@ const summarizeDatabaseUrl = (raw) => {
 const JWT_SECRET = process.env.JWT_SECRET
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET
+const STRIPE_SUCCESS_URL = process.env.STRIPE_SUCCESS_URL
+const STRIPE_CANCEL_URL = process.env.STRIPE_CANCEL_URL
+
+const stripe = STRIPE_SECRET_KEY
+  ? new Stripe(STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' })
+  : null
 
 if (!JWT_SECRET) {
   logger.warn('JWT_SECRET is not set. Auth will fail until configured.')
@@ -74,7 +83,11 @@ const corsOrigins = process.env.CORS_ORIGIN
 // Middleware
 app.use(helmet())
 app.use(cors({ origin: corsOrigins }))
-app.use(express.json({ limit: '1mb' }))
+const jsonParser = express.json({ limit: '1mb' })
+app.use((req, res, next) => {
+  if (req.originalUrl === '/api/stripe/webhook') return next()
+  return jsonParser(req, res, next)
+})
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -182,6 +195,209 @@ const serverStatus = {
   startTime: new Date().toISOString(),
   errors: []
 };
+
+const requireStripe = () => {
+  if (!stripe) {
+    const error = new Error('Stripe is not configured')
+    error.code = 'STRIPE_NOT_CONFIGURED'
+    throw error
+  }
+  return stripe
+}
+
+const resolveMembershipPackage = async (packageId) => {
+  if (!packageId) return null
+  return await prisma.membershipPackage.findUnique({ where: { id: packageId } })
+}
+
+const upsertMembershipSubscription = async ({
+  userEmail,
+  packageId,
+  stripeCustomerId,
+  stripeSubscriptionId,
+  stripePriceId,
+  status,
+  currentPeriodEnd,
+  cancelAtPeriodEnd
+}) => {
+  if (!userEmail || !packageId) {
+    logger.warn('Stripe webhook missing subscription mapping info', {
+      userEmail: userEmail || null,
+      packageId: packageId || null,
+      stripeSubscriptionId: stripeSubscriptionId || null
+    })
+    return null
+  }
+
+  const pkg = await resolveMembershipPackage(packageId)
+  if (!pkg) {
+    logger.warn('Stripe webhook could not resolve membership package', {
+      packageId,
+      stripeSubscriptionId: stripeSubscriptionId || null
+    })
+    return null
+  }
+
+  const data = {
+    userEmail,
+    packageId: pkg.id,
+    packageName: pkg.name,
+    status,
+    billingPeriod: pkg.billingPeriod,
+    pricePaid: pkg.price,
+    stripeCustomerId: stripeCustomerId || null,
+    stripeSubscriptionId: stripeSubscriptionId || null,
+    stripePriceId: stripePriceId || pkg.stripePriceId || null,
+    nextPaymentDate: currentPeriodEnd ? new Date(currentPeriodEnd * 1000) : null,
+    cancelAtPeriodEnd: typeof cancelAtPeriodEnd === 'boolean' ? cancelAtPeriodEnd : null
+  }
+
+  if (stripeSubscriptionId) {
+    return await prisma.membershipSubscription.upsert({
+      where: { stripeSubscriptionId },
+      update: data,
+      create: data
+    })
+  }
+
+  const existing = await prisma.membershipSubscription.findFirst({
+    where: {
+      userEmail,
+      packageId: pkg.id,
+      stripeSubscriptionId: null,
+      status: 'active'
+    },
+    orderBy: { createdDate: 'desc' }
+  })
+
+  if (existing) {
+    return await prisma.membershipSubscription.update({
+      where: { id: existing.id },
+      data
+    })
+  }
+
+  return await prisma.membershipSubscription.create({ data })
+}
+
+const createStripePriceForPackage = async ({
+  packageId,
+  name,
+  description,
+  price,
+  billingPeriod,
+  stripeProductId
+}) => {
+  const stripeClient = requireStripe()
+  const normalizedPrice = Number(price)
+  if (!Number.isFinite(normalizedPrice) || normalizedPrice <= 0) {
+    throw new Error('Package price must be a positive number')
+  }
+
+  let productId = stripeProductId
+  if (!productId) {
+    const product = await stripeClient.products.create({
+      name,
+      description: description || undefined,
+      metadata: { packageId }
+    })
+    productId = product.id
+  } else {
+    await stripeClient.products.update(productId, {
+      name,
+      description: description || undefined,
+      metadata: { packageId }
+    })
+  }
+
+  const priceData = {
+    currency: 'gbp',
+    unit_amount: Math.round(normalizedPrice * 100),
+    product: productId
+  }
+
+  if (billingPeriod !== 'lifetime') {
+    priceData.recurring = {
+      interval: billingPeriod === 'yearly' ? 'year' : 'month'
+    }
+  }
+
+  const priceObj = await stripeClient.prices.create(priceData)
+
+  return {
+    stripeProductId: productId,
+    stripePriceId: priceObj.id
+  }
+}
+
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!stripe || !STRIPE_WEBHOOK_SECRET) {
+    return res.status(400).send('Stripe webhook not configured')
+  }
+
+  const signature = req.headers['stripe-signature']
+  let event
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, signature, STRIPE_WEBHOOK_SECRET)
+  } catch (error) {
+    logger.warn('Stripe webhook signature verification failed', { error: error?.message })
+    return res.status(400).send('Webhook signature verification failed')
+  }
+
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object
+      const userEmail = session?.customer_details?.email || session?.customer_email || session?.metadata?.userEmail
+      const packageId = session?.metadata?.packageId
+      const stripeCustomerId = session?.customer || null
+      const stripeSubscriptionId = session?.subscription || null
+      const stripePriceId = session?.metadata?.stripePriceId || null
+
+      if (session?.mode === 'payment') {
+        await upsertMembershipSubscription({
+          userEmail,
+          packageId,
+          stripeCustomerId,
+          stripeSubscriptionId: null,
+          stripePriceId,
+          status: 'active',
+          currentPeriodEnd: null,
+          cancelAtPeriodEnd: true
+        })
+      }
+    }
+
+    if (
+      event.type === 'customer.subscription.created' ||
+      event.type === 'customer.subscription.updated' ||
+      event.type === 'customer.subscription.deleted'
+    ) {
+      const subscription = event.data.object
+      const packageId = subscription?.metadata?.packageId
+      const userEmail = subscription?.metadata?.userEmail
+      const stripeCustomerId = subscription?.customer || null
+      const stripeSubscriptionId = subscription?.id || null
+      const stripePriceId = subscription?.items?.data?.[0]?.price?.id || null
+
+      await upsertMembershipSubscription({
+        userEmail,
+        packageId,
+        stripeCustomerId,
+        stripeSubscriptionId,
+        stripePriceId,
+        status: subscription?.status || 'active',
+        currentPeriodEnd: subscription?.current_period_end || null,
+        cancelAtPeriodEnd: subscription?.cancel_at_period_end || false
+      })
+    }
+
+    res.json({ received: true })
+  } catch (error) {
+    logger.error('Stripe webhook handler failed', { error: error?.message })
+    res.status(500).json({ error: 'Stripe webhook handler failed' })
+  }
+})
 
 const runWeeklyPipeline = async ({ dryRun = false, runMode = 'CURRENT_WEEK', overrideTour = null, overrideEventId = null, runKeyOverride = null } = {}) => {
   if (!WeeklyPipeline) {
@@ -617,6 +833,57 @@ app.get('/api/membership-subscriptions/me', authRequired, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch membership subscription' })
   }
 })
+
+app.post(
+  '/api/membership-subscriptions/checkout',
+  authRequired,
+  validateBody(z.object({
+    package_id: z.string().min(1)
+  })),
+  async (req, res) => {
+    try {
+      const email = req.user?.email
+      if (!email) return res.status(400).json({ error: 'Missing user email' })
+
+      if (!stripe || !STRIPE_SUCCESS_URL || !STRIPE_CANCEL_URL) {
+        return res.status(400).json({ error: 'Stripe checkout is not configured' })
+      }
+
+      const pkg = await prisma.membershipPackage.findUnique({ where: { id: req.body.package_id } })
+      if (!pkg || pkg.enabled === false) {
+        return res.status(404).json({ error: 'Membership package not found' })
+      }
+
+      if (!pkg.stripePriceId) {
+        return res.status(400).json({ error: 'Checkout is not configured for this package yet' })
+      }
+
+      const mode = pkg.billingPeriod === 'lifetime' ? 'payment' : 'subscription'
+
+      const session = await stripe.checkout.sessions.create({
+        mode,
+        customer_email: email,
+        line_items: [{ price: pkg.stripePriceId, quantity: 1 }],
+        allow_promotion_codes: true,
+        success_url: STRIPE_SUCCESS_URL,
+        cancel_url: STRIPE_CANCEL_URL,
+        metadata: {
+          packageId: pkg.id,
+          userEmail: email,
+          stripePriceId: pkg.stripePriceId
+        },
+        subscription_data: mode === 'subscription'
+          ? { metadata: { packageId: pkg.id, userEmail: email } }
+          : undefined
+      })
+
+      return res.json({ url: session.url })
+    } catch (error) {
+      logger.error('Error creating membership checkout session', { error: error.message })
+      return res.status(500).json({ error: 'Failed to start checkout' })
+    }
+  }
+)
 
 // Public: active Hole In One challenge
 app.get('/api/hio/challenge/active', async (req, res) => {
@@ -2158,7 +2425,7 @@ app.post(
       display_order
     } = req.body || {}
 
-    const created = await prisma.membershipPackage.create({
+    let created = await prisma.membershipPackage.create({
       data: {
         name,
         description: description || null,
@@ -2168,9 +2435,31 @@ app.post(
         badges: badges || [],
         enabled: enabled !== false,
         stripePriceId: stripe_price_id || null,
+        stripeProductId: null,
         displayOrder: Number.isFinite(display_order) ? display_order : 0
       }
     })
+
+    if (!stripe_price_id) {
+      if (!stripe) {
+        await prisma.membershipPackage.delete({ where: { id: created.id } })
+        return res.status(400).json({ error: 'Stripe is not configured for membership checkout' })
+      }
+
+      const stripeIds = await createStripePriceForPackage({
+        packageId: created.id,
+        name,
+        description,
+        price,
+        billingPeriod: billing_period,
+        stripeProductId: created.stripeProductId
+      })
+
+      created = await prisma.membershipPackage.update({
+        where: { id: created.id },
+        data: stripeIds
+      })
+    }
 
     res.json({
       data: {
@@ -2222,7 +2511,10 @@ app.put(
       display_order
     } = req.body || {}
 
-    const updated = await prisma.membershipPackage.update({
+    const existing = await prisma.membershipPackage.findUnique({ where: { id } })
+    if (!existing) return res.status(404).json({ error: 'Membership package not found' })
+
+    let updated = await prisma.membershipPackage.update({
       where: { id },
       data: {
         name,
@@ -2236,6 +2528,25 @@ app.put(
         displayOrder: Number.isFinite(display_order) ? display_order : undefined
       }
     })
+
+    const priceChanged = Number.isFinite(price) && price !== existing.price
+    const periodChanged = billing_period && billing_period !== existing.billingPeriod
+
+    if (!stripe_price_id && stripe && (priceChanged || periodChanged)) {
+      const stripeIds = await createStripePriceForPackage({
+        packageId: updated.id,
+        name: updated.name,
+        description: updated.description,
+        price: updated.price,
+        billingPeriod: updated.billingPeriod,
+        stripeProductId: updated.stripeProductId
+      })
+
+      updated = await prisma.membershipPackage.update({
+        where: { id: updated.id },
+        data: stripeIds
+      })
+    }
 
     res.json({
       data: {
