@@ -10,6 +10,8 @@ import { DataIssueTracker } from '../observability/data-issue-tracker.js'
 import { PlayerNormalizer } from '../domain/player-normalizer.js'
 import { DataGolfClient, normalizeDataGolfArray, safeLogDataGolfError } from '../sources/datagolf/index.js'
 import { parseOddsPayload, parseOutrightsOffers } from '../sources/datagolf/parsers.js'
+import { getAllowedBooks, getAllowedBooksSet, isAllowedBook } from '../sources/odds/allowed-books.js'
+import { normalizeBookKey } from '../sources/odds/book-utils.js'
 import { ProbabilityEngineV2 } from '../engine/v2/probability-engine.js'
 import { buildPlayerParams } from '../engine/v2/player-params.js'
 import { simulateTournament } from '../engine/v2/tournamentSim.js'
@@ -50,6 +52,10 @@ export class WeeklyPipeline {
     this.allowFallback = String(process.env.ALLOW_FALLBACK || '').toLowerCase() === 'true'
     this.excludeInPlay = String(process.env.EXCLUDE_IN_PLAY || 'true').toLowerCase() !== 'false'
     this.oddsMatchConfidenceThreshold = Number(process.env.ODDS_MATCH_CONFIDENCE_THRESHOLD || 0.8)
+    this.allowedBooks = getAllowedBooks()
+    this.allowedBooksSet = getAllowedBooksSet()
+    this.minBooksPerSelection = Number(process.env.MIN_BOOKS_PER_SELECTION || 2)
+    this.loggedAllowedBooks = false
     this.overrideTour = null
     this.overrideEventId = null
     this.cutRules = {
@@ -618,18 +624,42 @@ export class WeeklyPipeline {
 
         const eventId = this.getEventMeta(event)?.eventId
         if (eventId) {
-          try {
-            const histOutrights = await DataGolfClient.getHistoricalOutrights(histOddsTour, eventId, season, 'win')
-            await this.storeArtifact(run.id, event.tour, 'historical-odds/outrights', { tour: histOddsTour, eventId, season, market: 'win' }, histOutrights)
-          } catch (error) {
-            safeLogDataGolfError('historical-odds-outrights', error, { tour: event.tour })
+          const allowedBooks = this.allowedBooks.length > 0 ? this.allowedBooks : getAllowedBooks()
+          const combinedOutrights = []
+          for (const book of allowedBooks) {
+            try {
+              const histOutrights = await DataGolfClient.getHistoricalOutrights(histOddsTour, eventId, season, 'win', book)
+              combinedOutrights.push(...normalizeDataGolfArray(histOutrights))
+            } catch (error) {
+              safeLogDataGolfError('historical-odds-outrights', error, { tour: event.tour, book })
+            }
+          }
+          if (combinedOutrights.length > 0) {
+            await this.storeArtifact(run.id, event.tour, 'historical-odds/outrights', {
+              tour: histOddsTour,
+              eventId,
+              season,
+              market: 'win',
+              books: allowedBooks
+            }, combinedOutrights)
           }
 
-          try {
-            const histMatchups = await DataGolfClient.getHistoricalMatchups(histOddsTour, eventId, season)
-            await this.storeArtifact(run.id, event.tour, 'historical-odds/matchups', { tour: histOddsTour, eventId, season }, histMatchups)
-          } catch (error) {
-            safeLogDataGolfError('historical-odds-matchups', error, { tour: event.tour })
+          const combinedMatchups = []
+          for (const book of allowedBooks) {
+            try {
+              const histMatchups = await DataGolfClient.getHistoricalMatchups(histOddsTour, eventId, season, book)
+              combinedMatchups.push(...normalizeDataGolfArray(histMatchups))
+            } catch (error) {
+              safeLogDataGolfError('historical-odds-matchups', error, { tour: event.tour, book })
+            }
+          }
+          if (combinedMatchups.length > 0) {
+            await this.storeArtifact(run.id, event.tour, 'historical-odds/matchups', {
+              tour: histOddsTour,
+              eventId,
+              season,
+              books: allowedBooks
+            }, combinedMatchups)
           }
         }
       }
@@ -640,6 +670,11 @@ export class WeeklyPipeline {
     const oddsData = []
     const debugToursLogged = new Set()
     const debugEnabled = String(process.env.DEBUG_DATAGOLF || '').toLowerCase() === 'true'
+
+    if (!this.loggedAllowedBooks) {
+      logStep('odds', `Allowed books: ${this.allowedBooks.join(', ')}`)
+      this.loggedAllowedBooks = true
+    }
 
     for (const event of tourEvents) {
       const tourCode = DataGolfClient.resolveTourCode(event.tour, 'odds')
@@ -743,8 +778,18 @@ export class WeeklyPipeline {
             continue
           }
 
-          const offers = parsed.offers
-          const bookCount = this.countBooksFromOffers(offers)
+          const offers = this.filterOffersByAllowedBooks(parsed.offers)
+          this.logOddsBookSummary(event, marketKey, offers)
+          const { filtered: mappedOffers, dropped } = this.filterOffersBySelectionId(offers)
+          if (dropped.count > 0) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'PLAYER_ID_UNMAPPED', {
+              eventName: event.eventName,
+              market: marketKey,
+              count: dropped.count,
+              sample: dropped.sample
+            })
+          }
+          const bookCount = this.countBooksFromOffers(mappedOffers)
           const attachInfo = this.resolveOddsAttachment(event, parsed.meta)
           if (parsed.meta.eventId && parsed.meta.eventId !== oddsEvent.externalEventId) {
             await prisma.oddsEvent.update({
@@ -762,12 +807,17 @@ export class WeeklyPipeline {
             })
           }
           if (offers.length === 0) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'ODDS_NOT_AVAILABLE_ALLOWED_BOOKS', {
+              eventName: event.eventName,
+              market: marketKey,
+              allowedBooks: this.allowedBooks
+            })
             continue
           }
           if (attachInfo.method === 'tour-default' && !attachInfo.eventIdPresent && !attachInfo.eventNamePresent) {
             logStep('odds', `Outrights attach fallback (no event id/name in payload) (${marketKey}, ${event.tour}/${tourCode})`)
           }
-          logStep('odds', `Outrights rows=${rows.length} offers=${offers.length} books=${bookCount} eventId=${attachInfo.eventIdPresent} eventName=${attachInfo.eventNamePresent} attach=${attachInfo.method} (${marketKey}, ${event.tour}/${tourCode})`)
+          logStep('odds', `Outrights rows=${rows.length} offers=${mappedOffers.length} books=${bookCount} eventId=${attachInfo.eventIdPresent} eventName=${attachInfo.eventNamePresent} attach=${attachInfo.method} (${marketKey}, ${event.tour}/${tourCode})`)
 
           const market = await prisma.oddsMarket.create({
             data: {
@@ -784,7 +834,7 @@ export class WeeklyPipeline {
             }
           })
 
-          for (const offer of offers) {
+          for (const offer of mappedOffers) {
             await prisma.oddsOffer.create({
               data: {
                 oddsMarketId: market.id,
@@ -801,7 +851,7 @@ export class WeeklyPipeline {
 
           markets.push({
             marketKey,
-            oddsOffers: offers
+            oddsOffers: mappedOffers
           })
 
           await this.storeArtifact(run.id, event.tour, 'betting-tools/outrights', { tourCode, market: marketCode }, payload)
@@ -901,8 +951,18 @@ export class WeeklyPipeline {
             continue
           }
 
-          const offers = this.parseMatchupOffers(rows)
-          const bookCount = this.countBooksFromOffers(offers)
+          const offers = this.filterOffersByAllowedBooks(this.parseMatchupOffers(rows))
+          this.logOddsBookSummary(event, marketKey, offers)
+          const { filtered: mappedOffers, dropped } = this.filterOffersBySelectionId(offers)
+          if (dropped.count > 0) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'PLAYER_ID_UNMAPPED', {
+              eventName: event.eventName,
+              market: marketKey,
+              count: dropped.count,
+              sample: dropped.sample
+            })
+          }
+          const bookCount = this.countBooksFromOffers(mappedOffers)
           const attachInfo = this.resolveOddsAttachment(event, parsed.meta)
           if (parsed.meta.eventId && parsed.meta.eventId !== oddsEvent.externalEventId) {
             await prisma.oddsEvent.update({
@@ -913,8 +973,13 @@ export class WeeklyPipeline {
           if (attachInfo.method === 'tour-default' && !attachInfo.eventIdPresent && !attachInfo.eventNamePresent) {
             logStep('odds', `Matchups attach fallback (no event id/name in payload) (${marketKey}, ${event.tour}/${tourCode})`)
           }
-          logStep('odds', `Matchups rows=${rows.length} offers=${offers.length} books=${bookCount} eventId=${attachInfo.eventIdPresent} eventName=${attachInfo.eventNamePresent} attach=${attachInfo.method} (${marketKey}, ${event.tour}/${tourCode})`)
+          logStep('odds', `Matchups rows=${rows.length} offers=${mappedOffers.length} books=${bookCount} eventId=${attachInfo.eventIdPresent} eventName=${attachInfo.eventNamePresent} attach=${attachInfo.method} (${marketKey}, ${event.tour}/${tourCode})`)
           if (offers.length === 0) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'ODDS_NOT_AVAILABLE_ALLOWED_BOOKS', {
+              eventName: event.eventName,
+              market: marketKey,
+              allowedBooks: this.allowedBooks
+            })
             continue
           }
 
@@ -933,7 +998,7 @@ export class WeeklyPipeline {
             }
           })
 
-          for (const offer of offers) {
+          for (const offer of mappedOffers) {
             await prisma.oddsOffer.create({
               data: {
                 oddsMarketId: market.id,
@@ -950,7 +1015,7 @@ export class WeeklyPipeline {
 
           markets.push({
             marketKey,
-            oddsOffers: offers
+            oddsOffers: mappedOffers
           })
 
           matchupMarketsFetched += 1
@@ -1130,10 +1195,14 @@ export class WeeklyPipeline {
         const marketFairProbs = this.computeMarketProbabilities(offersBySelection, offersByBook, market.marketKey)
         const normalizedImplied = this.computeNormalizedImplied(offersBySelection)
         const selectionKeys = Object.keys(offersBySelection)
+        const averageBooksPerPlayer = selectionKeys.length === 0
+          ? 0
+          : selectionKeys.reduce((sum, key) => sum + this.getBooksUsedForSelection(offersBySelection[key]).length, 0) / selectionKeys.length
         if (rawSelections.size > 0) {
           const coverage = selectionKeys.length / rawSelections.size
           logStep('selection', `Field↔odds coverage ${event.tour}/${event.eventName} market=${market.marketKey} matched=${selectionKeys.length} total=${rawSelections.size} coverage=${(coverage * 100).toFixed(1)}%`)
         }
+        logStep('selection', `Market coverage ${event.tour}/${event.eventName} market=${market.marketKey} players=${selectionKeys.length} avgBooks=${averageBooksPerPlayer.toFixed(2)}`)
         const stat = {
           market: market.marketKey,
           offers: offers.length,
@@ -1150,7 +1219,9 @@ export class WeeklyPipeline {
             outOfRangeProb: 0
           },
           marketFallbackUsed: 0,
-          marketProbMissing: 0
+          marketProbMissing: 0,
+          lowBookCoverage: 0,
+          lowBookCoverageSample: []
         }
 
         for (const [selectionKey, selectionOffers] of Object.entries(offersBySelection)) {
@@ -1170,6 +1241,16 @@ export class WeeklyPipeline {
           const marketProbSource = hasConsensus
             ? 'vig_removed_consensus'
             : (normalizedImplied.has(selectionKey) ? 'normalized_implied' : 'missing')
+          const booksUsed = this.getBooksUsedForSelection(selectionOffers)
+          if (booksUsed.length > 0 && booksUsed.length < this.minBooksPerSelection) {
+            stat.lowBookCoverage += 1
+            if (stat.lowBookCoverageSample.length < 5) {
+              stat.lowBookCoverageSample.push({
+                selection: selectionKey,
+                booksUsed
+              })
+            }
+          }
 
           if (!modelAvailable) {
             if (!this.allowFallback) {
@@ -1200,7 +1281,8 @@ export class WeeklyPipeline {
               fallbackReason: 'Simulation model unavailable',
               fallbackType: 'no_model',
               tierStatus: 'NO_MODEL',
-              mode: recommendationMode
+              mode: recommendationMode,
+              booksUsed
             })
             stat.validMarket += 1
             continue
@@ -1281,7 +1363,8 @@ export class WeeklyPipeline {
             isFallback: false,
             fallbackReason: null,
             fallbackType: null,
-            mode: recommendationMode
+            mode: recommendationMode,
+            booksUsed
           })
         }
 
@@ -1304,6 +1387,9 @@ export class WeeklyPipeline {
             market: stat.market,
             count: stat.marketProbMissing
           })
+        }
+        if (stat.lowBookCoverage > 0) {
+          await this.logLowBookCoverage(issueTracker, event, stat.market, stat.lowBookCoverage, stat.lowBookCoverageSample)
         }
       }
 
@@ -1672,7 +1758,8 @@ export class WeeklyPipeline {
       fallbackReason: candidate.fallbackReason || null,
       fallbackType: candidate.fallbackType || (isFallback ? 'tier_min_fill' : null),
       tierStatus,
-      mode: candidate.mode || 'PRE_TOURNAMENT'
+      mode: candidate.mode || 'PRE_TOURNAMENT',
+      booksUsed: candidate.booksUsed || null
     }
   }
 
@@ -1741,16 +1828,23 @@ export class WeeklyPipeline {
       const players = row.players || row.matchup || row.selection
       const selection = Array.isArray(players) ? players.join(' vs ') : players
       if (!selection) continue
+      const selectionId = row.dg_id || row.player_id || row.id || null
 
       if (row.book && row.odds != null) {
-        offers.push(this.buildOffer(selection, row.book, row.odds))
+        offers.push({
+          ...this.buildOffer(selection, row.book, row.odds),
+          selectionId: selectionId ? String(selectionId) : null
+        })
         continue
       }
 
       if (Array.isArray(row.books)) {
         for (const book of row.books) {
           if (!book?.book || book?.odds == null) continue
-          offers.push(this.buildOffer(selection, book.book, book.odds))
+          offers.push({
+            ...this.buildOffer(selection, book.book, book.odds),
+            selectionId: selectionId ? String(selectionId) : null
+          })
         }
       }
     }
@@ -1764,6 +1858,69 @@ export class WeeklyPipeline {
       if (offer?.bookmaker) books.add(String(offer.bookmaker))
     }
     return books.size
+  }
+
+  filterOffersByAllowedBooks(offers = []) {
+    if (!offers.length) return []
+    return offers.filter((offer) => {
+      const bookKey = normalizeBookKey(offer.book || offer.bookmaker)
+      return bookKey ? isAllowedBook(bookKey, this.allowedBooksSet) : false
+    }).map((offer) => ({
+      ...offer,
+      book: normalizeBookKey(offer.book || offer.bookmaker) || offer.book,
+      bookmaker: normalizeBookKey(offer.bookmaker || offer.book) || offer.bookmaker
+    }))
+  }
+
+  filterOffersBySelectionId(offers = []) {
+    const filtered = []
+    const dropped = { count: 0, sample: [] }
+    for (const offer of offers) {
+      if (!offer.selectionId) {
+        dropped.count += 1
+        if (dropped.sample.length < 5) {
+          dropped.sample.push({
+            book: offer.book || offer.bookmaker || null,
+            player_name: offer.selectionName || offer.selection || null
+          })
+        }
+        continue
+      }
+      filtered.push(offer)
+    }
+    return { filtered, dropped }
+  }
+
+  getBooksUsedForSelection(offers = []) {
+    const books = new Set()
+    for (const offer of offers) {
+      const book = normalizeBookKey(offer.book || offer.bookmaker)
+      if (!book) continue
+      if (!this.allowedBooksSet.has(book)) continue
+      books.add(book)
+    }
+    return Array.from(books)
+  }
+
+  logOddsBookSummary(event, marketKey, offers = []) {
+    const counts = {}
+    for (const offer of offers) {
+      const book = normalizeBookKey(offer.book || offer.bookmaker)
+      if (!book) continue
+      counts[book] = (counts[book] || 0) + 1
+    }
+    logStep('odds', `Allowed-book odds counts ${event.tour}/${event.eventName} market=${marketKey} byBook=${JSON.stringify(counts)}`)
+  }
+
+  async logLowBookCoverage(issueTracker, event, marketKey, count, sample = []) {
+    if (!issueTracker?.logIssue) return
+    await issueTracker.logIssue(event.tour, 'warning', 'selection', 'LOW_BOOK_COVERAGE', {
+      eventName: event.eventName,
+      market: marketKey,
+      minBooks: this.minBooksPerSelection,
+      count,
+      sample
+    })
   }
 
   resolveOddsAttachment(event, payloadMeta = {}) {

@@ -279,6 +279,7 @@ model BetRecommendation {
   fallbackType      String?
   tierStatus        String?
   mode              String?
+  booksUsed         Json?
   analysisParagraph String
   analysisBullets   Json     // JSON array of bullet points
   createdAt         DateTime @default(now())

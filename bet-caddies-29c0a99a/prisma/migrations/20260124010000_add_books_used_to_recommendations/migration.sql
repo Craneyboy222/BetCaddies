@@ -1,0 +1,1 @@
+ALTER TABLE "bet_recommendations" ADD COLUMN "booksUsed" JSONB;

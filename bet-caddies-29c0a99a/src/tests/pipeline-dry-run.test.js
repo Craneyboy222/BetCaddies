@@ -54,8 +54,8 @@ describe('WeeklyPipeline dry run', () => {
       {
         marketKey: 'win',
         oddsOffers: [
-          { selectionName: 'player one', selectionKey: 'player one', bookmaker: 'book', oddsDecimal: 5, oddsDisplay: '5.0', fetchedAt: new Date() },
-          { selectionName: 'player two', selectionKey: 'player two', bookmaker: 'book', oddsDecimal: 7, oddsDisplay: '7.0', fetchedAt: new Date() }
+          { selectionName: 'player one', selectionKey: 'player one', bookmaker: 'bet365', oddsDecimal: 5, oddsDisplay: '5.0', fetchedAt: new Date() },
+          { selectionName: 'player two', selectionKey: 'player two', bookmaker: 'bet365', oddsDecimal: 7, oddsDisplay: '7.0', fetchedAt: new Date() }
         ]
       }
     ])
@@ -78,7 +78,7 @@ describe('WeeklyPipeline dry run', () => {
           {
             marketKey: 'win',
             oddsOffers: [
-              { selectionName: 'player one', selectionKey: 'player one', bookmaker: 'book', oddsDecimal: 5, oddsDisplay: '5.0', fetchedAt: new Date() }
+              { selectionName: 'player one', selectionKey: 'player one', bookmaker: 'bet365', oddsDecimal: 5, oddsDisplay: '5.0', fetchedAt: new Date() }
             ]
           }
         ]

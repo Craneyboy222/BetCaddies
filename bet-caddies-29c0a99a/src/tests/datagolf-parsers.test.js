@@ -10,7 +10,8 @@ describe('parseOutrightsOffers', () => {
           dg_id: 101,
           odds: {
             draftkings: 12.5,
-            bet365: 11.0
+            bet365: 11.0,
+            betfair: 10.0
           }
         },
         {
@@ -18,7 +19,8 @@ describe('parseOutrightsOffers', () => {
           dg_id: 202,
           books: [
             { book: 'pinnacle', odds: 13.2 },
-            { book: 'fanduel', odds: 14.0 }
+            { book: 'skybet', odds: 14.0 },
+            { book: 'unibet', odds: 12.0 }
           ]
         }
       ]
@@ -28,6 +30,8 @@ describe('parseOutrightsOffers', () => {
     const books = new Set(parsed.offers.map((offer) => offer.book))
 
     expect(parsed.offers.length).toBeGreaterThan(0)
-    expect(books.size).toBeGreaterThan(0)
+    expect(Array.from(books)).toEqual(expect.arrayContaining(['bet365', 'betfair', 'skybet', 'unibet']))
+    expect(books.has('draftkings')).toBe(false)
+    expect(books.has('pinnacle')).toBe(false)
   })
 })

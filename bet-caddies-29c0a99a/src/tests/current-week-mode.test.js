@@ -75,8 +75,8 @@ describe('CURRENT_WEEK run mode', () => {
       {
         marketKey: 'win',
         oddsOffers: [
-          { selectionName: 'player one', selectionKey: 'player one', bookmaker: 'book', oddsDecimal: 10, oddsDisplay: '10.0', fetchedAt: new Date() },
-          { selectionName: 'player two', selectionKey: 'player two', bookmaker: 'book', oddsDecimal: 12, oddsDisplay: '12.0', fetchedAt: new Date() }
+          { selectionName: 'player one', selectionKey: 'player one', bookmaker: 'bet365', oddsDecimal: 10, oddsDisplay: '10.0', fetchedAt: new Date() },
+          { selectionName: 'player two', selectionKey: 'player two', bookmaker: 'bet365', oddsDecimal: 12, oddsDisplay: '12.0', fetchedAt: new Date() }
         ]
       }
     ])
