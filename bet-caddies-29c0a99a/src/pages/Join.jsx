@@ -115,11 +115,11 @@ export default function Join() {
       >
         {/* Logo */}
         <div className="text-center mb-10">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center mx-auto mb-4 overflow-hidden">
+          <div className="w-32 h-32 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center mx-auto mb-4 overflow-hidden">
             <img
               src="/brand/logo.png"
               alt="Bet Caddies"
-              className="w-12 h-12 object-contain"
+              className="w-24 h-24 object-contain"
             />
           </div>
           <h1 className="text-3xl font-bold text-white">{hero.title}</h1>

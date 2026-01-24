@@ -107,12 +107,12 @@ export default function Layout({ children, currentPageName }) {
 
       {/* Header */}
       <header className="fixed top-0 left-0 right-0 z-50 backdrop-blur-xl bg-slate-900/70 border-b border-slate-800/50">
-        <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 h-32 flex items-center justify-between">
           <Link to={createPageUrl('Home')} className="flex items-center">
             <img
               src="/brand/logo.png"
               alt="Bet Caddies"
-              className="h-16 w-auto object-contain"
+              className="h-32 w-auto object-contain"
             />
           </Link>
 
