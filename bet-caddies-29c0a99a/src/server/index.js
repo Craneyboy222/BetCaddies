@@ -3,11 +3,15 @@ import cors from 'cors'
 import fs from 'fs';
 import { Blob as NodeBlob } from 'node:buffer'
 import jwt from 'jsonwebtoken'
+import crypto from 'node:crypto'
+import path from 'node:path'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import Stripe from 'stripe'
 import { z } from 'zod'
 import cron from 'node-cron'
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
 import { liveTrackingService } from '../live-tracking/live-tracking-service.js'
@@ -68,10 +72,36 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET
 const STRIPE_SUCCESS_URL = process.env.STRIPE_SUCCESS_URL
 const STRIPE_CANCEL_URL = process.env.STRIPE_CANCEL_URL
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY
+const R2_BUCKET = process.env.R2_BUCKET
+const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL
 
 const stripe = STRIPE_SECRET_KEY
   ? new Stripe(STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' })
   : null
+
+const getR2Client = () => {
+  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) return null
+  return new S3Client({
+    region: 'auto',
+    endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: R2_ACCESS_KEY_ID,
+      secretAccessKey: R2_SECRET_ACCESS_KEY
+    }
+  })
+}
+
+const requireR2 = () => {
+  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET || !R2_PUBLIC_BASE_URL) {
+    const error = new Error('R2 is not configured')
+    error.code = 'R2_NOT_CONFIGURED'
+    throw error
+  }
+  return true
+}
 
 if (!JWT_SECRET) {
   logger.warn('JWT_SECRET is not set. Auth will fail until configured.')
@@ -1183,6 +1213,32 @@ app.get('/api/site-content/:key', async (req, res) => {
   } catch (error) {
     logger.error('Failed to fetch site content item', { error: error.message })
     res.status(500).json({ error: 'Failed to fetch site content item' })
+  }
+})
+
+// Public CMS page endpoints
+app.get('/api/pages/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params
+    const page = await prisma.page.findUnique({ where: { slug } })
+    if (!page || page.status !== 'published') return res.status(404).json({ error: 'Not found' })
+    res.json({
+      data: {
+        id: page.id,
+        slug: page.slug,
+        title: page.title,
+        status: page.status,
+        template_key: page.templateKey,
+        blocks: page.blocks,
+        seo: page.seo,
+        created_at: page.createdAt,
+        updated_at: page.updatedAt,
+        published_at: page.publishedAt
+      }
+    })
+  } catch (error) {
+    logger.error('Failed to fetch page', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch page' })
   }
 })
 
@@ -2383,6 +2439,394 @@ app.delete('/api/entities/site-content/:key', authRequired, adminOnly, async (re
     res.status(500).json({ error: 'Failed to delete site content' })
   }
 })
+
+const pageInputSchema = z.object({
+  slug: z.string().min(1),
+  title: z.string().min(1),
+  status: z.enum(['draft', 'published']).optional(),
+  template_key: z.string().optional().nullable(),
+  blocks: z.any().optional(),
+  seo: z.any().optional().nullable()
+})
+
+const pageUpdateSchema = z.object({
+  slug: z.string().min(1).optional(),
+  title: z.string().min(1).optional(),
+  status: z.enum(['draft', 'published']).optional(),
+  template_key: z.string().optional().nullable(),
+  blocks: z.any().optional(),
+  seo: z.any().optional().nullable()
+})
+
+// Admin: CMS pages
+app.get('/api/entities/pages', authRequired, adminOnly, async (req, res) => {
+  try {
+    const items = await prisma.page.findMany({ orderBy: { updatedAt: 'desc' } })
+    res.json({
+      data: items.map((page) => ({
+        id: page.id,
+        slug: page.slug,
+        title: page.title,
+        status: page.status,
+        template_key: page.templateKey,
+        blocks: page.blocks,
+        seo: page.seo,
+        created_at: page.createdAt,
+        updated_at: page.updatedAt,
+        published_at: page.publishedAt
+      }))
+    })
+  } catch (error) {
+    logger.error('Error fetching pages:', error)
+    res.status(500).json({ error: 'Failed to fetch pages' })
+  }
+})
+
+app.post(
+  '/api/entities/pages',
+  authRequired,
+  adminOnly,
+  validateBody(pageInputSchema),
+  async (req, res) => {
+    try {
+      const { slug, title, status, template_key, blocks, seo } = req.body
+      const existing = await prisma.page.findUnique({ where: { slug } })
+      if (existing) return res.status(400).json({ error: 'Slug already exists' })
+
+      const created = await prisma.page.create({
+        data: {
+          slug,
+          title,
+          status: status || 'draft',
+          templateKey: template_key || null,
+          blocks: blocks ?? [],
+          seo: seo ?? null,
+          publishedAt: status === 'published' ? new Date() : null
+        }
+      })
+
+      await prisma.pageRevision.create({
+        data: {
+          pageId: created.id,
+          version: 1,
+          title: created.title,
+          blocks: created.blocks
+        }
+      })
+
+      await writeAuditLog({
+        req,
+        action: 'page.create',
+        entityType: 'Page',
+        entityId: created.id,
+        afterJson: { slug: created.slug, title: created.title, status: created.status }
+      })
+
+      res.json({
+        data: {
+          id: created.id,
+          slug: created.slug,
+          title: created.title,
+          status: created.status,
+          template_key: created.templateKey,
+          blocks: created.blocks,
+          seo: created.seo,
+          created_at: created.createdAt,
+          updated_at: created.updatedAt,
+          published_at: created.publishedAt
+        }
+      })
+    } catch (error) {
+      logger.error('Error creating page:', error)
+      res.status(500).json({ error: 'Failed to create page' })
+    }
+  }
+)
+
+app.put(
+  '/api/entities/pages/:id',
+  authRequired,
+  adminOnly,
+  validateBody(pageUpdateSchema),
+  async (req, res) => {
+    try {
+      const { id } = req.params
+      const before = await prisma.page.findUnique({ where: { id } })
+      if (!before) return res.status(404).json({ error: 'Not found' })
+
+      const nextStatus = req.body.status ?? before.status
+      const publishedAt = nextStatus === 'published'
+        ? (before.publishedAt || new Date())
+        : null
+
+      const updated = await prisma.page.update({
+        where: { id },
+        data: {
+          slug: req.body.slug ?? before.slug,
+          title: req.body.title ?? before.title,
+          status: nextStatus,
+          templateKey: req.body.template_key ?? before.templateKey,
+          blocks: req.body.blocks ?? before.blocks,
+          seo: req.body.seo ?? before.seo,
+          publishedAt
+        }
+      })
+
+      const latestRevision = await prisma.pageRevision.findFirst({
+        where: { pageId: updated.id },
+        orderBy: { version: 'desc' }
+      })
+      const nextVersion = (latestRevision?.version || 0) + 1
+      await prisma.pageRevision.create({
+        data: {
+          pageId: updated.id,
+          version: nextVersion,
+          title: updated.title,
+          blocks: updated.blocks
+        }
+      })
+
+      await writeAuditLog({
+        req,
+        action: 'page.update',
+        entityType: 'Page',
+        entityId: updated.id,
+        beforeJson: { slug: before.slug, title: before.title, status: before.status },
+        afterJson: { slug: updated.slug, title: updated.title, status: updated.status }
+      })
+
+      res.json({
+        data: {
+          id: updated.id,
+          slug: updated.slug,
+          title: updated.title,
+          status: updated.status,
+          template_key: updated.templateKey,
+          blocks: updated.blocks,
+          seo: updated.seo,
+          created_at: updated.createdAt,
+          updated_at: updated.updatedAt,
+          published_at: updated.publishedAt
+        }
+      })
+    } catch (error) {
+      logger.error('Error updating page:', error)
+      res.status(500).json({ error: 'Failed to update page' })
+    }
+  }
+)
+
+app.delete('/api/entities/pages/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const before = await prisma.page.findUnique({ where: { id } })
+    if (!before) return res.status(404).json({ error: 'Not found' })
+    await prisma.page.delete({ where: { id } })
+    await writeAuditLog({
+      req,
+      action: 'page.delete',
+      entityType: 'Page',
+      entityId: id,
+      beforeJson: { slug: before.slug, title: before.title, status: before.status }
+    })
+    res.json({ ok: true })
+  } catch (error) {
+    logger.error('Error deleting page:', error)
+    res.status(500).json({ error: 'Failed to delete page' })
+  }
+})
+
+app.get('/api/entities/pages/:id/revisions', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const revisions = await prisma.pageRevision.findMany({
+      where: { pageId: id },
+      orderBy: { version: 'desc' }
+    })
+    res.json({
+      data: revisions.map((rev) => ({
+        id: rev.id,
+        page_id: rev.pageId,
+        version: rev.version,
+        title: rev.title,
+        blocks: rev.blocks,
+        created_at: rev.createdAt
+      }))
+    })
+  } catch (error) {
+    logger.error('Error fetching page revisions:', error)
+    res.status(500).json({ error: 'Failed to fetch page revisions' })
+  }
+})
+
+// Admin: media assets
+app.get('/api/entities/media-assets', authRequired, adminOnly, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 100, 500)
+    const items = await prisma.mediaAsset.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit
+    })
+    res.json({
+      data: items.map((asset) => ({
+        id: asset.id,
+        provider: asset.provider,
+        url: asset.url,
+        public_id: asset.publicId,
+        resource_type: asset.resourceType,
+        folder: asset.folder,
+        file_name: asset.fileName,
+        bytes: asset.bytes,
+        width: asset.width,
+        height: asset.height,
+        format: asset.format,
+        alt_text: asset.altText,
+        created_at: asset.createdAt,
+        updated_at: asset.updatedAt
+      }))
+    })
+  } catch (error) {
+    logger.error('Error fetching media assets:', error)
+    res.status(500).json({ error: 'Failed to fetch media assets' })
+  }
+})
+
+app.post(
+  '/api/entities/media-assets',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    provider: z.string().min(1),
+    url: z.string().url(),
+    public_id: z.string().optional().nullable(),
+    resource_type: z.string().optional().nullable(),
+    folder: z.string().optional().nullable(),
+    file_name: z.string().optional().nullable(),
+    bytes: z.number().int().optional().nullable(),
+    width: z.number().int().optional().nullable(),
+    height: z.number().int().optional().nullable(),
+    format: z.string().optional().nullable(),
+    alt_text: z.string().optional().nullable()
+  })),
+  async (req, res) => {
+    try {
+      const asset = await prisma.mediaAsset.create({
+        data: {
+          provider: req.body.provider,
+          url: req.body.url,
+          publicId: req.body.public_id || null,
+          resourceType: req.body.resource_type || null,
+          folder: req.body.folder || null,
+          fileName: req.body.file_name || null,
+          bytes: req.body.bytes ?? null,
+          width: req.body.width ?? null,
+          height: req.body.height ?? null,
+          format: req.body.format || null,
+          altText: req.body.alt_text || null
+        }
+      })
+
+      await writeAuditLog({
+        req,
+        action: 'media.create',
+        entityType: 'MediaAsset',
+        entityId: asset.id,
+        afterJson: { url: asset.url, provider: asset.provider }
+      })
+
+      res.json({
+        data: {
+          id: asset.id,
+          provider: asset.provider,
+          url: asset.url,
+          public_id: asset.publicId,
+          resource_type: asset.resourceType,
+          folder: asset.folder,
+          file_name: asset.fileName,
+          bytes: asset.bytes,
+          width: asset.width,
+          height: asset.height,
+          format: asset.format,
+          alt_text: asset.altText,
+          created_at: asset.createdAt,
+          updated_at: asset.updatedAt
+        }
+      })
+    } catch (error) {
+      logger.error('Error creating media asset:', error)
+      res.status(500).json({ error: 'Failed to create media asset' })
+    }
+  }
+)
+
+app.delete('/api/entities/media-assets/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const before = await prisma.mediaAsset.findUnique({ where: { id } })
+    if (!before) return res.status(404).json({ error: 'Not found' })
+    await prisma.mediaAsset.delete({ where: { id } })
+    await writeAuditLog({
+      req,
+      action: 'media.delete',
+      entityType: 'MediaAsset',
+      entityId: id,
+      beforeJson: { url: before.url, provider: before.provider }
+    })
+    res.json({ ok: true })
+  } catch (error) {
+    logger.error('Error deleting media asset:', error)
+    res.status(500).json({ error: 'Failed to delete media asset' })
+  }
+})
+
+app.post(
+  '/api/entities/media-assets/upload-url',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    filename: z.string().min(1),
+    contentType: z.string().min(1),
+    folder: z.string().optional()
+  })),
+  async (req, res) => {
+    try {
+      requireR2()
+      const { filename, contentType, folder } = req.body
+      const safeFolder = String(folder || 'uploads')
+        .replace(/[^a-zA-Z0-9/_-]/g, '')
+        .replace(/^\/+/, '')
+        .replace(/\/+$/, '')
+
+      const ext = path.extname(filename)
+      const key = `${safeFolder}/${Date.now()}-${crypto.randomUUID()}${ext || ''}`
+
+      const client = getR2Client()
+      if (!client) return res.status(500).json({ error: 'R2 client not available' })
+
+      const command = new PutObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: key,
+        ContentType: contentType,
+        CacheControl: 'public, max-age=31536000'
+      })
+
+      const uploadUrl = await getSignedUrl(client, command, { expiresIn: 60 })
+      const publicBase = String(R2_PUBLIC_BASE_URL || '').replace(/\/+$/, '')
+      const publicUrl = `${publicBase}/${key}`
+
+      res.json({
+        data: {
+          uploadUrl,
+          publicUrl,
+          key
+        }
+      })
+    } catch (error) {
+      logger.error('Error creating R2 upload URL:', { error: error?.message })
+      res.status(500).json({ error: error.message || 'Failed to create upload URL' })
+    }
+  }
+)
 
 // Admin: audit logs
 app.get('/api/entities/audit-logs', authRequired, adminOnly, async (req, res) => {

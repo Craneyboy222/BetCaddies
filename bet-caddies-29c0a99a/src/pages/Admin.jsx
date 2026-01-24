@@ -15,13 +15,17 @@ import {
   Trash2,
   Check,
   X,
+  ArrowUp,
+  ArrowDown,
   ChevronDown,
   BarChart3,
   Building2,
   Clock,
   Eye,
   CreditCard,
-  Trophy
+  Trophy,
+  LayoutTemplate,
+  Image
 } from 'lucide-react';
 import SubscriptionCRM from '@/components/admin/SubscriptionCRM';
 import HIOChallengeAdmin from '@/components/admin/HIOChallengeAdmin';
@@ -71,6 +75,12 @@ export default function Admin() {
   const [contentKey, setContentKey] = useState('home');
   const [contentDraft, setContentDraft] = useState(null);
   const [viewingAuditLog, setViewingAuditLog] = useState(null);
+  const [pageSearch, setPageSearch] = useState('');
+  const [editingPage, setEditingPage] = useState(null);
+  const [pageDraft, setPageDraft] = useState(null);
+  const [creatingPage, setCreatingPage] = useState(false);
+  const [mediaUploading, setMediaUploading] = useState(false);
+  const [mediaError, setMediaError] = useState(null);
 
   const queryClient = useQueryClient();
 
@@ -172,6 +182,18 @@ export default function Admin() {
     queryFn: () => api.entities.OddsEvent.get(viewingOddsEventId)
   });
 
+  const { data: pages = [], isLoading: pagesLoading } = useQuery({
+    queryKey: ['cmsPages'],
+    enabled: !!user,
+    queryFn: () => api.entities.Page.list()
+  });
+
+  const { data: mediaAssets = [], isLoading: mediaAssetsLoading } = useQuery({
+    queryKey: ['mediaAssets'],
+    enabled: !!user,
+    queryFn: () => api.entities.MediaAsset.list(200)
+  });
+
   // Mutations
   const updateBetMutation = useMutation({
     mutationFn: ({ id, data }) => api.entities.GolfBet.update(id, data),
@@ -206,6 +228,269 @@ export default function Admin() {
     mutationFn: (id) => api.entities.BettingProvider.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['allProviders'] })
   });
+
+  const createPageMutation = useMutation({
+    mutationFn: (data) => api.entities.Page.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['cmsPages'] });
+      setCreatingPage(false);
+      setEditingPage(null);
+      setPageDraft(null);
+    }
+  });
+
+  const updatePageMutation = useMutation({
+    mutationFn: ({ id, data }) => api.entities.Page.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['cmsPages'] });
+      setEditingPage(null);
+      setPageDraft(null);
+    }
+  });
+
+  const deletePageMutation = useMutation({
+    mutationFn: (id) => api.entities.Page.delete(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cmsPages'] })
+  });
+
+  const createMediaAssetMutation = useMutation({
+    mutationFn: (data) => api.entities.MediaAsset.create(data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mediaAssets'] })
+  });
+
+  const deleteMediaAssetMutation = useMutation({
+    mutationFn: (id) => api.entities.MediaAsset.delete(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mediaAssets'] })
+  });
+
+  const BLOCK_DEFINITIONS = {
+    hero: {
+      label: 'Hero',
+      fields: [
+        { key: 'eyebrow', label: 'Eyebrow', type: 'text' },
+        { key: 'title', label: 'Title', type: 'text' },
+        { key: 'subtitle', label: 'Subtitle', type: 'textarea' },
+        { key: 'imageUrl', label: 'Image URL', type: 'text' },
+        { key: 'ctaText', label: 'CTA Text', type: 'text' },
+        { key: 'ctaUrl', label: 'CTA URL', type: 'text' }
+      ]
+    },
+    banner: {
+      label: 'Banner',
+      fields: [
+        { key: 'text', label: 'Text', type: 'text' },
+        { key: 'tone', label: 'Tone', type: 'select', options: ['info', 'success', 'warning', 'danger'] }
+      ]
+    },
+    text: {
+      label: 'Text',
+      fields: [
+        { key: 'title', label: 'Title', type: 'text' },
+        { key: 'body', label: 'Body', type: 'textarea' }
+      ]
+    },
+    image: {
+      label: 'Image',
+      fields: [
+        { key: 'url', label: 'Image URL', type: 'text' },
+        { key: 'alt', label: 'Alt text', type: 'text' },
+        { key: 'caption', label: 'Caption', type: 'textarea' }
+      ]
+    },
+    cta: {
+      label: 'Call to Action',
+      fields: [
+        { key: 'title', label: 'Title', type: 'text' },
+        { key: 'text', label: 'Text', type: 'textarea' },
+        { key: 'buttonText', label: 'Button Text', type: 'text' },
+        { key: 'buttonUrl', label: 'Button URL', type: 'text' }
+      ]
+    },
+    feature_grid: {
+      label: 'Feature Grid',
+      fields: [
+        { key: 'title', label: 'Section Title', type: 'text' },
+        { key: 'items', label: 'Items (JSON array)', type: 'json' }
+      ]
+    },
+    faq: {
+      label: 'FAQ',
+      fields: [
+        { key: 'title', label: 'Section Title', type: 'text' },
+        { key: 'items', label: 'Questions (JSON array)', type: 'json' }
+      ]
+    },
+    form: {
+      label: 'Form',
+      fields: [
+        { key: 'title', label: 'Title', type: 'text' },
+        { key: 'subtitle', label: 'Subtitle', type: 'textarea' },
+        { key: 'buttonText', label: 'Button Text', type: 'text' },
+        { key: 'disclaimer', label: 'Disclaimer', type: 'textarea' }
+      ]
+    }
+  };
+
+  const PAGE_TEMPLATES = [
+    { key: 'blank', label: 'Blank', blocks: [] },
+    {
+      key: 'landing',
+      label: 'Landing',
+      blocks: [
+        { type: 'hero', data: {} },
+        { type: 'feature_grid', data: { items: [] } },
+        { type: 'cta', data: {} }
+      ]
+    },
+    {
+      key: 'content',
+      label: 'Content',
+      blocks: [
+        { type: 'hero', data: {} },
+        { type: 'text', data: {} },
+        { type: 'image', data: {} },
+        { type: 'faq', data: { items: [] } }
+      ]
+    }
+  ];
+
+  const buildTemplateBlocks = (templateKey) => {
+    const tpl = PAGE_TEMPLATES.find((item) => item.key === templateKey);
+    if (!tpl) return [];
+    return JSON.parse(JSON.stringify(tpl.blocks || []));
+  };
+
+  const openCreatePage = () => {
+    setCreatingPage(true);
+    setEditingPage(null);
+    setPageDraft({
+      slug: '',
+      title: '',
+      status: 'draft',
+      template_key: 'blank',
+      blocks: []
+    });
+  };
+
+  const openEditPage = (page) => {
+    setCreatingPage(false);
+    setEditingPage(page);
+    setPageDraft({
+      id: page.id,
+      slug: page.slug,
+      title: page.title,
+      status: page.status || 'draft',
+      template_key: page.template_key || 'blank',
+      blocks: Array.isArray(page.blocks) ? page.blocks : []
+    });
+  };
+
+  const updatePageDraft = (updates) => {
+    setPageDraft((prev) => ({ ...prev, ...updates }));
+  };
+
+  const updateBlock = (index, updates) => {
+    setPageDraft((prev) => {
+      const blocks = Array.isArray(prev?.blocks) ? [...prev.blocks] : [];
+      blocks[index] = { ...blocks[index], ...updates };
+      return { ...prev, blocks };
+    });
+  };
+
+  const removeBlock = (index) => {
+    setPageDraft((prev) => {
+      const blocks = Array.isArray(prev?.blocks) ? [...prev.blocks] : [];
+      blocks.splice(index, 1);
+      return { ...prev, blocks };
+    });
+  };
+
+  const moveBlock = (index, direction) => {
+    setPageDraft((prev) => {
+      const blocks = Array.isArray(prev?.blocks) ? [...prev.blocks] : [];
+      const target = index + direction;
+      if (target < 0 || target >= blocks.length) return prev;
+      const next = [...blocks];
+      const [item] = next.splice(index, 1);
+      next.splice(target, 0, item);
+      return { ...prev, blocks: next };
+    });
+  };
+
+  const addBlock = (type) => {
+    setPageDraft((prev) => ({
+      ...prev,
+      blocks: [...(prev?.blocks || []), { type, data: {} }]
+    }));
+  };
+
+  const handleSavePage = () => {
+    if (!pageDraft?.slug || !pageDraft?.title) {
+      toast({ title: 'Missing fields', description: 'Slug and title are required.', variant: 'destructive' });
+      return;
+    }
+    const payload = {
+      slug: pageDraft.slug,
+      title: pageDraft.title,
+      status: pageDraft.status,
+      template_key: pageDraft.template_key || null,
+      blocks: pageDraft.blocks || []
+    };
+    if (creatingPage) {
+      createPageMutation.mutate(payload);
+    } else if (pageDraft?.id) {
+      updatePageMutation.mutate({ id: pageDraft.id, data: payload });
+    }
+  };
+
+  const filteredPages = pages.filter((page) => {
+    if (!pageSearch) return true;
+    const term = pageSearch.toLowerCase();
+    return page.slug?.toLowerCase().includes(term) || page.title?.toLowerCase().includes(term);
+  });
+
+  const handleUploadMedia = async (file) => {
+    if (!file) return;
+    setMediaUploading(true);
+    setMediaError(null);
+    try {
+      const upload = await api.entities.MediaAsset.uploadUrl(file.name, file.type || 'application/octet-stream', 'cms');
+      const uploadUrl = upload?.uploadUrl;
+      const publicUrl = upload?.publicUrl;
+      const key = upload?.key;
+      if (!uploadUrl || !publicUrl || !key) {
+        throw new Error('Missing R2 upload URL');
+      }
+
+      const uploadResponse = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream'
+        },
+        body: file
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error('R2 upload failed');
+      }
+
+      await createMediaAssetMutation.mutateAsync({
+        provider: 'r2',
+        url: publicUrl,
+        public_id: key,
+        resource_type: file.type || null,
+        folder: 'cms',
+        file_name: file.name,
+        bytes: file.size
+      });
+      toast({ title: 'Upload complete', description: 'Media asset added.' });
+    } catch (error) {
+      console.error(error);
+      setMediaError(error?.message || 'Upload failed');
+    } finally {
+      setMediaUploading(false);
+    }
+  };
 
   const resolveIssueMutation = useMutation({
     mutationFn: (id) => api.entities.DataQualityIssue.update(id, { resolved: true }),
@@ -512,6 +797,14 @@ export default function Admin() {
             <FileText className="w-4 h-4 mr-2" />
             Content
           </TabsTrigger>
+          <TabsTrigger value="pages" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+            <LayoutTemplate className="w-4 h-4 mr-2" />
+            Pages
+          </TabsTrigger>
+          <TabsTrigger value="media" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+            <Image className="w-4 h-4 mr-2" />
+            Media
+          </TabsTrigger>
           <TabsTrigger value="users" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
             <Users className="w-4 h-4 mr-2" />
             Users
@@ -700,6 +993,368 @@ export default function Admin() {
                 value={contentDraft}
                 onChange={setContentDraft}
               />
+            )}
+          </div>
+        </TabsContent>
+
+        {/* Pages Tab */}
+        <TabsContent value="pages">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <h2 className="text-xl font-bold text-white">Pages</h2>
+                <p className="text-sm text-slate-400">Create and edit WordPress-style pages.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={pageSearch}
+                  onChange={(e) => setPageSearch(e.target.value)}
+                  placeholder="Search pages"
+                  className="bg-slate-800 border-slate-700 w-[220px]"
+                />
+                <Button onClick={openCreatePage} className="bg-emerald-500 hover:bg-emerald-600">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Page
+                </Button>
+              </div>
+            </div>
+
+            {pagesLoading ? (
+              <LoadingSpinner />
+            ) : filteredPages.length === 0 ? (
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-8 text-center">
+                <p className="text-slate-400">No pages yet. Create your first page.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredPages.map((page) => (
+                  <div
+                    key={page.id}
+                    className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
+                          <Badge className={page.status === 'published' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-700/50 text-slate-300'}>
+                            {page.status}
+                          </Badge>
+                          <span className="text-xs text-slate-500">/{page.slug}</span>
+                        </div>
+                        <div className="font-semibold text-white">{page.title}</div>
+                        <div className="text-sm text-slate-400">Updated {page.updated_at ? new Date(page.updated_at).toLocaleString() : '—'}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEditPage(page)}
+                          className="text-slate-400 hover:text-white"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => deletePageMutation.mutate(page.id)}
+                          className="text-slate-400 hover:text-red-400"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <Dialog open={Boolean(pageDraft)} onOpenChange={(open) => {
+            if (!open) {
+              setPageDraft(null);
+              setEditingPage(null);
+              setCreatingPage(false);
+            }
+          }}>
+            <DialogContent className="max-w-4xl bg-slate-900 text-slate-100 border border-slate-700">
+              <DialogHeader>
+                <DialogTitle>{creatingPage ? 'Create Page' : 'Edit Page'}</DialogTitle>
+              </DialogHeader>
+              {pageDraft && (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-xs text-slate-400">Title</label>
+                      <Input
+                        value={pageDraft.title}
+                        onChange={(e) => updatePageDraft({ title: e.target.value })}
+                        className="bg-slate-800 border-slate-700"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs text-slate-400">Slug</label>
+                      <Input
+                        value={pageDraft.slug}
+                        onChange={(e) => updatePageDraft({ slug: e.target.value })}
+                        className="bg-slate-800 border-slate-700"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs text-slate-400">Status</label>
+                      <Select value={pageDraft.status} onValueChange={(value) => updatePageDraft({ status: value })}>
+                        <SelectTrigger className="bg-slate-800 border-slate-700">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="draft">draft</SelectItem>
+                          <SelectItem value="published">published</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs text-slate-400">Template</label>
+                      <Select
+                        value={pageDraft.template_key || 'blank'}
+                        onValueChange={(value) => updatePageDraft({ template_key: value })}
+                      >
+                        <SelectTrigger className="bg-slate-800 border-slate-700">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {PAGE_TEMPLATES.map((tpl) => (
+                            <SelectItem key={tpl.key} value={tpl.key}>{tpl.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        variant="outline"
+                        className="border-slate-700 text-slate-200 mt-2"
+                        onClick={() => updatePageDraft({ blocks: buildTemplateBlocks(pageDraft.template_key) })}
+                      >
+                        Apply Template Blocks
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-lg font-semibold text-white">Content Blocks</h3>
+                      <div className="flex items-center gap-2">
+                        <Select onValueChange={(value) => addBlock(value)}>
+                          <SelectTrigger className="bg-slate-800 border-slate-700 w-[200px]">
+                            <SelectValue placeholder="Add block" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(BLOCK_DEFINITIONS).map(([key, block]) => (
+                              <SelectItem key={key} value={key}>{block.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    {(pageDraft.blocks || []).length === 0 ? (
+                      <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-6 text-sm text-slate-400">
+                        No blocks yet. Add your first block using the selector above.
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {(pageDraft.blocks || []).map((block, index) => {
+                          const definition = BLOCK_DEFINITIONS[block.type] || { label: block.type, fields: [] };
+                          return (
+                            <div key={`${block.type}-${index}`} className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-4">
+                              <div className="flex items-center justify-between gap-3 mb-4">
+                                <div className="flex items-center gap-2">
+                                  <Badge className="bg-slate-700/60 text-slate-200 border-slate-600">
+                                    {definition.label}
+                                  </Badge>
+                                  <Select
+                                    value={block.type}
+                                    onValueChange={(value) => updateBlock(index, { type: value, data: {} })}
+                                  >
+                                    <SelectTrigger className="bg-slate-800 border-slate-700 h-8 w-[160px]">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {Object.entries(BLOCK_DEFINITIONS).map(([key, item]) => (
+                                        <SelectItem key={key} value={key}>{item.label}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Button variant="ghost" size="icon" onClick={() => moveBlock(index, -1)} className="text-slate-400 hover:text-white">
+                                    <ArrowUp className="w-4 h-4" />
+                                  </Button>
+                                  <Button variant="ghost" size="icon" onClick={() => moveBlock(index, 1)} className="text-slate-400 hover:text-white">
+                                    <ArrowDown className="w-4 h-4" />
+                                  </Button>
+                                  <Button variant="ghost" size="icon" onClick={() => removeBlock(index)} className="text-slate-400 hover:text-red-400">
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                </div>
+                              </div>
+
+                              <div className="grid md:grid-cols-2 gap-4">
+                                {definition.fields.map((field) => {
+                                  const rawValue = block.data?.[field.key];
+                                  if (field.type === 'textarea') {
+                                    return (
+                                      <div key={field.key} className="space-y-2 md:col-span-2">
+                                        <label className="text-xs text-slate-400">{field.label}</label>
+                                        <Textarea
+                                          value={rawValue || ''}
+                                          onChange={(e) => updateBlock(index, { data: { ...block.data, [field.key]: e.target.value } })}
+                                          className="bg-slate-800 border-slate-700 min-h-[90px]"
+                                        />
+                                      </div>
+                                    );
+                                  }
+
+                                  if (field.type === 'select') {
+                                    return (
+                                      <div key={field.key} className="space-y-2">
+                                        <label className="text-xs text-slate-400">{field.label}</label>
+                                        <Select
+                                          value={rawValue || field.options?.[0]}
+                                          onValueChange={(value) => updateBlock(index, { data: { ...block.data, [field.key]: value } })}
+                                        >
+                                          <SelectTrigger className="bg-slate-800 border-slate-700">
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {(field.options || []).map((option) => (
+                                              <SelectItem key={option} value={option}>{option}</SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                    );
+                                  }
+
+                                  if (field.type === 'json') {
+                                    const displayValue = typeof rawValue === 'string'
+                                      ? rawValue
+                                      : JSON.stringify(rawValue ?? [], null, 2);
+                                    return (
+                                      <div key={field.key} className="space-y-2 md:col-span-2">
+                                        <label className="text-xs text-slate-400">{field.label}</label>
+                                        <Textarea
+                                          value={displayValue}
+                                          onChange={(e) => {
+                                            let nextValue = e.target.value;
+                                            try {
+                                              nextValue = JSON.parse(e.target.value);
+                                            } catch {
+                                              nextValue = e.target.value;
+                                            }
+                                            updateBlock(index, { data: { ...block.data, [field.key]: nextValue } });
+                                          }}
+                                          className="bg-slate-800 border-slate-700 min-h-[120px] font-mono text-xs"
+                                        />
+                                      </div>
+                                    );
+                                  }
+
+                                  return (
+                                    <div key={field.key} className="space-y-2">
+                                      <label className="text-xs text-slate-400">{field.label}</label>
+                                      <Input
+                                        value={rawValue || ''}
+                                        onChange={(e) => updateBlock(index, { data: { ...block.data, [field.key]: e.target.value } })}
+                                        className="bg-slate-800 border-slate-700"
+                                      />
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2">
+                    <Button
+                      variant="outline"
+                      className="border-slate-700 text-slate-200"
+                      onClick={() => {
+                        setPageDraft(null);
+                        setEditingPage(null);
+                        setCreatingPage(false);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleSavePage}
+                      disabled={createPageMutation.isPending || updatePageMutation.isPending}
+                      className="bg-emerald-500 hover:bg-emerald-600"
+                    >
+                      {createPageMutation.isPending || updatePageMutation.isPending ? 'Saving…' : 'Save Page'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+        </TabsContent>
+
+        {/* Media Tab */}
+        <TabsContent value="media">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <h2 className="text-xl font-bold text-white">Media Library</h2>
+                <p className="text-sm text-slate-400">Upload and manage media assets.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleUploadMedia(e.target.files?.[0])}
+                  className="bg-slate-800 border-slate-700"
+                />
+                {mediaUploading && (
+                  <span className="text-xs text-slate-400">Uploading…</span>
+                )}
+              </div>
+            </div>
+
+            {mediaError && (
+              <div className="bg-red-500/10 border border-red-500/30 text-red-200 rounded-lg p-3">
+                {mediaError}
+              </div>
+            )}
+
+            {mediaAssetsLoading ? (
+              <LoadingSpinner />
+            ) : mediaAssets.length === 0 ? (
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-8 text-center">
+                <p className="text-slate-400">No media assets yet.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {mediaAssets.map((asset) => (
+                  <div key={asset.id} className="bg-slate-800/30 border border-slate-700/50 rounded-xl p-4">
+                    <div className="aspect-video bg-slate-900 rounded-lg overflow-hidden mb-3 flex items-center justify-center">
+                      <img src={asset.url} alt={asset.alt_text || asset.file_name || 'Media'} className="w-full h-full object-cover" />
+                    </div>
+                    <div className="text-sm text-slate-200 truncate">{asset.file_name || asset.public_id || asset.url}</div>
+                    <div className="text-xs text-slate-500">{asset.width || '—'} × {asset.height || '—'}</div>
+                    <div className="flex items-center justify-end mt-2">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => deleteMediaAssetMutation.mutate(asset.id)}
+                        className="text-slate-400 hover:text-red-400"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </TabsContent>

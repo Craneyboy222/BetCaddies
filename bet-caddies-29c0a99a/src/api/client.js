@@ -196,6 +196,13 @@ export class BetCaddiesApi {
     }
   }
 
+  pages = {
+    get: async (slug) => {
+      const response = await this.client.get(`/api/pages/${encodeURIComponent(slug)}`)
+      return response.data || response
+    }
+  }
+
   users = {
     me: {
       update: async (data) => {
@@ -350,6 +357,51 @@ export class BetCaddiesApi {
       },
       update: async (id, data) => {
         const response = await this.client.put(`/api/entities/data-quality-issues/${id}`, data)
+        return response.data || response
+      }
+    },
+    Page: {
+      list: async () => {
+        const response = await this.client.get('/api/entities/pages')
+        return response.data || []
+      },
+      create: async (data) => {
+        const response = await this.client.post('/api/entities/pages', data)
+        return response.data || response
+      },
+      update: async (id, data) => {
+        const response = await this.client.put(`/api/entities/pages/${id}`, data)
+        return response.data || response
+      },
+      delete: async (id) => {
+        const response = await this.client.delete(`/api/entities/pages/${id}`)
+        return response.data || response
+      },
+      revisions: async (id) => {
+        const response = await this.client.get(`/api/entities/pages/${id}/revisions`)
+        return response.data || []
+      }
+    },
+    MediaAsset: {
+      list: async (limit = 100) => {
+        const qs = new URLSearchParams({ limit: String(limit) })
+        const response = await this.client.get(`/api/entities/media-assets?${qs.toString()}`)
+        return response.data || []
+      },
+      create: async (data) => {
+        const response = await this.client.post('/api/entities/media-assets', data)
+        return response.data || response
+      },
+      delete: async (id) => {
+        const response = await this.client.delete(`/api/entities/media-assets/${id}`)
+        return response.data || response
+      },
+      uploadUrl: async (filename, contentType, folder) => {
+        const response = await this.client.post('/api/entities/media-assets/upload-url', {
+          filename,
+          contentType,
+          folder
+        })
         return response.data || response
       }
     },

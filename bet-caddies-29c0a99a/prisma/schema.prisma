@@ -385,6 +385,58 @@ model SiteContent {
   @@map("site_contents")
 }
 
+model Page {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  status      String   @default("draft")
+  templateKey String?  @map("template_key")
+  blocks      Json
+  seo         Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  publishedAt DateTime? @map("published_at")
+
+  revisions   PageRevision[]
+
+  @@map("pages")
+}
+
+model PageRevision {
+  id        String   @id @default(cuid())
+  pageId    String   @map("page_id")
+  version   Int
+  title     String
+  blocks    Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  page      Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, version])
+  @@index([pageId])
+  @@map("page_revisions")
+}
+
+model MediaAsset {
+  id           String   @id @default(cuid())
+  provider     String
+  url          String
+  publicId     String?  @map("public_id")
+  resourceType String?  @map("resource_type")
+  folder       String?
+  fileName     String?  @map("file_name")
+  bytes        Int?
+  width        Int?
+  height       Int?
+  format       String?
+  altText      String?  @map("alt_text")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([provider])
+  @@map("media_assets")
+}
+
 model AuditLog {
   id              String   @id @default(cuid())
   action          String
