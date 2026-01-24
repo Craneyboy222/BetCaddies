@@ -152,6 +152,14 @@ export const DataGolfClient = {
       year
     }, { endpointName: 'historical-raw-data/rounds' })
   },
+  async getHistoricalRawHoles(tour, eventId, year, round) {
+    return request('/historical-raw-data/holes', {
+      tour,
+      event_id: eventId,
+      year,
+      round
+    }, { endpointName: 'historical-raw-data/holes' })
+  },
   async getHistoricalOddsEventList(tour) {
     return request('/historical-odds/event-list', { tour }, { endpointName: 'historical-odds/event-list' })
   },
