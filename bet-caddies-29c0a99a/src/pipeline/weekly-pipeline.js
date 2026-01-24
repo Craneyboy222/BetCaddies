@@ -24,7 +24,7 @@ import {
   invLogit
 } from '../engine/v2/odds/odds-utils.js'
 
-const TIME_ZONE = 'Europe/London'
+const TIME_ZONE = process.env.TIMEZONE || 'Europe/London'
 const ARTIFACT_DIR = path.join(process.cwd(), 'logs', 'artifacts')
 
 export class WeeklyPipeline {
@@ -42,9 +42,16 @@ export class WeeklyPipeline {
     this.playerNormalizer = new PlayerNormalizer()
     this.probabilityEngine = new ProbabilityEngineV2()
     this.tours = ['PGA', 'DPWT', 'KFT', 'LIV']
-    this.marketWeights = { sim: 0.7, dg: 0.2, mkt: 0.1 }
+    const maxDgInfluence = Number(process.env.DG_MAX_INFLUENCE || 0.35)
+    this.marketWeights = { sim: 1 - maxDgInfluence, dg: maxDgInfluence, mkt: 0 }
     this.simCount = Number(process.env.SIM_COUNT || 10000)
     this.simSeed = process.env.SIM_SEED ? Number(process.env.SIM_SEED) : null
+    this.runMode = process.env.RUN_MODE || 'CURRENT_WEEK'
+    this.allowFallback = String(process.env.ALLOW_FALLBACK || '').toLowerCase() === 'true'
+    this.excludeInPlay = String(process.env.EXCLUDE_IN_PLAY || 'true').toLowerCase() !== 'false'
+    this.oddsMatchConfidenceThreshold = Number(process.env.ODDS_MATCH_CONFIDENCE_THRESHOLD || 0.8)
+    this.overrideTour = null
+    this.overrideEventId = null
     this.cutRules = {
       PGA: { cutAfter: 2, cutSize: 65 },
       DPWT: { cutAfter: 2, cutSize: 65 },
@@ -73,6 +80,15 @@ export class WeeklyPipeline {
     if (typeof options.dryRun === 'boolean') {
       this.dryRun = options.dryRun
     }
+    if (options.runMode) {
+      this.runMode = options.runMode
+    }
+    if (options.overrideTour) {
+      this.overrideTour = options.overrideTour
+    }
+    if (options.overrideEventId) {
+      this.overrideEventId = String(options.overrideEventId)
+    }
 
     let run = null
     let issueTracker = null
@@ -93,13 +109,14 @@ export class WeeklyPipeline {
         await this.cleanupExistingRun(runKey)
       }
 
+      const window = this.getRunWindow()
       run = await prisma.run.upsert({
         where: { runKey },
         update: { status: 'running' },
         create: {
           runKey,
-          weekStart: this.getWeekStart(),
-          weekEnd: this.getWeekEnd(),
+          weekStart: window.weekStart,
+          weekEnd: window.weekEnd,
           status: 'running'
         }
       })
@@ -151,8 +168,11 @@ export class WeeklyPipeline {
   }
 
   generateRunKey() {
-    const weekStart = this.getWeekStart()
-    return `weekly_${format(weekStart, 'yyyy-MM-dd')}`
+    const window = this.getRunWindow()
+    const prefix = this.runMode === 'THURSDAY_NEXT_WEEK'
+      ? 'thursday_next_week'
+      : (this.runMode === 'CURRENT_WEEK' ? 'current_week' : 'weekly')
+    return `${prefix}_${format(window.weekStart, 'yyyy-MM-dd')}`
   }
 
   getWeekStart() {
@@ -168,6 +188,36 @@ export class WeeklyPipeline {
       return new Date(fromZonedTime(weekEnd, TIME_ZONE).getTime() + this.lookaheadDays * 86400000)
     }
     return fromZonedTime(weekEnd, TIME_ZONE)
+  }
+
+  getCurrentWeekWindow(now = new Date()) {
+    const zonedNow = toZonedTime(now, TIME_ZONE)
+    const weekStart = startOfWeek(zonedNow, { weekStartsOn: 1 })
+    const weekEnd = endOfWeek(zonedNow, { weekStartsOn: 1 })
+    return {
+      weekStart: fromZonedTime(weekStart, TIME_ZONE),
+      weekEnd: fromZonedTime(weekEnd, TIME_ZONE)
+    }
+  }
+
+  getRunWindow(now = new Date()) {
+    if (this.runMode === 'CURRENT_WEEK') {
+      return this.getCurrentWeekWindow(now)
+    }
+    if (this.runMode !== 'THURSDAY_NEXT_WEEK') {
+      return {
+        weekStart: this.getWeekStart(),
+        weekEnd: this.getWeekEnd()
+      }
+    }
+
+    const zonedNow = toZonedTime(now, TIME_ZONE)
+    const nextWeekStart = startOfWeek(addDays(zonedNow, 7), { weekStartsOn: 1 })
+    const nextWeekEnd = endOfWeek(addDays(zonedNow, 7), { weekStartsOn: 1 })
+    return {
+      weekStart: fromZonedTime(nextWeekStart, TIME_ZONE),
+      weekEnd: fromZonedTime(nextWeekEnd, TIME_ZONE)
+    }
   }
 
   async cleanupExistingRun(runKey) {
@@ -224,6 +274,9 @@ export class WeeklyPipeline {
     const fieldData = await this.fetchFields(run, tourEvents, issueTracker)
     result.playersIngested = fieldData.totalPlayers
 
+    logStep('ingest', 'Ingesting DataGolf non-fantasy datasets...')
+    await this.ingestDataGolfAll(run, tourEvents, issueTracker)
+
     logStep('odds', 'Fetching betting odds...')
     const oddsData = await this.fetchOdds(run, tourEvents, issueTracker)
     result.oddsMarketsIngested = oddsData.reduce((acc, entry) => acc + entry.markets.length, 0)
@@ -261,8 +314,10 @@ export class WeeklyPipeline {
     const weekStart = run.weekStart
     const weekEnd = run.weekEnd
     const season = toZonedTime(new Date(), TIME_ZONE).getFullYear()
+    const toursToProcess = this.overrideTour ? [this.overrideTour] : this.tours
+    const zonedNow = toZonedTime(new Date(), TIME_ZONE)
 
-    for (const tour of this.tours) {
+    for (const tour of toursToProcess) {
       const tourCode = DataGolfClient.resolveTourCode(tour, 'schedule')
       if (!tourCode) {
         await issueTracker.logIssue(tour, 'warning', 'discover', 'Schedule not supported for tour', { tour })
@@ -291,19 +346,47 @@ export class WeeklyPipeline {
         const upcoming = schedule.filter((event) => {
           const startDate = this.parseDate(event.start_date || event.start_date_utc || event.start)
           if (!startDate) return false
+          if (this.runMode === 'CURRENT_WEEK') {
+            return startDate >= weekStart && startDate <= weekEnd
+          }
+          if (this.runMode === 'THURSDAY_NEXT_WEEK') {
+            return startDate >= weekStart && startDate <= weekEnd
+          }
           const endDate = this.parseDate(event.end_date || event.end_date_utc || event.end) || addDays(startDate, 4)
           return startDate <= weekEnd && endDate >= weekStart
         })
 
-        if (upcoming.length === 0) {
+        const filteredByOverride = this.overrideEventId
+          ? upcoming.filter((event) => String(event.event_id || event.dg_event_id || event.id || '') === String(this.overrideEventId))
+          : upcoming
+
+        if (this.overrideEventId && filteredByOverride.length === 0) {
+          await issueTracker.logIssue(tour, 'warning', 'discover', 'Override event_id not found in schedule', {
+            tour,
+            eventId: this.overrideEventId
+          })
+          continue
+        }
+
+        if (filteredByOverride.length === 0) {
           await issueTracker.logIssue(tour, 'warning', 'discover', 'No events found for this week', { tour })
           continue
         }
 
-        const event = upcoming[0]
+        const event = filteredByOverride[0]
         const eventName = event.event_name || event.name || event.tournament_name || 'Unknown Event'
         const startDate = this.parseDate(event.start_date || event.start_date_utc || event.start) || weekStart
         const endDate = this.parseDate(event.end_date || event.end_date_utc || event.end) || weekEnd
+        const inPlay = startDate < new Date()
+
+        if (this.runMode === 'CURRENT_WEEK' && this.excludeInPlay && inPlay) {
+          await issueTracker.logIssue(tour, 'warning', 'discover', 'EVENT_IN_PLAY_SKIPPED', {
+            tour,
+            eventName,
+            startDate: startDate.toISOString()
+          })
+          continue
+        }
         const location = this.formatLocation(event)
         const courseName = event.course || event.course_name || event.venue || 'Unknown Course'
         const courseLat = Number.isFinite(Number(event.latitude)) ? Number(event.latitude) : null
@@ -345,7 +428,7 @@ export class WeeklyPipeline {
           }
         })
 
-        discovered.push(tourEvent)
+        discovered.push({ ...tourEvent, inPlay })
       } catch (error) {
         safeLogDataGolfError('schedule', error, { tour })
         await issueTracker.logIssue(tour, 'error', 'discover', 'Failed to fetch schedule', {
@@ -375,11 +458,21 @@ export class WeeklyPipeline {
         const entries = normalizeDataGolfArray(payload)
         const eventMeta = this.getEventMeta(event)
         const filtered = entries.filter((row) => this.isMatchingEvent(row, eventMeta, event.eventName))
+        const hasEventTags = entries.some((row) => row.event_id || row.event_name || row.name)
+        const rowsToUse = filtered.length > 0 || !hasEventTags ? filtered.length > 0 ? filtered : entries : filtered
+        if (filtered.length === 0 && !hasEventTags) {
+          await issueTracker.logIssue(event.tour, 'warning', 'field', 'FIELD_EVENT_UNAVAILABLE', {
+            eventName: event.eventName,
+            tour: event.tour
+          })
+        }
 
-        for (const row of filtered) {
+        for (const row of rowsToUse) {
           const rawName = row.player_name || row.name || row.player || row.golfer || ''
-          if (!rawName) continue
-          const player = await this.playerNormalizer.normalizePlayerName(rawName)
+          const dgId = row.dg_id || row.player_id || row.id || null
+          if (!rawName && !dgId) continue
+          const player = await this.playerNormalizer.normalizeDataGolfPlayer({ name: rawName, dgId })
+          if (!player) continue
           const status = this.normalizeFieldStatus(row.status || row.field_status)
 
           await prisma.fieldEntry.upsert({
@@ -407,6 +500,140 @@ export class WeeklyPipeline {
     }
 
     return { totalPlayers }
+  }
+
+  async ingestDataGolfAll(run, tourEvents, issueTracker) {
+    const season = toZonedTime(new Date(), TIME_ZONE).getFullYear()
+    for (const event of tourEvents) {
+      const tourCode = DataGolfClient.resolveTourCode(event.tour, 'preds')
+      if (!tourCode) continue
+
+      try {
+        const players = await DataGolfClient.getPlayerList()
+        await this.storeArtifact(run.id, event.tour, 'get-player-list', { tourCode }, players)
+        const rows = normalizeDataGolfArray(players)
+        for (const row of rows) {
+          const name = row.player_name || row.name || row.player
+          const dgId = row.dg_id || row.player_id || row.id
+          if (!name && !dgId) continue
+          await this.playerNormalizer.normalizeDataGolfPlayer({ name, dgId })
+        }
+      } catch (error) {
+        safeLogDataGolfError('get-player-list', error, { tour: event.tour })
+      }
+
+      try {
+        const rankings = await DataGolfClient.getDgRankings()
+        await this.storeArtifact(run.id, event.tour, 'preds/get-dg-rankings', { tourCode }, rankings)
+      } catch (error) {
+        safeLogDataGolfError('dg-rankings', error, { tour: event.tour })
+      }
+
+      try {
+        const skillRatings = await DataGolfClient.getSkillRatings('value')
+        await this.storeArtifact(run.id, event.tour, 'preds/skill-ratings', { display: 'value' }, skillRatings)
+      } catch (error) {
+        safeLogDataGolfError('skill-ratings', error, { tour: event.tour })
+      }
+
+      try {
+        const approach = await DataGolfClient.getApproachSkill('l24')
+        await this.storeArtifact(run.id, event.tour, 'preds/approach-skill', { period: 'l24' }, approach)
+      } catch (error) {
+        safeLogDataGolfError('approach-skill', error, { tour: event.tour })
+      }
+
+      try {
+        const decompositions = await DataGolfClient.getPlayerDecompositions(tourCode)
+        if (decompositions) {
+          await this.storeArtifact(run.id, event.tour, 'preds/player-decompositions', { tourCode }, decompositions)
+        }
+      } catch (error) {
+        safeLogDataGolfError('player-decompositions', error, { tour: event.tour })
+      }
+
+      try {
+        const preds = await DataGolfClient.getPreTournamentPreds(tourCode, { addPosition: true, deadHeat: true })
+        await this.storeArtifact(run.id, event.tour, 'preds/pre-tournament', { tourCode }, preds)
+      } catch (error) {
+        safeLogDataGolfError('pre-tournament', error, { tour: event.tour })
+      }
+
+      try {
+        const inPlay = await DataGolfClient.getInPlayPreds(tourCode)
+        await this.storeArtifact(run.id, event.tour, 'preds/in-play', { tourCode }, inPlay)
+      } catch (error) {
+        safeLogDataGolfError('in-play', error, { tour: event.tour })
+      }
+
+      try {
+        const liveStats = await DataGolfClient.getLiveTournamentStats(tourCode)
+        await this.storeArtifact(run.id, event.tour, 'preds/live-tournament-stats', { tourCode }, liveStats)
+      } catch (error) {
+        safeLogDataGolfError('live-tournament-stats', error, { tour: event.tour })
+      }
+
+      try {
+        const liveHole = await DataGolfClient.getLiveHoleStats(tourCode)
+        await this.storeArtifact(run.id, event.tour, 'preds/live-hole-stats', { tourCode }, liveHole)
+      } catch (error) {
+        safeLogDataGolfError('live-hole-stats', error, { tour: event.tour })
+      }
+
+      try {
+        const archive = await DataGolfClient.getPreTournamentArchive(tourCode, { year: season, eventId: this.getEventMeta(event)?.eventId || null })
+        await this.storeArtifact(run.id, event.tour, 'preds/pre-tournament-archive', { tourCode, year: season }, archive)
+      } catch (error) {
+        safeLogDataGolfError('pre-tournament-archive', error, { tour: event.tour })
+      }
+
+      const rawTour = DataGolfClient.resolveTourCode(event.tour, 'raw')
+      if (rawTour) {
+        try {
+          const eventList = await DataGolfClient.getHistoricalRawEventList(rawTour)
+          await this.storeArtifact(run.id, event.tour, 'historical-raw-data/event-list', { tour: rawTour }, eventList)
+        } catch (error) {
+          safeLogDataGolfError('historical-raw-event-list', error, { tour: event.tour })
+        }
+
+        const eventId = this.getEventMeta(event)?.eventId
+        if (eventId) {
+          try {
+            const rounds = await DataGolfClient.getHistoricalRawRounds(rawTour, eventId, season)
+            await this.storeArtifact(run.id, event.tour, 'historical-raw-data/rounds', { tour: rawTour, eventId, season }, rounds)
+          } catch (error) {
+            safeLogDataGolfError('historical-raw-rounds', error, { tour: event.tour })
+          }
+        }
+      }
+
+      const histOddsTour = DataGolfClient.resolveTourCode(event.tour, 'histOdds')
+      if (histOddsTour) {
+        try {
+          const histEvents = await DataGolfClient.getHistoricalOddsEventList(histOddsTour)
+          await this.storeArtifact(run.id, event.tour, 'historical-odds/event-list', { tour: histOddsTour }, histEvents)
+        } catch (error) {
+          safeLogDataGolfError('historical-odds-event-list', error, { tour: event.tour })
+        }
+
+        const eventId = this.getEventMeta(event)?.eventId
+        if (eventId) {
+          try {
+            const histOutrights = await DataGolfClient.getHistoricalOutrights(histOddsTour, eventId, season, 'win')
+            await this.storeArtifact(run.id, event.tour, 'historical-odds/outrights', { tour: histOddsTour, eventId, season, market: 'win' }, histOutrights)
+          } catch (error) {
+            safeLogDataGolfError('historical-odds-outrights', error, { tour: event.tour })
+          }
+
+          try {
+            const histMatchups = await DataGolfClient.getHistoricalMatchups(histOddsTour, eventId, season)
+            await this.storeArtifact(run.id, event.tour, 'historical-odds/matchups', { tour: histOddsTour, eventId, season }, histMatchups)
+          } catch (error) {
+            safeLogDataGolfError('historical-odds-matchups', error, { tour: event.tour })
+          }
+        }
+      }
+    }
   }
 
   async fetchOdds(run, tourEvents, issueTracker) {
@@ -473,6 +700,37 @@ export class WeeklyPipeline {
             })
           }
 
+          const match = this.evaluateOddsEventMatch(event, parsed.meta, run)
+          await prisma.oddsEvent.update({
+            where: { id: oddsEvent.id },
+            data: {
+              matchConfidence: match.confidence,
+              matchMethod: match.method
+            }
+          })
+
+          if (match.method === 'event_id_mismatch' || match.method === 'event_name_mismatch') {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'ODDS_NOT_AVAILABLE_YET', {
+              eventName: event.eventName,
+              oddsEventName: parsed.meta.eventName,
+              oddsEventId: parsed.meta.eventId,
+              market: marketKey
+            })
+            continue
+          }
+
+          if (match.confidence < this.oddsMatchConfidenceThreshold) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'ODDS_EVENT_MATCH_CONFIDENCE_LOW', {
+              eventName: event.eventName,
+              oddsEventName: parsed.meta.eventName,
+              oddsEventId: parsed.meta.eventId,
+              market: marketKey,
+              confidence: match.confidence,
+              method: match.method
+            })
+            continue
+          }
+
           const rows = parsed.rows
           if (rows.length === 0 && !parsed.errorMessage) {
             await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Outrights odds returned empty payload', {
@@ -530,6 +788,7 @@ export class WeeklyPipeline {
             await prisma.oddsOffer.create({
               data: {
                 oddsMarketId: market.id,
+                selectionId: offer.selectionId || null,
                 selectionName: offer.selectionName,
                 bookmaker: offer.book,
                 oddsDecimal: offer.oddsDecimal,
@@ -599,6 +858,37 @@ export class WeeklyPipeline {
             })
           }
 
+          const match = this.evaluateOddsEventMatch(event, parsed.meta, run)
+          await prisma.oddsEvent.update({
+            where: { id: oddsEvent.id },
+            data: {
+              matchConfidence: match.confidence,
+              matchMethod: match.method
+            }
+          })
+
+          if (match.method === 'event_id_mismatch' || match.method === 'event_name_mismatch') {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'ODDS_NOT_AVAILABLE_YET', {
+              eventName: event.eventName,
+              oddsEventName: parsed.meta.eventName,
+              oddsEventId: parsed.meta.eventId,
+              market: marketKey
+            })
+            continue
+          }
+
+          if (match.confidence < this.oddsMatchConfidenceThreshold) {
+            await issueTracker.logIssue(event.tour, 'warning', 'odds', 'ODDS_EVENT_MATCH_CONFIDENCE_LOW', {
+              eventName: event.eventName,
+              oddsEventName: parsed.meta.eventName,
+              oddsEventId: parsed.meta.eventId,
+              market: marketKey,
+              confidence: match.confidence,
+              method: match.method
+            })
+            continue
+          }
+
           const rows = parsed.rows
           if (rows.length === 0 && !parsed.errorMessage) {
             await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Matchups odds returned empty payload', {
@@ -647,6 +937,7 @@ export class WeeklyPipeline {
             await prisma.oddsOffer.create({
               data: {
                 oddsMarketId: market.id,
+                selectionId: offer.selectionId || null,
                 selectionName: offer.selectionName,
                 bookmaker: offer.bookmaker,
                 oddsDecimal: offer.oddsDecimal,
@@ -713,9 +1004,13 @@ export class WeeklyPipeline {
     const fieldIndex = new Map()
     for (const entry of fieldEntries) {
       const key = entry.tourEventId
-      if (!fieldIndex.has(key)) fieldIndex.set(key, new Set())
+      if (!fieldIndex.has(key)) {
+        fieldIndex.set(key, { names: new Set(), dgIds: new Set() })
+      }
+      const set = fieldIndex.get(key)
       const name = entry.player?.canonicalName || entry.playerId
-      if (name) fieldIndex.get(key).add(name)
+      if (name) set.names.add(name)
+      if (entry.player?.dgId) set.dgIds.add(String(entry.player.dgId))
     }
 
     const recommendations = []
@@ -750,12 +1045,15 @@ export class WeeklyPipeline {
       let preTournament = []
       let skillRatings = []
       let usedMarketFallback = false
+      const useInPlayPreds = event.inPlay && !this.excludeInPlay
 
       if (tourCode) {
         try {
-          const payload = await DataGolfClient.getPreTournamentPreds(tourCode, { addPosition: true, deadHeat: true })
+          const payload = useInPlayPreds
+            ? await DataGolfClient.getInPlayPreds(tourCode)
+            : await DataGolfClient.getPreTournamentPreds(tourCode, { addPosition: true, deadHeat: true })
           preTournament = normalizeDataGolfArray(payload)
-          await this.storeArtifact(run.id, event.tour, 'preds/pre-tournament', { tourCode }, payload)
+          await this.storeArtifact(run.id, event.tour, useInPlayPreds ? 'preds/in-play' : 'preds/pre-tournament', { tourCode }, payload)
         } catch (error) {
           safeLogDataGolfError('preds', error, { tour: event.tour })
           await issueTracker.logIssue(event.tour, 'warning', 'selection', 'Failed to fetch pre-tournament predictions', {
@@ -778,6 +1076,12 @@ export class WeeklyPipeline {
       const eventPlayers = fieldEntries
         .filter((entry) => entry.tourEventId === event.id && entry.status === 'active')
         .map((entry) => ({ name: entry.player?.canonicalName || entry.playerId }))
+      const playerByDgId = new Map()
+      for (const entry of fieldEntries) {
+        if (entry.tourEventId !== event.id) continue
+        if (!entry.player?.dgId || !entry.player?.canonicalName) continue
+        playerByDgId.set(String(entry.player.dgId), entry.player.canonicalName)
+      }
 
       const playerParams = buildPlayerParams({ players: eventPlayers, skillRatings })
       const simResults = simulateTournament({
@@ -789,6 +1093,15 @@ export class WeeklyPipeline {
         cutRules: this.cutRules
       })
       const simProbabilities = simResults.probabilities
+      const modelAvailable = simProbabilities && simProbabilities.size > 0
+      const recommendationMode = event.inPlay && !this.excludeInPlay ? 'IN_PLAY' : 'PRE_TOURNAMENT'
+
+      if (!modelAvailable) {
+        await issueTracker.logIssue(event.tour, 'warning', 'selection', 'NO_MODEL', {
+          eventName: event.eventName,
+          reason: 'Simulation probabilities missing'
+        })
+      }
       const candidates = []
       const marketStats = []
 
@@ -800,11 +1113,27 @@ export class WeeklyPipeline {
 
         if (offers.length === 0) continue
 
-        const offersBySelection = this.groupOffersBySelection(offers, event, fieldIndex)
+        const rawSelections = new Set()
+        for (const offer of offers) {
+          const selectionId = offer.selectionId ? String(offer.selectionId) : null
+          const mappedName = selectionId && playerByDgId.has(selectionId)
+            ? playerByDgId.get(selectionId)
+            : null
+          const key = mappedName
+            ? this.playerNormalizer.cleanPlayerName(mappedName)
+            : (offer.selectionKey || this.playerNormalizer.cleanPlayerName(offer.selectionName || offer.selection))
+          if (key) rawSelections.add(key)
+        }
+
+        const offersBySelection = this.groupOffersBySelection(offers, event, fieldIndex, playerByDgId)
         const offersByBook = this.groupOffersByBook(offers)
         const marketFairProbs = this.computeMarketProbabilities(offersBySelection, offersByBook, market.marketKey)
         const normalizedImplied = this.computeNormalizedImplied(offersBySelection)
         const selectionKeys = Object.keys(offersBySelection)
+        if (rawSelections.size > 0) {
+          const coverage = selectionKeys.length / rawSelections.size
+          logStep('selection', `Field↔odds coverage ${event.tour}/${event.eventName} market=${market.marketKey} matched=${selectionKeys.length} total=${rawSelections.size} coverage=${(coverage * 100).toFixed(1)}%`)
+        }
         const stat = {
           market: market.marketKey,
           offers: offers.length,
@@ -841,20 +1170,64 @@ export class WeeklyPipeline {
           const marketProbSource = hasConsensus
             ? 'vig_removed_consensus'
             : (normalizedImplied.has(selectionKey) ? 'normalized_implied' : 'missing')
+
+          if (!modelAvailable) {
+            if (!this.allowFallback) {
+              stat.invalid.missingFair += 1
+              continue
+            }
+            if (!Number.isFinite(marketProb)) {
+              stat.invalid.missingMarket += 1
+              stat.marketProbMissing += 1
+              continue
+            }
+
+            candidates.push({
+              tourEvent: event,
+              marketKey: market.marketKey,
+              selection: bestOffer.selectionName,
+              selectionKey,
+              bestOffer,
+              altOffers: selectionOffers.filter((offer) => offer.bookmaker !== bestOffer.bookmaker).slice(0, 5),
+              impliedProb,
+              fairProb: null,
+              marketProb,
+              edge: null,
+              ev: null,
+              probSource: 'internal_model',
+              marketProbSource,
+              isFallback: true,
+              fallbackReason: 'Simulation model unavailable',
+              fallbackType: 'no_model',
+              tierStatus: 'NO_MODEL',
+              mode: recommendationMode
+            })
+            stat.validMarket += 1
+            continue
+          }
           const modelProbs = probabilityModel.getPlayerProbs({
             name: selectionKey,
             id: bestOffer.selectionId || null
           })
           const derivedModelProb = this.deriveModelProbability(market.marketKey, modelProbs)
           const dgProb = this.getPredProbability(predsIndex, selectionKey, bestOffer.selectionId, market.marketKey)
-          let simProb = simProbabilities.get(selectionKey)?.[this.mapMarketKeyToSim(market.marketKey)] || derivedModelProb || marketProb
+          let simProb = simProbabilities.get(selectionKey)?.[this.mapMarketKeyToSim(market.marketKey)]
+          if (!Number.isFinite(simProb) && Number.isFinite(derivedModelProb)) {
+            simProb = derivedModelProb
+          }
           if (market.marketKey === 'mc' && Number.isFinite(simProb)) {
             simProb = clampProbability(1 - simProb)
           }
-          const baseFairProb = Number.isFinite(dgProb)
-            ? dgProb
-            : (Number.isFinite(derivedModelProb) ? derivedModelProb : marketProb)
-          const fairProb = applyCalibration(baseFairProb, market.marketKey, event.tour)
+
+          if (!Number.isFinite(simProb)) {
+            stat.invalid.missingFair += 1
+            continue
+          }
+
+          const blended = this.blendProbabilities({ sim: simProb, dg: dgProb, mkt: null })
+          const fairProb = Number.isFinite(blended)
+            ? applyCalibration(blended, market.marketKey, event.tour)
+            : applyCalibration(simProb, market.marketKey, event.tour)
 
           if (Number.isFinite(marketProb)) stat.validMarket += 1
           if (Number.isFinite(fairProb)) stat.validFair += 1
@@ -880,12 +1253,7 @@ export class WeeklyPipeline {
           if (Number.isFinite(ev)) stat.validEv += 1
           if (ev > 0 && edge > 0) stat.positive += 1
 
-          if (!Number.isFinite(dgProb) && !Number.isFinite(derivedModelProb) && Number.isFinite(marketProb)) {
-            usedMarketFallback = true
-            stat.marketFallbackUsed += 1
-          }
-
-          const fairProbFallback = !Number.isFinite(dgProb) && !Number.isFinite(derivedModelProb) && Number.isFinite(marketProb)
+          const fairProbFallback = false
           const tierInfo = this.classifyTier(bestOffer.oddsDecimal)
           if (tierInfo.gap) {
             await issueTracker.logIssue(event.tour, 'warning', 'selection', 'Tier gap candidate assigned to nearest tier', {
@@ -908,11 +1276,12 @@ export class WeeklyPipeline {
             marketProb,
             edge,
             ev,
-            probSource: fairProbFallback ? 'market_fallback' : 'DG',
+            probSource: 'internal_model',
             marketProbSource,
-            isFallback: fairProbFallback,
-            fallbackReason: fairProbFallback ? 'Fair prob fallback to market (DG missing)' : null,
-            fallbackType: fairProbFallback ? 'fair_prob_fallback' : null
+            isFallback: false,
+            fallbackReason: null,
+            fallbackType: null,
+            mode: recommendationMode
           })
         }
 
@@ -992,16 +1361,22 @@ export class WeeklyPipeline {
     return recommendations
   }
 
-  groupOffersBySelection(offers, event, fieldIndex) {
+  groupOffersBySelection(offers, event, fieldIndex, playerByDgId = new Map()) {
     const map = {}
     for (const offer of offers) {
-      const selectionKey = offer.selectionKey || this.playerNormalizer.cleanPlayerName(offer.selectionName || offer.selection)
+      const selectionId = offer.selectionId ? String(offer.selectionId) : null
+      const mappedName = selectionId && playerByDgId.has(selectionId)
+        ? playerByDgId.get(selectionId)
+        : null
+      const selectionKey = mappedName
+        ? this.playerNormalizer.cleanPlayerName(mappedName)
+        : (offer.selectionKey || this.playerNormalizer.cleanPlayerName(offer.selectionName || offer.selection))
       if (!selectionKey) continue
       const fieldSet = fieldIndex.get(event.id)
       const isMatchup = selectionKey.includes(' vs ')
-      if (!isMatchup && fieldSet && !fieldSet.has(selectionKey)) continue
+      if (!isMatchup && fieldSet && !fieldSet.names.has(selectionKey) && (!selectionId || !fieldSet.dgIds.has(selectionId))) continue
       if (!map[selectionKey]) map[selectionKey] = []
-      map[selectionKey].push({ ...offer })
+      map[selectionKey].push({ ...offer, selectionKey })
     }
     return map
   }
@@ -1194,12 +1569,17 @@ export class WeeklyPipeline {
     const allowFrl = tier === 'EAGLE' || tier === 'LONG_SHOTS'
     const valid = candidates
       .filter((candidate) => allowFrl || candidate.marketKey !== 'frl')
-      .filter((candidate) => Number.isFinite(candidate.fairProb) && Number.isFinite(candidate.marketProb))
+      .filter((candidate) => candidate.tierStatus === 'NO_MODEL'
+        ? Number.isFinite(candidate.marketProb)
+        : (Number.isFinite(candidate.fairProb) && Number.isFinite(candidate.marketProb)))
       .filter((candidate) => Number.isFinite(candidate.bestOffer?.oddsDecimal))
 
     const positive = valid.filter((candidate) => candidate.ev > 0 && candidate.edge > 0)
+    const sortScore = (candidate) => (Number.isFinite(candidate.ev)
+      ? candidate.ev
+      : (Number.isFinite(candidate.marketProb) ? candidate.marketProb : -Infinity))
     const sortedPositive = this.applyExposureCaps(
-      positive.sort((a, b) => b.ev - a.ev || b.edge - a.edge || b.bestOffer.oddsDecimal - a.bestOffer.oddsDecimal)
+      positive.sort((a, b) => sortScore(b) - sortScore(a) || (b.edge || 0) - (a.edge || 0) || b.bestOffer.oddsDecimal - a.bestOffer.oddsDecimal)
     )
 
     const recommended = sortedPositive.slice(0, this.maxPicksPerTier).map((candidate) => ({
@@ -1208,7 +1588,7 @@ export class WeeklyPipeline {
       fallbackReason: candidate.isFallback ? (candidate.fallbackReason || 'Fair prob fallback to market (DG missing)') : null
     }))
 
-    if (recommended.length >= this.minPicksPerTier) {
+    if (recommended.length >= this.minPicksPerTier || !this.allowFallback) {
       return {
         recommended,
         fallback: [],
@@ -1219,7 +1599,7 @@ export class WeeklyPipeline {
 
     const remaining = valid.filter((candidate) => !recommended.includes(candidate))
     const fallbackCandidates = this.applyExposureCaps(
-      remaining.sort((a, b) => b.ev - a.ev || b.edge - a.edge || b.bestOffer.oddsDecimal - a.bestOffer.oddsDecimal)
+      remaining.sort((a, b) => sortScore(b) - sortScore(a) || (b.edge || 0) - (a.edge || 0) || b.bestOffer.oddsDecimal - a.bestOffer.oddsDecimal)
     )
 
     const target = Math.min(this.maxPicksPerTier, Math.max(this.minPicksPerTier, recommended.length))
@@ -1265,6 +1645,12 @@ export class WeeklyPipeline {
     const analysisBullets = this.generateAnalysisBullets(candidate)
     const isFallback = candidate.isFallback === true
 
+    const tierStatus = candidate.tierStatus || (isFallback
+      ? 'EDGE_MISSING'
+      : (Number.isFinite(candidate.ev) && candidate.ev > 0 && Number.isFinite(candidate.edge) && candidate.edge > 0
+        ? 'EDGE_FOUND'
+        : 'NO_EDGE'))
+
     return {
       tier: candidate.tier,
       tourEventId: candidate.tourEvent.id,
@@ -1284,7 +1670,9 @@ export class WeeklyPipeline {
       marketProbSource: candidate.marketProbSource || 'missing',
       isFallback,
       fallbackReason: candidate.fallbackReason || null,
-      fallbackType: candidate.fallbackType || (isFallback ? 'tier_min_fill' : null)
+      fallbackType: candidate.fallbackType || (isFallback ? 'tier_min_fill' : null),
+      tierStatus,
+      mode: candidate.mode || 'PRE_TOURNAMENT'
     }
   }
 
@@ -1309,6 +1697,7 @@ export class WeeklyPipeline {
   generateAnalysisBullets(candidate) {
     return [
       `Fair probability: ${(candidate.fairProb * 100).toFixed(1)}%`,
+      `Market probability: ${(candidate.marketProb * 100).toFixed(1)}%`,
       `Implied probability: ${(candidate.impliedProb * 100).toFixed(1)}%`,
       `Edge: ${(candidate.edge * 100).toFixed(1)}%`,
       `EV: ${(candidate.ev * 100).toFixed(1)}%`,
@@ -1397,6 +1786,55 @@ export class WeeklyPipeline {
       eventIdPresent: Boolean(payloadEventId),
       eventNamePresent: Boolean(payloadEventName)
     }
+  }
+
+  normalizeEventName(value) {
+    if (!value) return ''
+    return String(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  evaluateOddsEventMatch(event, payloadMeta = {}, run) {
+    const eventMeta = this.getEventMeta(event)
+    const eventId = eventMeta?.eventId ? String(eventMeta.eventId) : null
+    const payloadEventId = payloadMeta?.eventId ? String(payloadMeta.eventId) : null
+    const eventName = this.normalizeEventName(event.eventName)
+    const payloadEventName = this.normalizeEventName(payloadMeta?.eventName)
+    const missingMeta = !payloadEventId && !payloadEventName
+
+    if (payloadEventId && eventId && payloadEventId !== eventId) {
+      return { confidence: 0, method: 'event_id_mismatch' }
+    }
+
+    if (payloadEventId && eventId && payloadEventId === eventId) {
+      return { confidence: 1, method: 'event_id' }
+    }
+
+    if (missingMeta && this.runMode === 'THURSDAY_NEXT_WEEK') {
+      return { confidence: 0, method: 'missing_meta' }
+    }
+
+    if (!payloadEventName || !eventName) {
+      return { confidence: 0, method: 'event_name_missing' }
+    }
+
+    if (payloadEventName !== eventName && !payloadEventName.includes(eventName) && !eventName.includes(payloadEventName)) {
+      return { confidence: 0, method: 'event_name_mismatch' }
+    }
+
+    let confidence = 0.7
+    let method = payloadEventName === eventName ? 'event_name' : 'event_name_fuzzy'
+    if (run?.weekStart && run?.weekEnd && event?.startDate) {
+      const start = event.startDate
+      if (start >= run.weekStart && start <= run.weekEnd) {
+        confidence += 0.2
+      }
+    }
+    confidence = Math.min(1, confidence + 0.1)
+    return { confidence, method }
   }
 
   buildOffer(selection, bookmaker, odds) {

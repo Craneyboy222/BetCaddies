@@ -97,6 +97,7 @@ model TourEvent {
 
 model Player {
   id            String   @id @default(cuid())
+  dgId          String?  @unique
   canonicalName String   @unique
   aliases       Json     // JSON array of string aliases
   country       String?
@@ -196,6 +197,8 @@ model OddsEvent {
   tourEventId     String
   oddsProvider    String   // 'the_odds_api'
   externalEventId String
+  matchConfidence Float?
+  matchMethod     String?
   raw             Json     // Raw API response
   fetchedAt       DateTime @default(now())
 
@@ -224,6 +227,7 @@ model OddsMarket {
 model OddsOffer {
   id            String   @id @default(cuid())
   oddsMarketId  String
+  selectionId   String?
   selectionName String
   bookmaker     String
   oddsDecimal   Float
@@ -273,6 +277,8 @@ model BetRecommendation {
   isFallback        Boolean  @default(false)
   fallbackReason    String?
   fallbackType      String?
+  tierStatus        String?
+  mode              String?
   analysisParagraph String
   analysisBullets   Json     // JSON array of bullet points
   createdAt         DateTime @default(now())

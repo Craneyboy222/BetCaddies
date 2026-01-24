@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import { z } from 'zod'
+import cron from 'node-cron'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
 
@@ -182,6 +183,60 @@ const serverStatus = {
   errors: []
 };
 
+const runWeeklyPipeline = async ({ dryRun = false, runMode = 'CURRENT_WEEK', overrideTour = null, overrideEventId = null, runKeyOverride = null } = {}) => {
+  if (!WeeklyPipeline) {
+    throw new Error(WeeklyPipelineLoadError || 'Pipeline module not loaded')
+  }
+
+  // Fail fast if DB is unreachable, so the UI can show a real error.
+  try {
+    await prisma.run.count()
+  } catch (dbError) {
+    const dbInfo = summarizeDatabaseUrl(process.env.DATABASE_URL)
+    logger.error('Cannot run pipeline: database is not reachable', { error: dbError.message, db: dbInfo })
+    const err = new Error('Database is not reachable; cannot start pipeline')
+    err.db = dbInfo
+    throw err
+  }
+
+  const pipeline = new WeeklyPipeline()
+  pipeline.runMode = runMode
+  if (overrideTour) pipeline.overrideTour = overrideTour
+  if (overrideEventId) pipeline.overrideEventId = String(overrideEventId)
+
+  const runKey = runKeyOverride || pipeline.generateRunKey()
+  const window = pipeline.getRunWindow()
+
+  await prisma.run.upsert({
+    where: { runKey },
+    update: { status: 'running' },
+    create: {
+      runKey,
+      weekStart: window.weekStart,
+      weekEnd: window.weekEnd,
+      status: 'running'
+    }
+  })
+
+  pipeline.run(runKey, { dryRun, runMode, overrideTour, overrideEventId }).catch(err => {
+    logger.error('Pipeline execution failed', { error: err.message, runKey })
+  })
+
+  return { runKey }
+}
+
+const cronEnabled = String(process.env.PIPELINE_CRON_ENABLED || 'true').toLowerCase() !== 'false'
+if (cronEnabled) {
+  cron.schedule('0 9 * * 1', async () => {
+    try {
+      logger.info('Starting MONDAY_CURRENT_WEEK scheduled run')
+      await runWeeklyPipeline({ dryRun: false, runMode: 'CURRENT_WEEK' })
+    } catch (error) {
+      logger.error('Scheduled pipeline run failed', { error: error.message })
+    }
+  }, { timezone: 'Europe/London' })
+}
+
 // Health check - independent of database connection
 app.get('/health', (req, res) => {
   // Always return a 200 response for Railway healthchecks
@@ -242,6 +297,8 @@ app.get('/api/bets/latest', async (req, res) => {
       is_fallback: bet.isFallback === true,
       fallback_reason: bet.fallbackReason || null,
       fallback_type: bet.fallbackType || null,
+      tier_status: bet.tierStatus || null,
+      mode: bet.mode || 'PRE_TOURNAMENT',
       selection_name: bet.override?.selectionName || bet.selection,
       confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
       bestBookmaker: bet.bestBookmaker,
@@ -341,6 +398,8 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
       is_fallback: bet.isFallback === true,
       fallback_reason: bet.fallbackReason || null,
       fallback_type: bet.fallbackType || null,
+      tier_status: bet.tierStatus || null,
+      mode: bet.mode || 'PRE_TOURNAMENT',
       selection_name: bet.override?.selectionName || bet.selection,
       confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
       bestBookmaker: bet.bestBookmaker,
@@ -2292,63 +2351,36 @@ app.post(
   pipelineLimiter,
   validateBody(z.object({
     dryRun: z.boolean().optional(),
-    run_key: z.string().optional()
+    run_key: z.string().optional(),
+    run_mode: z.string().optional(),
+    override_tour: z.string().optional(),
+    event_id: z.union([z.string(), z.number()]).optional()
   })),
   async (req, res) => {
   try {
     logger.info('Pipeline run requested', { params: req.body })
     const dryRun = req.body?.dryRun || false
+    const runMode = req.body?.run_mode || 'CURRENT_WEEK'
+    const overrideTour = req.body?.override_tour || null
+    const overrideEventId = req.body?.event_id || null
     
-    // Check if WeeklyPipeline was successfully loaded
-    if (!WeeklyPipeline) {
-      logger.error('Cannot run pipeline: WeeklyPipeline module failed to load')
-      return res.status(503).json({ 
-        success: false, 
-        message: 'Pipeline module is not available',
-        error: WeeklyPipelineLoadError || 'Configuration issue - please check server logs'
-      })
-    }
-    
-    // Fail fast if DB is unreachable, so the UI can show a real error.
-    try {
-      await prisma.run.count()
-    } catch (dbError) {
-      const dbInfo = summarizeDatabaseUrl(process.env.DATABASE_URL)
-      logger.error('Cannot run pipeline: database is not reachable', { error: dbError.message, db: dbInfo })
-      return res.status(503).json({
-        success: false,
-        message: 'Database is not reachable; cannot start pipeline',
-        error: dbError.message,
-        db: dbInfo
-      })
-    }
-
-    // Create the pipeline instance and compute runKey
-    const pipeline = new WeeklyPipeline()
-    const runKey = req.body?.run_key || pipeline.generateRunKey()
-
-    // Ensure the run exists immediately (so admin UI can show it)
-    await prisma.run.upsert({
-      where: { runKey },
-      update: { status: 'running' },
-      create: {
-        runKey,
-        weekStart: pipeline.getWeekStart(),
-        weekEnd: pipeline.getWeekEnd(),
-        status: 'running'
-      }
+    const response = await runWeeklyPipeline({
+      dryRun,
+      runMode,
+      overrideTour,
+      overrideEventId,
+      runKeyOverride: req.body?.run_key || null
     })
-
-    // Start the pipeline asynchronously to avoid request timeouts.
-    pipeline.run(runKey, { dryRun }).catch(err => {
-      logger.error('Pipeline execution failed', { error: err.message, runKey })
-    })
+    const runKey = req.body?.run_key || response.runKey
     
     res.json({ 
       success: true, 
       message: 'Pipeline started successfully', 
       runKey,
-      dryRun
+      dryRun,
+      runMode,
+      overrideTour,
+      eventId: overrideEventId
     })
   } catch (error) {
     logger.error('Failed to start pipeline', { error: error.message })

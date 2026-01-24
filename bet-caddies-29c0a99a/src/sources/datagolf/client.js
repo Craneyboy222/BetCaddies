@@ -91,6 +91,15 @@ export const DataGolfClient = {
   async getApproachSkill(period = 'l24') {
     return request('/preds/approach-skill', { period }, { endpointName: 'preds/approach-skill' })
   },
+  async getInPlayPreds(tour) {
+    return request('/preds/in-play', { tour }, { endpointName: 'preds/in-play' })
+  },
+  async getLiveTournamentStats(tour) {
+    return request('/preds/live-tournament-stats', { tour }, { endpointName: 'preds/live-tournament-stats' })
+  },
+  async getLiveHoleStats(tour) {
+    return request('/preds/live-hole-stats', { tour }, { endpointName: 'preds/live-hole-stats' })
+  },
   async getPlayerDecompositions(tour) {
     if (!assertSupported('preds/player-decompositions', tour)) return null
     return request('/preds/player-decompositions', { tour }, { endpointName: 'preds/player-decompositions' })
@@ -102,6 +111,13 @@ export const DataGolfClient = {
       dead_heat: deadHeat ? 1 : 0,
       odds_format: 'decimal'
     }, { endpointName: 'preds/pre-tournament' })
+  },
+  async getPreTournamentArchive(tour, { year, eventId } = {}) {
+    return request('/preds/pre-tournament-archive', {
+      tour,
+      year,
+      event_id: eventId
+    }, { endpointName: 'preds/pre-tournament-archive' })
   },
   async getOutrightsOdds(tour, market) {
     if (!assertSupported('betting-tools/outrights', tour)) return null

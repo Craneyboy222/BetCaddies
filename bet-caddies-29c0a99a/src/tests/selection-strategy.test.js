@@ -62,6 +62,7 @@ describe('Selection strategy', () => {
 
   it('fills with fallback when positive EV is insufficient', () => {
     const pipeline = new WeeklyPipeline()
+    pipeline.allowFallback = true
     pipeline.minPicksPerTier = 5
     pipeline.maxPicksPerTier = 8
     pipeline.maxPicksPerPlayer = 10
@@ -85,7 +86,8 @@ describe('Selection strategy', () => {
 
   it('flags fair-probability fallback candidates', () => {
     const pipeline = new WeeklyPipeline()
-    pipeline.minPicksPerTier = 2
+    pipeline.allowFallback = true
+    pipeline.minPicksPerTier = 3
     pipeline.maxPicksPerTier = 4
     pipeline.maxPicksPerPlayer = 10
     pipeline.maxPicksPerMarket = 10
@@ -117,6 +119,17 @@ describe('Selection strategy', () => {
     expect(result.recommended.length).toBe(1)
   })
 
+  it('computes normalized implied market probabilities', () => {
+    const pipeline = new WeeklyPipeline()
+    const offersBySelection = {
+      a: [{ oddsDecimal: 5 }],
+      b: [{ oddsDecimal: 10 }]
+    }
+    const normalized = pipeline.computeNormalizedImplied(offersBySelection)
+    const sum = Array.from(normalized.values()).reduce((acc, value) => acc + value, 0)
+    expect(sum).toBeCloseTo(1, 6)
+  })
+
   it('sorts recommended picks by EV desc', () => {
     const pipeline = new WeeklyPipeline()
     pipeline.minPicksPerTier = 2
@@ -136,6 +149,7 @@ describe('Selection strategy', () => {
 
   it('logs a DataIssue when fallback picks are used', async () => {
     const pipeline = new WeeklyPipeline()
+    pipeline.allowFallback = true
     pipeline.minPicksPerTier = 5
     pipeline.maxPicksPerTier = 8
     pipeline.maxPicksPerPlayer = 10

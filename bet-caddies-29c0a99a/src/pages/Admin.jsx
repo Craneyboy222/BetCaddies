@@ -51,6 +51,10 @@ export default function Admin() {
   const [user, setUser] = useState(null);
   const [authError, setAuthError] = useState(null);
   const [activeTab, setActiveTab] = useState('runs');
+  const [pipelineRunMode, setPipelineRunMode] = useState('CURRENT_WEEK');
+  const [pipelineDryRun, setPipelineDryRun] = useState(false);
+  const [pipelineOverrideTour, setPipelineOverrideTour] = useState('');
+  const [pipelineOverrideEventId, setPipelineOverrideEventId] = useState('');
   const [editingBet, setEditingBet] = useState(null);
   const [editingProvider, setEditingProvider] = useState(null);
   const [editingMembership, setEditingMembership] = useState(null);
@@ -258,7 +262,12 @@ export default function Admin() {
 
   const triggerRunMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.functions.invoke('weeklyResearchPipeline', { dryRun: false });
+      const response = await api.functions.invoke('weeklyResearchPipeline', {
+        dryRun: pipelineDryRun,
+        run_mode: pipelineRunMode,
+        override_tour: pipelineOverrideTour?.trim() || undefined,
+        event_id: pipelineOverrideEventId?.trim() || undefined
+      });
       return response;
     },
     onSuccess: (result) => {
@@ -556,6 +565,47 @@ export default function Admin() {
                     </>
                   )}
                 </Button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div className="space-y-1">
+                <p className="text-xs text-slate-400">Run mode</p>
+                <Select value={pipelineRunMode} onValueChange={setPipelineRunMode}>
+                  <SelectTrigger className="bg-slate-800 border-slate-700">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="CURRENT_WEEK">CURRENT_WEEK</SelectItem>
+                    <SelectItem value="THURSDAY_NEXT_WEEK">THURSDAY_NEXT_WEEK</SelectItem>
+                    <SelectItem value="WEEKLY">WEEKLY</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-slate-400">Override tour (optional)</p>
+                <Input
+                  value={pipelineOverrideTour}
+                  onChange={(e) => setPipelineOverrideTour(e.target.value)}
+                  placeholder="PGA"
+                  className="bg-slate-800 border-slate-700"
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-slate-400">Override event_id (optional)</p>
+                <Input
+                  value={pipelineOverrideEventId}
+                  onChange={(e) => setPipelineOverrideEventId(e.target.value)}
+                  placeholder="4"
+                  className="bg-slate-800 border-slate-700"
+                />
+              </div>
+              <div className="flex items-end justify-between rounded-lg border border-slate-700/60 bg-slate-800/30 px-3 py-2">
+                <div>
+                  <p className="text-xs text-slate-400">Dry run</p>
+                  <p className="text-xs text-slate-500">Skip DB writes</p>
+                </div>
+                <Switch checked={pipelineDryRun} onCheckedChange={setPipelineDryRun} />
               </div>
             </div>
             

@@ -54,6 +54,39 @@ export class PlayerNormalizer {
     return player
   }
 
+  async normalizeDataGolfPlayer({ name, dgId }) {
+    if (dgId) {
+      const existing = await prisma.player.findUnique({ where: { dgId: String(dgId) } })
+      if (existing) {
+        if (name) {
+          const cleaned = this.cleanPlayerName(name)
+          const aliases = Array.isArray(existing.aliases) ? existing.aliases : []
+          const updatedAliases = Array.from(new Set([...aliases, name, cleaned].filter(Boolean)))
+          if (updatedAliases.length !== aliases.length) {
+            await prisma.player.update({
+              where: { id: existing.id },
+              data: { aliases: updatedAliases }
+            })
+          }
+        }
+        return existing
+      }
+    }
+
+    if (name) {
+      const player = await this.normalizePlayerName(name)
+      if (dgId && !player.dgId) {
+        return await prisma.player.update({
+          where: { id: player.id },
+          data: { dgId: String(dgId) }
+        })
+      }
+      return player
+    }
+
+    return null
+  }
+
   cleanPlayerName(name) {
     return name
       .trim()

@@ -65,6 +65,7 @@ describe('WeeklyPipeline dry run', () => {
   it('generates recommendations without writing in dry run', async () => {
     const pipeline = new WeeklyPipeline()
     pipeline.dryRun = true
+    pipeline.allowFallback = true
 
     const run = { id: 'run-1' }
     const tourEvents = [
