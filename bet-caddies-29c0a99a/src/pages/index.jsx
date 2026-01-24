@@ -16,6 +16,7 @@ import LongShots from "./LongShots";
 
 import LiveBetTracking from "./LiveBetTracking";
 
+
 import Memberships from "./Memberships";
 
 import MyBets from "./MyBets";
@@ -45,6 +46,7 @@ const PAGES = {
     LongShots: LongShots,
 
     LiveBetTracking: LiveBetTracking,
+
     
     Memberships: Memberships,
     
@@ -98,7 +100,7 @@ function PagesContent() {
                 <Route path="/LongShots" element={<LongShots />} />
 
                 <Route path="/LiveBetTracking" element={<LiveBetTracking />} />
-                
+
                 <Route path="/Memberships" element={<Memberships />} />
                 
                 <Route path="/MyBets" element={<MyBets />} />

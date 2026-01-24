@@ -72,7 +72,10 @@ export default function LiveBetTracking() {
     refetchInterval: 60000
   })
 
-  const activeEvents = useMemo(() => activeResponse?.data || [], [activeResponse])
+  const activeEvents = useMemo(() => {
+    if (Array.isArray(activeResponse)) return activeResponse
+    return activeResponse?.data || []
+  }, [activeResponse])
 
   React.useEffect(() => {
     if (!selectedEvent && activeEvents.length) {
