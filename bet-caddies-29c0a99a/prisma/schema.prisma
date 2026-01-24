@@ -71,6 +71,7 @@ model TourEvent {
   id          String   @id @default(cuid())
   runId       String
   tour        String   // 'PGA', 'LPGA', 'LIV'
+  dgEventId   String?  @map("dg_event_id")
   eventName   String
   startDate   DateTime
   endDate     DateTime
@@ -92,6 +93,7 @@ model TourEvent {
   betRecommendations BetRecommendation[]
 
   @@unique([runId, tour])
+  @@index([dgEventId])
   @@map("tour_events")
 }
 
@@ -264,6 +266,7 @@ model BetRecommendation {
   tourEventId       String
   marketKey         String
   selection         String   // Player name or outcome
+  dgPlayerId         String?  @map("dg_player_id")
   confidence1To5    Int
   bestBookmaker     String
   bestOdds          Float
@@ -292,6 +295,19 @@ model BetRecommendation {
   tourEvent         TourEvent @relation(fields: [tourEventId], references: [id], onDelete: Cascade)
 
   @@map("bet_recommendations")
+}
+
+model LiveTrackingBaseline {
+  id                   String   @id @default(cuid())
+  betRecommendationId   String   @unique
+  baselineOddsDecimal   Float
+  baselineBook          String?
+  capturedAt            DateTime
+  createdAt             DateTime @default(now())
+
+  betRecommendation     BetRecommendation @relation(fields: [betRecommendationId], references: [id], onDelete: Cascade)
+
+  @@map("live_tracking_baselines")
 }
 
 model BetOverride {

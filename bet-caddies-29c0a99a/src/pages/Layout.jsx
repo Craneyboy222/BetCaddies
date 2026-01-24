@@ -11,6 +11,7 @@ import {
   Trophy,
   Sparkles,
   List,
+  Activity,
   User,
   Settings,
   ChevronRight,
@@ -26,7 +27,8 @@ const navItems = [
   { id: 'BirdieBets', icon: Zap, label: 'Birdie' },
   { id: 'EagleBets', icon: Trophy, label: 'Eagle' },
   { id: 'LongShots', icon: Sparkles, label: 'The Long Shots' },
-  { id: 'MyBets', icon: List, label: 'My Bets' }
+  { id: 'MyBets', icon: List, label: 'My Bets' },
+  { id: 'LiveBetTracking', icon: Activity, label: 'Live Bet Tracking' }
 ];
 
 export default function Layout({ children, currentPageName }) {

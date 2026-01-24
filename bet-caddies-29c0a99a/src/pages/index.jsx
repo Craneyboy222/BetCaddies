@@ -14,6 +14,8 @@ import Join from "./Join";
 
 import LongShots from "./LongShots";
 
+import LiveBetTracking from "./LiveBetTracking";
+
 import Memberships from "./Memberships";
 
 import MyBets from "./MyBets";
@@ -41,6 +43,8 @@ const PAGES = {
     Join: Join,
 
     LongShots: LongShots,
+
+    LiveBetTracking: LiveBetTracking,
     
     Memberships: Memberships,
     
@@ -92,6 +96,8 @@ function PagesContent() {
                 <Route path="/Join" element={<Join />} />
 
                 <Route path="/LongShots" element={<LongShots />} />
+
+                <Route path="/LiveBetTracking" element={<LiveBetTracking />} />
                 
                 <Route path="/Memberships" element={<Memberships />} />
                 

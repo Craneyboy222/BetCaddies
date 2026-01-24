@@ -181,6 +181,21 @@ export class BetCaddiesApi {
     }
   }
 
+  liveTracking = {
+    active: async (tours = []) => {
+      const qs = tours.length
+        ? `?tours=${encodeURIComponent(tours.join(','))}`
+        : ''
+      const response = await this.client.get(`/api/live-tracking/active${qs}`)
+      return response.data || response
+    },
+    event: async (dgEventId, tour) => {
+      const qs = new URLSearchParams({ tour: String(tour || '') })
+      const response = await this.client.get(`/api/live-tracking/event/${encodeURIComponent(dgEventId)}?${qs.toString()}`)
+      return response.data || response
+    }
+  }
+
   users = {
     me: {
       update: async (data) => {

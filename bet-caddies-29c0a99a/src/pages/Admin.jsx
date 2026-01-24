@@ -299,6 +299,10 @@ export default function Admin() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['memberships'] });
       setEditingMembership(null);
+    },
+    onError: (error) => {
+      console.error('Failed to update membership package', error)
+      alert('Failed to update membership package. Check Stripe configuration and try again.')
     }
   });
 
@@ -373,6 +377,10 @@ export default function Admin() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['memberships'] });
       setEditingMembership(null);
+    },
+    onError: (error) => {
+      console.error('Failed to create membership package', error)
+      alert('Failed to create membership package. Check Stripe configuration and try again.')
     }
   });
 

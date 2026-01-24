@@ -10,6 +10,7 @@ import { z } from 'zod'
 import cron from 'node-cron'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
+import { liveTrackingService } from '../live-tracking/live-tracking-service.js'
 
 console.log('==== Starting BetCaddies server ====');
 
@@ -831,6 +832,48 @@ app.get('/api/membership-subscriptions/me', authRequired, async (req, res) => {
   } catch (error) {
     logger.error('Error fetching membership subscription for user:', error)
     res.status(500).json({ error: 'Failed to fetch membership subscription' })
+  }
+})
+
+// Live bet tracking: active in-play events
+app.get('/api/live-tracking/active', async (req, res) => {
+  try {
+    const tours = String(req.query?.tours || '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean)
+
+    const response = await liveTrackingService.discoverActiveEventsByTour(tours.length ? tours : undefined)
+    res.json(response)
+  } catch (error) {
+    logger.error('Error fetching live tracking active events', { error: error.message })
+    res.status(500).json({ error: 'Failed to load active events' })
+  }
+})
+
+// Live bet tracking: event leaderboard
+app.get('/api/live-tracking/event/:dgEventId', async (req, res) => {
+  try {
+    const { dgEventId } = req.params
+    const tour = String(req.query?.tour || '')
+    if (!tour) return res.status(400).json({ error: 'Missing tour query parameter' })
+
+    const response = await liveTrackingService.getEventTracking({ dgEventId, tour })
+    res.json(response)
+  } catch (error) {
+    logger.error('Error fetching live tracking event', { error: error.message })
+    res.status(500).json({ error: 'Failed to load live tracking event' })
+  }
+})
+
+// Admin: clear live tracking cache
+app.post('/api/admin/live-tracking/refresh', authRequired, adminOnly, async (req, res) => {
+  try {
+    liveTrackingService.clearCache()
+    res.json({ ok: true })
+  } catch (error) {
+    logger.error('Error clearing live tracking cache', { error: error.message })
+    res.status(500).json({ error: 'Failed to refresh live tracking cache' })
   }
 })
 
@@ -2531,8 +2574,9 @@ app.put(
 
     const priceChanged = Number.isFinite(price) && price !== existing.price
     const periodChanged = billing_period && billing_period !== existing.billingPeriod
+    const missingStripePrice = !updated.stripePriceId
 
-    if (!stripe_price_id && stripe && (priceChanged || periodChanged)) {
+    if (!stripe_price_id && stripe && (priceChanged || periodChanged || missingStripePrice)) {
       const stripeIds = await createStripePriceForPackage({
         packageId: updated.id,
         name: updated.name,

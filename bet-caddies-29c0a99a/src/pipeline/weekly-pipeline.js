@@ -418,7 +418,8 @@ export class WeeklyPipeline {
             courseName,
             courseLat,
             courseLng,
-            sourceUrls
+            sourceUrls,
+            dgEventId: eventId ? String(eventId) : null
           },
           create: {
             runId: run.id,
@@ -430,7 +431,8 @@ export class WeeklyPipeline {
             courseName,
             courseLat,
             courseLng,
-            sourceUrls
+            sourceUrls,
+            dgEventId: eventId ? String(eventId) : null
           }
         })
 
@@ -1742,6 +1744,7 @@ export class WeeklyPipeline {
       tourEventId: candidate.tourEvent.id,
       marketKey: candidate.marketKey,
       selection: candidate.selection,
+      dgPlayerId: candidate.bestOffer?.selectionId ? String(candidate.bestOffer.selectionId) : null,
       confidence1To5: isFallback ? 1 : this.calculateConfidence(candidate.edge),
       bestBookmaker: candidate.bestOffer.bookmaker,
       bestOdds: candidate.bestOffer.oddsDecimal,
