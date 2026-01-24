@@ -197,8 +197,8 @@ model OddsEvent {
   tourEventId     String
   oddsProvider    String   // 'the_odds_api'
   externalEventId String
-  matchConfidence Float?
-  matchMethod     String?
+  matchConfidence Float?  @map("match_confidence")
+  matchMethod     String? @map("match_method")
   raw             Json     // Raw API response
   fetchedAt       DateTime @default(now())
 
