@@ -95,6 +95,35 @@ const getR2Client = () => {
   })
 }
 
+const resolveR2PublicBase = () => {
+  const raw = (R2_PUBLIC_BASE_URL || '').trim()
+  if (raw && !raw.includes('r2.cloudflarestorage.com')) {
+    return raw.replace(/\/+$/, '')
+  }
+  if (R2_BUCKET && R2_ACCOUNT_ID) {
+    return `https://${R2_BUCKET}.${R2_ACCOUNT_ID}.r2.dev`
+  }
+  return raw.replace(/\/+$/, '')
+}
+
+const normalizeMediaUrl = (url) => {
+  if (!url || typeof url !== 'string') return url
+  if (!url.includes('r2.cloudflarestorage.com')) return url
+  if (!R2_BUCKET || !R2_ACCOUNT_ID) return url
+  try {
+    const parsed = new URL(url)
+    let path = parsed.pathname || ''
+    if (path.startsWith(`/${R2_BUCKET}/`)) {
+      path = path.slice(R2_BUCKET.length + 1)
+    }
+    const base = resolveR2PublicBase()
+    if (!base) return url
+    return `${base}/${path.replace(/^\/+/, '')}`
+  } catch {
+    return url
+  }
+}
+
 const requireR2 = () => {
   if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET || !R2_PUBLIC_BASE_URL) {
     const error = new Error('R2 is not configured')
@@ -2748,7 +2777,7 @@ app.get('/api/entities/media-assets', authRequired, adminOnly, async (req, res) 
       data: items.map((asset) => ({
         id: asset.id,
         provider: asset.provider,
-        url: asset.url,
+        url: normalizeMediaUrl(asset.url),
         public_id: asset.publicId,
         resource_type: asset.resourceType,
         folder: asset.folder,
@@ -2815,7 +2844,7 @@ app.post(
         data: {
           id: asset.id,
           provider: asset.provider,
-          url: asset.url,
+          url: normalizeMediaUrl(asset.url),
           public_id: asset.publicId,
           resource_type: asset.resourceType,
           folder: asset.folder,
@@ -2866,8 +2895,8 @@ app.post(
         CacheControl: 'public, max-age=31536000'
       }))
 
-      const publicBase = String(R2_PUBLIC_BASE_URL || '').replace(/\/+$/, '')
-      const publicUrl = `${publicBase}/${key}`
+      const publicBase = resolveR2PublicBase()
+      const publicUrl = publicBase ? `${publicBase}/${key}` : key
 
       const asset = await prisma.mediaAsset.create({
         data: {
@@ -2966,8 +2995,8 @@ app.post(
       })
 
       const uploadUrl = await getSignedUrl(client, command, { expiresIn: 60 })
-      const publicBase = String(R2_PUBLIC_BASE_URL || '').replace(/\/+$/, '')
-      const publicUrl = `${publicBase}/${key}`
+      const publicBase = resolveR2PublicBase()
+      const publicUrl = publicBase ? `${publicBase}/${key}` : key
 
       res.json({
         data: {

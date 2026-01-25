@@ -31,7 +31,15 @@ const renderBanner = (data = {}) => {
     warning: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
     danger: 'border-rose-500/30 bg-rose-500/10 text-rose-200'
   }
-  const content = (
+  const content = data.imageUrl ? (
+    <div className="w-full">
+      <img
+        src={data.imageUrl}
+        alt={data.imageAlt || 'Banner'}
+        className="w-full h-auto rounded-lg"
+      />
+    </div>
+  ) : (
     <div className="flex items-center justify-between gap-4">
       <span>{data.text || 'Banner text'}</span>
       {data.url && (

@@ -280,7 +280,9 @@ export default function Admin() {
       fields: [
         { key: 'text', label: 'Text', type: 'text' },
         { key: 'tone', label: 'Tone', type: 'select', options: ['info', 'success', 'warning', 'danger'] },
-        { key: 'url', label: 'Link URL', type: 'text' }
+        { key: 'url', label: 'Link URL', type: 'text' },
+        { key: 'imageUrl', label: 'Image URL', type: 'text' },
+        { key: 'imageAlt', label: 'Image Alt', type: 'text' }
       ]
     },
     text: {
