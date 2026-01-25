@@ -279,7 +279,8 @@ export default function Admin() {
       label: 'Banner',
       fields: [
         { key: 'text', label: 'Text', type: 'text' },
-        { key: 'tone', label: 'Tone', type: 'select', options: ['info', 'success', 'warning', 'danger'] }
+        { key: 'tone', label: 'Tone', type: 'select', options: ['info', 'success', 'warning', 'danger'] },
+        { key: 'url', label: 'Link URL', type: 'text' }
       ]
     },
     text: {

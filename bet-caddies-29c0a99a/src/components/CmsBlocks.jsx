@@ -31,9 +31,22 @@ const renderBanner = (data = {}) => {
     warning: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
     danger: 'border-rose-500/30 bg-rose-500/10 text-rose-200'
   }
-  return (
+  const content = (
+    <div className="flex items-center justify-between gap-4">
+      <span>{data.text || 'Banner text'}</span>
+      {data.url && (
+        <span className="text-xs underline">Learn more</span>
+      )}
+    </div>
+  )
+
+  return data.url ? (
+    <a href={data.url} className={`block border rounded-xl p-4 ${toneMap[tone] || toneMap.info}`}>
+      {content}
+    </a>
+  ) : (
     <section className={`border rounded-xl p-4 ${toneMap[tone] || toneMap.info}`}>
-      {data.text || 'Banner text'}
+      {content}
     </section>
   )
 }
