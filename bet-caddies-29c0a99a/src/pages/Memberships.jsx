@@ -6,6 +6,7 @@ import { Crown, Check, Zap, Star, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import CmsBlocks from '@/components/CmsBlocks';
 
 export default function Memberships() {
   const [user, setUser] = useState(null);
@@ -34,8 +35,17 @@ export default function Memberships() {
     retry: false
   });
 
-  const heroTitle = membershipsContent?.json?.hero?.title || 'Premium Membership';
-  const heroSubtitle = membershipsContent?.json?.hero?.subtitle || 'Unlock exclusive features and maximize your betting success';
+  const { data: membershipsPage } = useQuery({
+    queryKey: ['cmsPage', 'memberships'],
+    queryFn: () => api.pages.get('memberships'),
+    retry: false
+  });
+
+  const membershipBlocks = Array.isArray(membershipsPage?.blocks) ? membershipsPage.blocks : [];
+  const membershipHero = membershipBlocks.find((block) => block?.type === 'hero');
+
+  const heroTitle = membershipHero?.data?.title || membershipsContent?.json?.hero?.title || 'Premium Membership';
+  const heroSubtitle = membershipHero?.data?.subtitle || membershipsContent?.json?.hero?.subtitle || 'Unlock exclusive features and maximize your betting success';
 
   const { data: activeSubscription } = useQuery({
     queryKey: ['mySubscription', user?.email],
@@ -114,6 +124,12 @@ export default function Memberships() {
         <h1 className="text-4xl font-bold text-white mb-3">{heroTitle}</h1>
         <p className="text-xl text-slate-400">{heroSubtitle}</p>
       </motion.div>
+
+      {membershipBlocks.length > 0 && (
+        <div className="mb-12">
+          <CmsBlocks blocks={membershipBlocks} excludeTypes={['hero']} />
+        </div>
+      )}
 
       {/* Active Subscription Banner */}
       {activeSubscription && (

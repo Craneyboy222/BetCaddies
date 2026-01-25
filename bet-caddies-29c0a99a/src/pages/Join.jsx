@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '@/api/client';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '../utils';
 import { motion } from 'framer-motion';
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import CmsBlocks from '@/components/CmsBlocks';
 
 const tours = [
   { id: 'PGA', name: 'PGA Tour', description: 'Premier US tour' },
@@ -66,6 +68,17 @@ export default function Join() {
       .catch(() => {});
     return () => { mounted = false; };
   }, []);
+
+  const { data: joinPage } = useQuery({
+    queryKey: ['cmsPage', 'join'],
+    queryFn: () => api.pages.get('join'),
+    retry: false
+  });
+
+  const joinBlocks = Array.isArray(joinPage?.blocks) ? joinPage.blocks : [];
+  const joinHero = joinBlocks.find((block) => block?.type === 'hero');
+  const heroTitle = joinHero?.data?.title || hero.title;
+  const heroSubtitle = joinHero?.data?.subtitle || hero.subtitle;
 
   const handleTourToggle = (tourId) => {
     setSelectedTours(prev => 
@@ -122,9 +135,15 @@ export default function Join() {
               className="w-24 h-24 object-contain"
             />
           </div>
-          <h1 className="text-3xl font-bold text-white">{hero.title}</h1>
-          <p className="text-slate-400 mt-2">{hero.subtitle}</p>
+          <h1 className="text-3xl font-bold text-white">{heroTitle}</h1>
+          <p className="text-slate-400 mt-2">{heroSubtitle}</p>
         </div>
+
+        {joinBlocks.length > 0 && (
+          <div className="mb-8">
+            <CmsBlocks blocks={joinBlocks} excludeTypes={['hero']} />
+          </div>
+        )}
 
         {/* Progress */}
         <div className="flex items-center justify-center gap-2 mb-10">

@@ -484,6 +484,77 @@ if (cronEnabled) {
   }, { timezone: 'Europe/London' })
 }
 
+const buildBlocksFromSiteContent = (key, json = {}) => {
+  const blocks = []
+  const hero = json?.hero || null
+  if (hero?.title || hero?.subtitle) {
+    blocks.push({
+      type: 'hero',
+      data: {
+        title: hero?.title || '',
+        subtitle: hero?.subtitle || ''
+      }
+    })
+  }
+
+  if (key === 'home') {
+    const features = Array.isArray(json?.features) ? json.features : []
+    const faqs = Array.isArray(json?.faqs) ? json.faqs : []
+    if (features.length > 0) {
+      blocks.push({
+        type: 'feature_grid',
+        data: { title: 'Why Bet Caddies', items: features }
+      })
+    }
+    if (faqs.length > 0) {
+      blocks.push({
+        type: 'faq',
+        data: { title: 'FAQs', items: faqs }
+      })
+    }
+  }
+
+  return blocks
+}
+
+const seedCmsPages = async () => {
+  try {
+    const slugs = ['home', 'join', 'memberships']
+    const existing = await prisma.page.findMany({ where: { slug: { in: slugs } } })
+    const existingSlugs = new Set(existing.map((page) => page.slug))
+    const siteContent = await prisma.siteContent.findMany({ where: { key: { in: slugs } } })
+    const contentByKey = new Map(siteContent.map((item) => [item.key, item.json]))
+
+    for (const slug of slugs) {
+      if (existingSlugs.has(slug)) continue
+      const json = contentByKey.get(slug) || {}
+      const blocks = buildBlocksFromSiteContent(slug, json)
+      const title = slug === 'home' ? 'Home' : slug === 'join' ? 'Join' : 'Memberships'
+      const created = await prisma.page.create({
+        data: {
+          slug,
+          title,
+          status: 'published',
+          templateKey: slug === 'home' ? 'landing' : 'content',
+          blocks,
+          publishedAt: new Date()
+        }
+      })
+
+      await prisma.pageRevision.create({
+        data: {
+          pageId: created.id,
+          version: 1,
+          title: created.title,
+          blocks: created.blocks
+        }
+      })
+    }
+  } catch (error) {
+    logger.error('Failed to seed CMS pages', { error: error?.message })
+  }
+}
+
 // Health check - independent of database connection
 app.get('/health', (req, res) => {
   // Always return a 200 response for Railway healthchecks
@@ -3254,6 +3325,7 @@ process.on('unhandledRejection', (reason, promise) => {
 // Start server with robust error handling
 const HOST = process.env.HOST || '0.0.0.0';
 try {
+  await seedCmsPages()
   app.listen(PORT, HOST, () => {
     logger.info(`BetCaddies API server running on http://${HOST}:${PORT}`);
     console.log(`BetCaddies API server running on http://${HOST}:${PORT}`);

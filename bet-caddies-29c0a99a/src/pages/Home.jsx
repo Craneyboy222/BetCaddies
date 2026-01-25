@@ -19,6 +19,7 @@ import BetCard from '@/components/ui/BetCard';
 import TourFilter from '@/components/ui/TourFilter';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 import EmptyState from '@/components/ui/EmptyState';
+import CmsBlocks from '@/components/CmsBlocks';
 
 const categoryCards = [
   {
@@ -90,14 +91,29 @@ export default function Home() {
     retry: false
   });
 
-  const heroTitleRaw = homeContent?.json?.hero?.title || 'Your Weekly Golf Picks';
-  const heroSubtitle = homeContent?.json?.hero?.subtitle || '30 curated bets across 5 tours. Data-driven selections with transparent analysis and real value.';
+  const { data: homePage } = useQuery({
+    queryKey: ['cmsPage', 'home'],
+    queryFn: () => api.pages.get('home'),
+    retry: false
+  });
+
+  const homeBlocks = Array.isArray(homePage?.blocks) ? homePage.blocks : [];
+  const heroBlock = homeBlocks.find((block) => block?.type === 'hero');
+  const featureBlock = homeBlocks.find((block) => block?.type === 'feature_grid');
+  const faqBlock = homeBlocks.find((block) => block?.type === 'faq');
+
+  const heroTitleRaw = heroBlock?.data?.title || homeContent?.json?.hero?.title || 'Your Weekly Golf Picks';
+  const heroSubtitle = heroBlock?.data?.subtitle || homeContent?.json?.hero?.subtitle || '30 curated bets across 5 tours. Data-driven selections with transparent analysis and real value.';
   const heroParts = String(heroTitleRaw).split('|');
   const heroTitlePlain = heroParts[0] || '';
   const heroTitleAccent = heroParts.length > 1 ? heroParts.slice(1).join('|') : null;
 
-  const features = Array.isArray(homeContent?.json?.features) ? homeContent.json.features : [];
-  const faqs = Array.isArray(homeContent?.json?.faqs) ? homeContent.json.faqs : [];
+  const features = Array.isArray(featureBlock?.data?.items)
+    ? featureBlock.data.items
+    : (Array.isArray(homeContent?.json?.features) ? homeContent.json.features : []);
+  const faqs = Array.isArray(faqBlock?.data?.items)
+    ? faqBlock.data.items
+    : (Array.isArray(homeContent?.json?.faqs) ? homeContent.json.faqs : []);
 
   const { data: providers = [] } = useQuery({
     queryKey: ['providers'],
@@ -283,8 +299,8 @@ export default function Home() {
               <div className="grid md:grid-cols-3 gap-4">
                 {features.slice(0, 9).map((f, idx) => (
                   <div key={idx} className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
-                    <div className="font-semibold text-white mb-1">{f.title || '—'}</div>
-                    <div className="text-sm text-slate-400">{f.body || ''}</div>
+                    <div className="font-semibold text-white mb-1">{f.title || f.name || '—'}</div>
+                    <div className="text-sm text-slate-400">{f.body || f.description || ''}</div>
                   </div>
                 ))}
               </div>
@@ -297,13 +313,19 @@ export default function Home() {
               <div className="space-y-3">
                 {faqs.slice(0, 12).map((f, idx) => (
                   <div key={idx} className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
-                    <div className="font-medium text-white">{f.q || '—'}</div>
-                    <div className="text-sm text-slate-400 mt-2">{f.a || ''}</div>
+                    <div className="font-medium text-white">{f.q || f.question || '—'}</div>
+                    <div className="text-sm text-slate-400 mt-2">{f.a || f.answer || ''}</div>
                   </div>
                 ))}
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {homeBlocks.length > 0 && (
+        <div className="mt-10">
+          <CmsBlocks blocks={homeBlocks} excludeTypes={['hero', 'feature_grid', 'faq']} />
         </div>
       )}
 
