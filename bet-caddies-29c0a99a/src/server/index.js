@@ -142,7 +142,29 @@ const corsOrigins = process.env.CORS_ORIGIN
   : true
 
 // Middleware
-app.use(helmet())
+const r2PublicBase = resolveR2PublicBase()
+const r2PublicOrigin = (() => {
+  if (!r2PublicBase) return null
+  try {
+    return new URL(r2PublicBase).origin
+  } catch {
+    return null
+  }
+})()
+
+const cspImageSources = ["'self'", 'data:', 'blob:', 'https:']
+if (r2PublicOrigin) cspImageSources.push(r2PublicOrigin)
+
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      'img-src': cspImageSources,
+      'media-src': cspImageSources,
+      'connect-src': ["'self'", 'https:']
+    }
+  }
+}))
 app.use(cors({ origin: corsOrigins }))
 const jsonParser = express.json({ limit: '1mb' })
 app.use((req, res, next) => {
