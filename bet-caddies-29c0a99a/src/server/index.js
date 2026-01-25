@@ -3199,7 +3199,6 @@ app.use((error, req, res, next) => {
 })
 
 // Serve static files from the React app build directory
-import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __filename = fileURLToPath(import.meta.url)
