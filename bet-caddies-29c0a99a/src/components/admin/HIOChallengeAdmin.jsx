@@ -10,7 +10,9 @@ import {
   X,
   CheckCircle,
   Users,
-  TrendingUp
+  TrendingUp,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +24,44 @@ export default function HIOChallengeAdmin() {
   const [editingQuestion, setEditingQuestion] = useState(null);
   const [editingAnswer, setEditingAnswer] = useState({});
   const queryClient = useQueryClient();
+
+  const createBlankQuestion = () => ({
+    question_text: 'New question',
+    options: ['Option A', 'Option B', 'Option C', 'Option D'],
+    correct_answer: 'Option A'
+  })
+
+  const questionPool = [
+    {
+      question_text: 'Which player is most likely to finish highest this week?',
+      options: ['Player A', 'Player B', 'Player C', 'Player D'],
+      correct_answer: 'Player A'
+    },
+    {
+      question_text: 'Which golfer will lead the field in birdies?',
+      options: ['Player A', 'Player B', 'Player C', 'Player D'],
+      correct_answer: 'Player B'
+    },
+    {
+      question_text: 'Who is most likely to win the tournament?',
+      options: ['Player A', 'Player B', 'Player C', 'Player D'],
+      correct_answer: 'Player C'
+    },
+    {
+      question_text: 'Which golfer will record the lowest round?',
+      options: ['Player A', 'Player B', 'Player C', 'Player D'],
+      correct_answer: 'Player D'
+    }
+  ]
+
+  const generateQuestion = () => {
+    const base = questionPool[Math.floor(Math.random() * questionPool.length)]
+    return {
+      question_text: base.question_text,
+      options: [...base.options],
+      correct_answer: base.correct_answer
+    }
+  }
 
   // Fetch challenges
   const { data: challenges = [], isLoading } = useQuery({
@@ -41,14 +81,30 @@ export default function HIOChallengeAdmin() {
 
   // Placeholder (Base44 AI generator removed)
   const regenerateQuestionMutation = useMutation({
-    mutationFn: async () => {
-      alert('Question generation is not wired yet. Edit questions manually for now.')
+    mutationFn: async (index) => {
+      const updatedQuestions = [...(activeChallenge.questions || [])];
+      updatedQuestions[index] = generateQuestion()
+      return api.entities.HIOChallenge.update(activeChallenge.id, {
+        questions: updatedQuestions
+      })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allHIOChallenges'] });
+      setEditingQuestion(null);
     }
   })
 
   const regenerateAllMutation = useMutation({
     mutationFn: async () => {
-      alert('Question generation is not wired yet. Edit questions manually for now.')
+      const count = Math.max(10, (activeChallenge.questions || []).length)
+      const regenerated = Array.from({ length: count }, () => generateQuestion())
+      return api.entities.HIOChallenge.update(activeChallenge.id, {
+        questions: regenerated
+      })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allHIOChallenges'] });
+      setEditingQuestion(null);
     }
   })
 
@@ -155,6 +211,22 @@ export default function HIOChallengeAdmin() {
           Regenerate All Questions
         </Button>
 
+        <Button
+          onClick={() => {
+            const updatedQuestions = [...(activeChallenge.questions || [])]
+            updatedQuestions.push(createBlankQuestion())
+            updateQuestionMutation.mutate({
+              index: updatedQuestions.length - 1,
+              question: updatedQuestions[updatedQuestions.length - 1]
+            })
+          }}
+          variant="outline"
+          className="border-slate-600"
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          Add Question
+        </Button>
+
         {activeChallenge.status === 'active' && (
           <Button
             onClick={() => calculateScoresMutation.mutate()}
@@ -225,6 +297,21 @@ export default function HIOChallengeAdmin() {
                     >
                       <RefreshCw className={`w-4 h-4 ${regenerateQuestionMutation.isPending ? 'animate-spin' : ''}`} />
                     </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        if (!window.confirm('Delete this question?')) return
+                        const updatedQuestions = [...(activeChallenge.questions || [])]
+                        updatedQuestions.splice(idx, 1)
+                        api.entities.HIOChallenge.update(activeChallenge.id, {
+                          questions: updatedQuestions
+                        }).then(() => queryClient.invalidateQueries({ queryKey: ['allHIOChallenges'] }))
+                      }}
+                      className="text-slate-400 hover:text-red-400"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
                 </div>
 
@@ -288,6 +375,39 @@ function EditQuestionForm({ question, onSave, onCancel }) {
             className="bg-slate-800 border-slate-700 mb-2"
           />
         ))}
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setForm({
+              ...form,
+              options: [...form.options, `Option ${String.fromCharCode(65 + form.options.length)}`]
+            })}
+            className="border-slate-600"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Add Option
+          </Button>
+          {form.options.length > 2 && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const newOptions = form.options.slice(0, -1)
+                const newCorrect = newOptions.includes(form.correct_answer)
+                  ? form.correct_answer
+                  : newOptions[0]
+                setForm({ ...form, options: newOptions, correct_answer: newCorrect })
+              }}
+              className="border-slate-600"
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Remove Option
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="flex justify-end gap-2">
