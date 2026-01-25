@@ -454,35 +454,8 @@ export default function Admin() {
     setMediaUploading(true);
     setMediaError(null);
     try {
-      const upload = await api.entities.MediaAsset.uploadUrl(file.name, file.type || 'application/octet-stream', 'cms');
-      const uploadUrl = upload?.uploadUrl;
-      const publicUrl = upload?.publicUrl;
-      const key = upload?.key;
-      if (!uploadUrl || !publicUrl || !key) {
-        throw new Error('Missing R2 upload URL');
-      }
-
-      const uploadResponse = await fetch(uploadUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': file.type || 'application/octet-stream'
-        },
-        body: file
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error('R2 upload failed');
-      }
-
-      await createMediaAssetMutation.mutateAsync({
-        provider: 'r2',
-        url: publicUrl,
-        public_id: key,
-        resource_type: file.type || null,
-        folder: 'cms',
-        file_name: file.name,
-        bytes: file.size
-      });
+      await api.entities.MediaAsset.upload(file, 'cms');
+      queryClient.invalidateQueries({ queryKey: ['mediaAssets'] });
       toast({ title: 'Upload complete', description: 'Media asset added.' });
     } catch (error) {
       console.error(error);
@@ -1075,7 +1048,7 @@ export default function Admin() {
               setCreatingPage(false);
             }
           }}>
-            <DialogContent className="max-w-4xl bg-slate-900 text-slate-100 border border-slate-700">
+            <DialogContent className="max-w-4xl bg-slate-900 text-slate-100 border border-slate-700 max-h-[85vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{creatingPage ? 'Create Page' : 'Edit Page'}</DialogTitle>
               </DialogHeader>

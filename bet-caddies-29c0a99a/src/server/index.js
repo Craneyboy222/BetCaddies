@@ -12,6 +12,7 @@ import { z } from 'zod'
 import cron from 'node-cron'
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import multer from 'multer'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
 import { liveTrackingService } from '../live-tracking/live-tracking-service.js'
@@ -118,6 +119,11 @@ const jsonParser = express.json({ limit: '1mb' })
 app.use((req, res, next) => {
   if (req.originalUrl === '/api/stripe/webhook') return next()
   return jsonParser(req, res, next)
+})
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }
 })
 
 const authLimiter = rateLimit({
@@ -2826,6 +2832,84 @@ app.post(
     } catch (error) {
       logger.error('Error creating media asset:', error)
       res.status(500).json({ error: 'Failed to create media asset' })
+    }
+  }
+)
+
+app.post(
+  '/api/entities/media-assets/upload',
+  authRequired,
+  adminOnly,
+  upload.single('file'),
+  async (req, res) => {
+    try {
+      requireR2()
+      const file = req.file
+      if (!file) return res.status(400).json({ error: 'Missing file' })
+
+      const folder = String(req.body?.folder || 'cms')
+        .replace(/[^a-zA-Z0-9/_-]/g, '')
+        .replace(/^\/+/, '')
+        .replace(/\/+$/, '')
+
+      const ext = path.extname(file.originalname || '')
+      const key = `${folder}/${Date.now()}-${crypto.randomUUID()}${ext || ''}`
+
+      const client = getR2Client()
+      if (!client) return res.status(500).json({ error: 'R2 client not available' })
+
+      await client.send(new PutObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype || 'application/octet-stream',
+        CacheControl: 'public, max-age=31536000'
+      }))
+
+      const publicBase = String(R2_PUBLIC_BASE_URL || '').replace(/\/+$/, '')
+      const publicUrl = `${publicBase}/${key}`
+
+      const asset = await prisma.mediaAsset.create({
+        data: {
+          provider: 'r2',
+          url: publicUrl,
+          publicId: key,
+          resourceType: file.mimetype || null,
+          folder,
+          fileName: file.originalname || null,
+          bytes: file.size ?? null
+        }
+      })
+
+      await writeAuditLog({
+        req,
+        action: 'media.create',
+        entityType: 'MediaAsset',
+        entityId: asset.id,
+        afterJson: { url: asset.url, provider: asset.provider }
+      })
+
+      res.json({
+        data: {
+          id: asset.id,
+          provider: asset.provider,
+          url: asset.url,
+          public_id: asset.publicId,
+          resource_type: asset.resourceType,
+          folder: asset.folder,
+          file_name: asset.fileName,
+          bytes: asset.bytes,
+          width: asset.width,
+          height: asset.height,
+          format: asset.format,
+          alt_text: asset.altText,
+          created_at: asset.createdAt,
+          updated_at: asset.updatedAt
+        }
+      })
+    } catch (error) {
+      logger.error('Error uploading media asset:', { error: error?.message })
+      res.status(500).json({ error: error.message || 'Failed to upload media asset' })
     }
   }
 )

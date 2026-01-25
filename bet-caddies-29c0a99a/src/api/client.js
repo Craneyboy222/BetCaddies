@@ -388,6 +388,22 @@ export class BetCaddiesApi {
         const response = await this.client.get(`/api/entities/media-assets?${qs.toString()}`)
         return response.data || []
       },
+      upload: async (file, folder) => {
+        const formData = new FormData()
+        formData.append('file', file)
+        if (folder) formData.append('folder', folder)
+        const url = `${API_BASE_URL}/api/entities/media-assets/upload`
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: this.buildHeaders(),
+          body: formData
+        })
+        if (!response.ok) {
+          throw await this.buildHttpError(response)
+        }
+        const data = await response.json()
+        return data.data || data
+      },
       create: async (data) => {
         const response = await this.client.post('/api/entities/media-assets', data)
         return response.data || response
