@@ -1,3 +1,5 @@
+import { logger } from '../../../observability/logger.js'
+
 export const clampProbability = (value) => {
   if (!Number.isFinite(value)) return NaN
   return Math.min(0.999, Math.max(0.001, value))
@@ -6,6 +8,33 @@ export const clampProbability = (value) => {
 export const impliedProbability = (decimalOdds) => {
   if (!Number.isFinite(decimalOdds) || decimalOdds <= 1) return NaN
   return 1 / decimalOdds
+}
+
+export const validateProbability = (value, { label = 'probability', context = {}, reportNonFinite = false } = {}) => {
+  if (!Number.isFinite(value)) {
+    if (reportNonFinite) {
+      logger.warn('Malformed probability (non-finite)', { label, value, ...context })
+    }
+    return NaN
+  }
+  if (value <= 0 || value >= 1) {
+    logger.warn('Malformed probability (out of range)', { label, value, ...context })
+    return NaN
+  }
+  return value
+}
+
+export const normalizeImpliedOddsToProbability = (oddsValue, { label = 'implied_odds', context = {} } = {}) => {
+  if (!Number.isFinite(oddsValue)) {
+    logger.warn('Malformed implied odds (non-finite)', { label, oddsValue, ...context })
+    return NaN
+  }
+  const prob = impliedProbability(oddsValue)
+  if (!Number.isFinite(prob) || prob <= 0 || prob >= 1) {
+    logger.warn('Malformed implied odds (invalid probability)', { label, oddsValue, prob, ...context })
+    return NaN
+  }
+  return prob
 }
 
 export const removeVigNormalize = (offers) => {

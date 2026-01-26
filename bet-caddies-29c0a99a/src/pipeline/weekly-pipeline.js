@@ -22,6 +22,8 @@ import {
   removeVigNormalize,
   removeVigPower,
   weightedMedian,
+  normalizeImpliedOddsToProbability,
+  validateProbability,
   logit,
   invLogit
 } from '../engine/v2/odds/odds-utils.js'
@@ -1089,6 +1091,8 @@ export class WeeklyPipeline {
         }
       }
 
+      // DataGolf predictions (raw ingestion) — OPTIONAL priors/calibration/confidence only.
+      // FORBIDDEN: using DataGolf predictions to define fair prices or replace simulation outputs.
       const probabilityModel = this.probabilityEngine.build({ preTournamentPreds: preTournament, skillRatings })
       const predsIndex = this.buildPredsIndex(preTournament)
       const eventPlayers = fieldEntries
@@ -1101,7 +1105,7 @@ export class WeeklyPipeline {
         playerByDgId.set(String(entry.player.dgId), entry.player.canonicalName)
       }
 
-      const playerParams = buildPlayerParams({ players: eventPlayers, skillRatings })
+      const playerParams = buildPlayerParams({ players: eventPlayers, skillRatings, tour: event.tour })
       const simResults = simulateTournament({
         players: playerParams,
         tour: event.tour,
@@ -1113,6 +1117,8 @@ export class WeeklyPipeline {
       const simProbabilities = simResults.probabilities
       const modelAvailable = simProbabilities && simProbabilities.size > 0
       const recommendationMode = event.inPlay && !this.excludeInPlay ? 'IN_PLAY' : 'PRE_TOURNAMENT'
+      const fieldStats = fieldIndex.get(event.id)
+      const fieldPlayersCount = fieldStats?.names?.size || 0
 
       if (!modelAvailable) {
         await issueTracker.logIssue(event.tour, 'warning', 'selection', 'NO_MODEL', {
@@ -1190,7 +1196,11 @@ export class WeeklyPipeline {
 
           const impliedProb = impliedProbability(bestOffer.oddsDecimal)
           const hasConsensus = marketFairProbs.has(selectionKey)
-          const marketProb = marketFairProbs.get(selectionKey) ?? normalizedImplied.get(selectionKey)
+          const marketProbRaw = marketFairProbs.get(selectionKey) ?? normalizedImplied.get(selectionKey)
+          const marketProb = validateProbability(marketProbRaw, {
+            label: 'market_probability',
+            context: { selectionKey, marketKey: market.marketKey, event: event.eventName }
+          })
           const marketProbSource = hasConsensus
             ? 'vig_removed_consensus'
             : (normalizedImplied.has(selectionKey) ? 'normalized_implied' : 'missing')
@@ -1216,6 +1226,31 @@ export class WeeklyPipeline {
               continue
             }
 
+            const fallbackConfidence = this.buildModelConfidence({
+              dataSufficiency: {
+                fieldPlayers: fieldPlayersCount,
+                simPlayers: 0
+              },
+              simulationStability: {
+                simCount: this.simCount,
+                seed: this.simSeed,
+                simPlayers: 0
+              },
+              marketDepth: {
+                booksUsed: booksUsed.length
+              },
+              externalAgreement: {
+                simProb: null,
+                dgProb
+              },
+              context: {
+                eventName: event.eventName,
+                marketKey: market.marketKey,
+                selectionKey,
+                note: 'Simulation unavailable; fallback candidate'
+              }
+            })
+
             candidates.push({
               tourEvent: event,
               marketKey: market.marketKey,
@@ -1235,7 +1270,8 @@ export class WeeklyPipeline {
               fallbackType: 'no_model',
               tierStatus: 'NO_MODEL',
               mode: recommendationMode,
-              booksUsed
+              booksUsed,
+              modelConfidenceJson: fallbackConfidence
             })
             stat.validMarket += 1
             continue
@@ -1244,25 +1280,40 @@ export class WeeklyPipeline {
             name: selectionKey,
             id: bestOffer.selectionId || null
           })
-          const derivedModelProb = this.deriveModelProbability(market.marketKey, modelProbs)
           const dgProb = this.getPredProbability(predsIndex, selectionKey, bestOffer.selectionId, market.marketKey)
+          const dgDisagreement = Number.isFinite(dgProb)
+            ? Math.abs(simProb - dgProb)
+            : null
+          // Internal simulation is authoritative. DataGolf probabilities are optional priors/calibration inputs
+          // and must never replace missing simulation outputs.
           let simProb = simProbabilities.get(selectionKey)?.[this.mapMarketKeyToSim(market.marketKey)]
-          if (!Number.isFinite(simProb) && Number.isFinite(derivedModelProb)) {
-            simProb = derivedModelProb
-          }
           if (market.marketKey === 'mc' && Number.isFinite(simProb)) {
             simProb = clampProbability(1 - simProb)
           }
+
+          simProb = validateProbability(simProb, {
+            label: 'sim_probability',
+            context: { selectionKey, marketKey: market.marketKey, event: event.eventName }
+          })
 
           if (!Number.isFinite(simProb)) {
             stat.invalid.missingFair += 1
             continue
           }
 
-          const blended = this.blendProbabilities({ sim: simProb, dg: dgProb, mkt: null })
-          const fairProb = Number.isFinite(blended)
-            ? applyCalibration(blended, market.marketKey, event.tour)
-            : applyCalibration(simProb, market.marketKey, event.tour)
+          // Fair prices derive from INTERNAL simulation only.
+          // DataGolf predictions may only influence priors/calibration/confidence, not fair price itself.
+          const blended = this.blendProbabilities({ sim: simProb, dg: null, mkt: null })
+          const fairProb = validateProbability(
+            Number.isFinite(blended)
+              ? applyCalibration(blended, market.marketKey, event.tour)
+              : applyCalibration(simProb, market.marketKey, event.tour),
+            {
+              label: 'fair_probability',
+              context: { selectionKey, marketKey: market.marketKey, event: event.eventName },
+              reportNonFinite: true
+            }
+          )
 
           if (Number.isFinite(marketProb)) stat.validMarket += 1
           if (Number.isFinite(fairProb)) stat.validFair += 1
@@ -1288,6 +1339,31 @@ export class WeeklyPipeline {
           if (Number.isFinite(ev)) stat.validEv += 1
           if (ev > 0 && edge > 0) stat.positive += 1
 
+          const modelConfidenceJson = this.buildModelConfidence({
+            dataSufficiency: {
+              fieldPlayers: fieldPlayersCount,
+              simPlayers: simProbabilities.size
+            },
+            simulationStability: {
+              simCount: this.simCount,
+              seed: this.simSeed,
+              simPlayers: simProbabilities.size
+            },
+            marketDepth: {
+              booksUsed: booksUsed.length
+            },
+            externalAgreement: {
+              simProb,
+              dgProb,
+              disagreement: dgDisagreement
+            },
+            context: {
+              eventName: event.eventName,
+              marketKey: market.marketKey,
+              selectionKey
+            }
+          })
+
           const fairProbFallback = false
           const tierInfo = this.classifyTier(bestOffer.oddsDecimal)
           if (tierInfo.gap) {
@@ -1311,6 +1387,7 @@ export class WeeklyPipeline {
             marketProb,
             edge,
             ev,
+            modelConfidenceJson,
             probSource: 'internal_model',
             marketProbSource,
             isFallback: false,
@@ -1371,6 +1448,13 @@ export class WeeklyPipeline {
           eventName: event.eventName,
           reason
         })
+      } else {
+        const confidenceSummary = this.summarizeConfidence(candidates)
+        if (confidenceSummary) {
+          logStep('selection', `Model confidence summary for ${event.tour}/${event.eventName}`, {
+            confidence: confidenceSummary
+          })
+        }
       }
 
       const tiered = await this.selectTieredPortfolio(candidates, issueTracker, event, marketStats)
@@ -1696,6 +1780,7 @@ export class WeeklyPipeline {
       marketKey: candidate.marketKey,
       selection: candidate.selection,
       dgPlayerId: candidate.bestOffer?.selectionId ? String(candidate.bestOffer.selectionId) : null,
+      modelConfidenceJson: candidate.modelConfidenceJson || null,
       confidence1To5: isFallback ? 1 : this.calculateConfidence(candidate.edge),
       bestBookmaker: candidate.bestOffer.bookmaker,
       bestOdds: candidate.bestOffer.oddsDecimal,
@@ -1724,6 +1809,64 @@ export class WeeklyPipeline {
     if (edge > 0.05) return 3
     if (edge > 0.03) return 2
     return 1
+  }
+
+  buildModelConfidence({ dataSufficiency, simulationStability, marketDepth, externalAgreement, context }) {
+    // Confidence measures reliability of the probability distribution, not EV or edge.
+    // DataGolf inputs here are used ONLY for disagreement/confidence metrics.
+    // It must never be used to block bet generation or change selection logic.
+    const clampScore = (value) => Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : null
+
+    const dataScore = dataSufficiency.fieldPlayers > 0
+      ? clampScore(dataSufficiency.simPlayers / dataSufficiency.fieldPlayers)
+      : 0
+    const stabilityScore = clampScore(simulationStability.simCount / 10000)
+    const depthScore = clampScore(marketDepth.booksUsed / Math.max(1, this.minBooksPerSelection))
+    const agreementScore = Number.isFinite(externalAgreement.dgProb)
+      ? clampScore(1 - Math.min(1, Math.abs(externalAgreement.simProb - externalAgreement.dgProb) / 0.1))
+      : null
+
+    const components = [dataScore, stabilityScore, depthScore, agreementScore].filter(Number.isFinite)
+    const overall = components.length > 0
+      ? components.reduce((sum, value) => sum + value, 0) / components.length
+      : null
+
+    return {
+      overall,
+      dataSufficiency: {
+        score: dataScore,
+        fieldPlayers: dataSufficiency.fieldPlayers,
+        simPlayers: dataSufficiency.simPlayers
+      },
+      simulationStability: {
+        score: stabilityScore,
+        simCount: simulationStability.simCount,
+        seed: simulationStability.seed,
+        simPlayers: simulationStability.simPlayers
+      },
+      marketDepth: {
+        score: depthScore,
+        booksUsed: marketDepth.booksUsed
+      },
+      externalAgreement: {
+        score: agreementScore,
+        simProb: externalAgreement.simProb,
+        dgProb: externalAgreement.dgProb,
+        disagreement: externalAgreement.disagreement
+      },
+      context
+    }
+  }
+
+  summarizeConfidence(samples = []) {
+    const values = samples
+      .map((sample) => sample?.modelConfidenceJson?.overall)
+      .filter(Number.isFinite)
+    if (values.length === 0) return null
+    return {
+      overall: values.reduce((sum, value) => sum + value, 0) / values.length,
+      samples: values.length
+    }
   }
 
   generateAnalysisParagraph(candidate) {
@@ -2043,6 +2186,7 @@ export class WeeklyPipeline {
   }
 
   buildPredsIndex(preds = []) {
+    // Raw ingestion store (DataGolf predictions as implied odds).
     const byName = new Map()
     const byId = new Map()
     for (const row of preds) {
@@ -2057,23 +2201,29 @@ export class WeeklyPipeline {
   }
 
   getPredProbability(index, selectionKey, selectionId, marketKey) {
+    // Normalized probabilities derived from implied odds.
     if (!index) return null
     const row = selectionId ? index.byId.get(String(selectionId)) : null
     const fallback = row || index.byName.get(selectionKey)
     if (!fallback) return null
-    const normalize = (value) => {
-      if (!Number.isFinite(value)) return null
-      return value > 1 ? value / 100 : value
+    // DataGolf pre-tournament predictions are IMPLIED ODDS (not probabilities).
+    // Example: win = 13.39 means probability = 1 / 13.39.
+    const normalize = (value, label) => {
+      const prob = normalizeImpliedOddsToProbability(value, {
+        label,
+        context: { selectionKey, selectionId, marketKey }
+      })
+      return Number.isFinite(prob) ? prob : null
     }
     switch (marketKey) {
       case 'win':
-        return normalize(Number(fallback.win || fallback.win_prob || fallback.p_win))
+        return normalize(Number(fallback.win || fallback.win_prob || fallback.p_win), 'dg_pred_win_odds')
       case 'top_5':
-        return normalize(Number(fallback.top_5 || fallback.top5 || fallback.p_top5))
+        return normalize(Number(fallback.top_5 || fallback.top5 || fallback.p_top5), 'dg_pred_top5_odds')
       case 'top_10':
-        return normalize(Number(fallback.top_10 || fallback.top10 || fallback.p_top10))
+        return normalize(Number(fallback.top_10 || fallback.top10 || fallback.p_top10), 'dg_pred_top10_odds')
       case 'top_20':
-        return normalize(Number(fallback.top_20 || fallback.top20 || fallback.p_top20))
+        return normalize(Number(fallback.top_20 || fallback.top20 || fallback.p_top20), 'dg_pred_top20_odds')
       default:
         return null
     }

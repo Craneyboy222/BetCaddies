@@ -22,7 +22,8 @@ export class BetSelectionEngine {
     // First pass: only include positive-edge candidates.
     let candidates = this.buildCandidates(tourEvents, oddsData, playerNormalizer, {
       requirePositiveEdge: true,
-      fieldIndex: options.fieldIndex || null
+      fieldIndex: options.fieldIndex || null,
+      confidenceContext: options.confidenceContext || null
     })
 
     // Fallback: if we found nothing, relax edge constraint so we still publish a portfolio.
@@ -31,7 +32,8 @@ export class BetSelectionEngine {
       logger.warn('No positive-edge candidates found; falling back to best-available odds candidates')
       candidates = this.buildCandidates(tourEvents, oddsData, playerNormalizer, {
         requirePositiveEdge: false,
-        fieldIndex: options.fieldIndex || null
+        fieldIndex: options.fieldIndex || null,
+        confidenceContext: options.confidenceContext || null
       })
     }
 
@@ -41,7 +43,7 @@ export class BetSelectionEngine {
     return this.selectPortfolio(candidates)
   }
 
-  buildCandidates(tourEvents, oddsData, playerNormalizer, { requirePositiveEdge, fieldIndex }) {
+  buildCandidates(tourEvents, oddsData, playerNormalizer, { requirePositiveEdge, fieldIndex, confidenceContext }) {
     const candidates = []
 
     for (const tourEvent of tourEvents) {
@@ -82,11 +84,12 @@ export class BetSelectionEngine {
           const candidate = this.createCandidate(
             tourEvent,
             marketKey,
+            selectionKey,
             bestOffer,
             altOffers,
             selectionOffers,
             playerNormalizer,
-            { requirePositiveEdge }
+            { requirePositiveEdge, confidenceContext }
           )
 
           if (candidate) {
@@ -99,7 +102,7 @@ export class BetSelectionEngine {
     return candidates
   }
 
-  createCandidate(tourEvent, marketKey, offer, altOffers, allOffers, playerNormalizer, { requirePositiveEdge } = {}) {
+  createCandidate(tourEvent, marketKey, selectionKey, offer, altOffers, allOffers, playerNormalizer, { requirePositiveEdge, confidenceContext } = {}) {
     try {
       const consensusProb = this.calculateConsensusProbability(allOffers)
       if (!Number.isFinite(consensusProb) || consensusProb <= 0) return null
@@ -112,6 +115,10 @@ export class BetSelectionEngine {
 
       if (requirePositiveEdge && edge <= 0) return null // No edge, skip
 
+      const modelConfidenceJson = typeof confidenceContext === 'function'
+        ? confidenceContext({ tourEvent, marketKey, selectionKey, offer })
+        : null
+
       return {
         tourEvent,
         marketKey,
@@ -119,6 +126,7 @@ export class BetSelectionEngine {
         modelProb: consensusProb,
         impliedProb,
         edge,
+        modelConfidenceJson,
         bestBookmaker: offer.bookmaker,
         bestOdds: offer.oddsDecimal,
         altOffers: altOffers || [],
@@ -192,6 +200,19 @@ export class BetSelectionEngine {
       selected.push(candidate)
       tourCounts[candidate.tour] = (tourCounts[candidate.tour] || 0) + 1
       playerCounts[candidate.selection] = (playerCounts[candidate.selection] || 0) + 1
+
+      // Forward-compatible logging: confidence is captured but not used for selection yet.
+      const ev = Number.isFinite(candidate.modelProb) && Number.isFinite(candidate.bestOdds)
+        ? (candidate.modelProb * candidate.bestOdds) - 1
+        : null
+      logger.info('Selected candidate with confidence metadata', {
+        tier,
+        market: candidate.marketKey,
+        selection: candidate.selection,
+        edge: candidate.edge,
+        ev,
+        confidence: candidate.modelConfidenceJson?.overall ?? null
+      })
     }
 
     // Phase 1: satisfy per-tour minimums (when those tours exist in candidate set)
@@ -224,6 +245,9 @@ export class BetSelectionEngine {
   }
 
   formatRecommendation(candidate, tier) {
+    // NOTE: Confidence metadata is captured for observability only.
+    // Future work may use confidence to rank or adjust exposure, but it must NOT
+    // change selection logic in the current version.
     const confidence = this.calculateConfidence(candidate.edge)
 
     return {
@@ -232,6 +256,7 @@ export class BetSelectionEngine {
       marketKey: candidate.marketKey,
       selection: candidate.selection,
       confidence1To5: confidence,
+      modelConfidenceJson: candidate.modelConfidenceJson || null,
       bestBookmaker: candidate.bestBookmaker,
       bestOdds: candidate.bestOdds,
       altOffersJson: candidate.altOffers,

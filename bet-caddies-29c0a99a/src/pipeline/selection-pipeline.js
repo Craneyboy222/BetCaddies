@@ -14,24 +14,24 @@
 
 import { format, startOfWeek, endOfWeek } from 'date-fns'
 import { toZonedTime } from 'date-fns-tz'
-import crypto from 'node:crypto'
 import { prisma } from '../db/client.js'
 import { logger, logStep, logError } from '../observability/logger.js'
 import { DataIssueTracker } from '../observability/data-issue-tracker.js'
+import { initializeOutcomeTracking } from '../observability/outcome-metrics.js'
+import {
+  buildInputSummary,
+  buildInputFingerprint,
+  enforceGoldenRunInvariant
+} from './golden-run.js'
 import { PlayerNormalizer } from '../domain/player-normalizer.js'
 import { DataGolfClient, normalizeDataGolfArray, safeLogDataGolfError } from '../sources/datagolf/index.js'
 import { parseOutrightsOffers } from '../sources/datagolf/parsers.js'
-import { getAllowedBooks, getAllowedBooksSet, isAllowedBook } from '../sources/odds/allowed-books.js'
+import { getAllowedBooks } from '../sources/odds/allowed-books.js'
 import { ProbabilityEngineV2 } from '../engine/v2/probability-engine.js'
 import { buildPlayerParams } from '../engine/v2/player-params.js'
 import { simulateTournament } from '../engine/v2/tournamentSim.js'
 import { applyCalibration } from '../engine/v2/calibration/index.js'
-import {
-  clampProbability,
-  impliedProbability,
-  removeVigNormalize,
-  weightedMedian
-} from '../engine/v2/odds/odds-utils.js'
+import { impliedProbability, validateProbability } from '../engine/v2/odds/odds-utils.js'
 
 const TIME_ZONE = process.env.TIMEZONE || 'Europe/London'
 const ALLOWED_TOURS = ['pga', 'euro', 'kft', 'alt']
@@ -163,30 +163,18 @@ export async function runSelectionPipeline(options = {}) {
     
     const predsAvailable = eventsWithPreds.some(e => e.predictions?.length > 0)
     if (!predsAvailable) {
-      result.status = 'failed'
-      result.failureReason = 'HARD_FAIL: No model predictions available'
-      result.failureStep = 'predictions'
-      
-      if (!dryRun && selectionRun) {
-        await prisma.selectionRun.update({
-          where: { id: selectionRun.id },
-          data: {
-            status: 'failed',
-            predsSuccess: false,
-            failureReason: result.failureReason,
-            failureStep: result.failureStep,
-            completedAt: new Date()
-          }
-        })
-      }
-      
-      throw new Error(result.failureReason)
+      // DataGolf predictions are OPTIONAL inputs only.
+      // The internal simulator must still run when field + markets exist.
+      await issueTracker.logIssue('system', 'warning', 'predictions', 'No DataGolf predictions available', {
+        runKey,
+        note: 'Predictions are optional priors/calibration inputs; simulation remains authoritative.'
+      })
     }
 
     if (!dryRun && selectionRun) {
       await prisma.selectionRun.update({
         where: { id: selectionRun.id },
-        data: { predsSuccess: true }
+        data: { predsSuccess: predsAvailable }
       })
     }
 
@@ -236,12 +224,36 @@ export async function runSelectionPipeline(options = {}) {
       })
     }
 
+    // Golden run: capture immutable inputs and validate invariants early
+    const inputSummary = buildInputSummary({ events: eventsWithPreds, oddsSnapshot })
+    const inputHash = buildInputFingerprint(inputSummary)
+    enforceGoldenRunInvariant({
+      runKey,
+      inputHash,
+      inputSummary,
+      oddsSnapshot,
+      selectionRunId: selectionRun?.id
+    })
+
+    if (!dryRun && selectionRun) {
+      await prisma.selectionRun.update({
+        where: { id: selectionRun.id },
+        data: {
+          inputHash,
+          inputSummaryJson: inputSummary
+        }
+      })
+    }
+
     // ============================================================
     // STEP 5: Generate Recommendations (inside transaction)
     // ============================================================
     logStep('selection', 'Generating recommendations...')
     
-    const recommendations = await generateRecommendations(
+    const {
+      recommendations,
+      confidenceSummary
+    } = await generateRecommendations(
       eventsWithPreds,
       oddsSnapshot,
       issueTracker
@@ -266,6 +278,7 @@ export async function runSelectionPipeline(options = {}) {
               marketKey: rec.marketKey,
               selection: rec.selection,
               dgPlayerId: rec.dgPlayerId,
+              modelConfidenceJson: rec.modelConfidenceJson,
               engineFairProb: rec.fairProb,
               engineMarketProb: rec.marketProb,
               engineEdge: rec.edge,
@@ -282,11 +295,17 @@ export async function runSelectionPipeline(options = {}) {
         }
         
         // Update run status
+        const outcomeMetricsJson = initializeOutcomeTracking({
+          runKey,
+          runId: selectionRun.id
+        })
         await tx.selectionRun.update({
           where: { id: selectionRun.id },
           data: {
             status: 'completed',
             recommendationsCreated: recommendations.length,
+            modelConfidenceJson: confidenceSummary,
+            outcomeMetricsJson,
             completedAt: new Date()
           }
         })
@@ -301,7 +320,8 @@ export async function runSelectionPipeline(options = {}) {
       status: result.status,
       eventsProcessed: result.eventsProcessed,
       recommendationsCreated: result.recommendationsCreated,
-      durationMs: duration
+      durationMs: duration,
+      modelConfidence: confidenceSummary
     })
 
     return result
@@ -521,8 +541,11 @@ async function fetchOddsSnapshot(events, issueTracker) {
  */
 async function generateRecommendations(events, oddsSnapshot, issueTracker) {
   const recommendations = []
+  const confidenceSamples = []
   const playerNormalizer = new PlayerNormalizer()
   const probabilityEngine = new ProbabilityEngineV2()
+  const simCount = Number(process.env.SIM_COUNT || 10000)
+  const simSeed = process.env.SIM_SEED ? Number(process.env.SIM_SEED) : null
 
   const minEvThreshold = Number(process.env.MIN_EV_THRESHOLD || 0)
   const maxPicksPerTier = Number(process.env.MAX_PICKS_PER_TIER || 8)
@@ -546,16 +569,51 @@ async function generateRecommendations(events, oddsSnapshot, issueTracker) {
       continue
     }
 
-    if (!event.predictions || event.predictions.length === 0) {
+    const fieldRows = Array.isArray(event.fieldData) ? event.fieldData : []
+    const fieldPlayers = []
+    const seenPlayers = new Set()
+    for (const row of fieldRows) {
+      const rawName = row.player_name || row.player || row.name || row.playerName
+      const cleaned = playerNormalizer.cleanPlayerName(rawName)
+      if (!cleaned || seenPlayers.has(cleaned)) continue
+      seenPlayers.add(cleaned)
+      fieldPlayers.push({ name: rawName })
+    }
+
+    if (fieldPlayers.length === 0) {
       await issueTracker.logIssue(event.tour, 'warning', 'selection', 'NO_MODEL', {
-        eventName: event.eventName
+        eventName: event.eventName,
+        reason: 'Field data missing; simulation cannot run.'
       })
       continue
     }
 
-    // Build probability model from predictions
+    // Internal simulation is the authoritative probability source.
+    // DataGolf predictions are OPTIONAL priors/calibration inputs only.
+    const playerParams = buildPlayerParams({ players: fieldPlayers, skillRatings: [], tour: event.tour })
+    const simResults = simulateTournament({
+      players: playerParams,
+      tour: event.tour,
+      rounds: event.tour === 'LIV' ? 3 : 4,
+      simCount,
+      seed: simSeed
+    })
+    const simProbabilities = simResults?.probabilities
+    const modelAvailable = simProbabilities && simProbabilities.size > 0
+
+    if (!modelAvailable) {
+      await issueTracker.logIssue(event.tour, 'warning', 'selection', 'NO_MODEL', {
+        eventName: event.eventName,
+        reason: 'Simulation probabilities missing'
+      })
+      continue
+    }
+
+    // DataGolf predictions (raw ingestion) — OPTIONAL priors/calibration/confidence only.
+    // FORBIDDEN: using DataGolf predictions to define fair prices or replace simulation outputs.
+    const dgPredsRaw = event.predictions || []
     const probabilityModel = probabilityEngine.build({
-      preTournamentPreds: event.predictions,
+      preTournamentPreds: dgPredsRaw,
       skillRatings: []
     })
 
@@ -582,43 +640,83 @@ async function generateRecommendations(events, oddsSnapshot, issueTracker) {
           continue
         }
 
-        // Get model probability
-        const modelProbs = probabilityModel.getPlayerProbs({
+        // Internal simulation probability (authoritative)
+        const simProb = validateProbability(
+          simProbabilities.get(selectionKey)?.[mapMarketKeyToSim(marketKey)],
+          {
+            label: 'sim_probability',
+            context: { selectionKey, marketKey, event: event.eventName }
+          }
+        )
+        if (!Number.isFinite(simProb)) {
+          continue
+        }
+
+        // Optional DataGolf probabilities (priors/calibration only; do not replace sim)
+        const dgProbs = probabilityModel.getPlayerProbs({
           name: selectionKey,
           id: bestOffer.selectionId
         })
+        const dgProbNormalized = deriveDgProbability(marketKey, dgProbs)
+        const dgDisagreement = Number.isFinite(dgProbNormalized)
+          ? Math.abs(simProb - dgProbNormalized)
+          : null
 
-        // Derive fair probability based on market
-        let fairProb = null
-        switch (marketKey) {
-          case 'win':
-            fairProb = modelProbs?.win
-            break
-          case 'top_5':
-            fairProb = modelProbs?.top5
-            break
-          case 'top_10':
-            fairProb = modelProbs?.top10
-            break
-          case 'top_20':
-            fairProb = modelProbs?.top20
-            break
-          case 'make_cut':
-            fairProb = modelProbs?.makeCut
-            break
-        }
-
-        if (!Number.isFinite(fairProb) || fairProb <= 0 || fairProb >= 1) {
+        // Fair price is derived from INTERNAL simulation only.
+        // DataGolf predictions may not define fair prices.
+        const fairProb = validateProbability(
+          applyCalibration(simProb, marketKey, event.tour),
+          {
+            label: 'fair_probability',
+            context: { selectionKey, marketKey, event: event.eventName },
+            reportNonFinite: true
+          }
+        )
+        if (!Number.isFinite(fairProb)) {
           continue
         }
 
         // Calculate market probability (implied, vig-removed)
         const impliedProb = impliedProbability(bestOffer.oddsDecimal)
-        const marketProb = impliedProb // Could apply vig removal here
+        const marketProb = validateProbability(impliedProb, {
+          label: 'market_probability',
+          context: { selectionKey, marketKey, event: event.eventName },
+          reportNonFinite: true
+        })
+        if (!Number.isFinite(marketProb)) {
+          continue
+        }
 
         // Calculate edge and EV
         const edge = fairProb - marketProb
         const ev = (fairProb * bestOffer.oddsDecimal) - 1
+
+        const booksUsedCount = new Set(selectionOffers.map((offer) => offer.bookmaker)).size
+        const modelConfidenceJson = buildModelConfidence({
+          dataSufficiency: {
+            fieldPlayers: fieldPlayers.length,
+            simPlayers: simProbabilities.size
+          },
+          simulationStability: {
+            simCount,
+            seed: simSeed,
+            simPlayers: simProbabilities.size
+          },
+          marketDepth: {
+            booksUsed: booksUsedCount
+          },
+          externalAgreement: {
+            simProb,
+            dgProb: dgProbNormalized,
+            disagreement: dgDisagreement
+          },
+          context: {
+            eventName: event.eventName,
+            marketKey,
+            selectionKey
+          }
+        })
+        confidenceSamples.push(modelConfidenceJson)
 
         candidates.push({
           tour: event.tour,
@@ -626,6 +724,7 @@ async function generateRecommendations(events, oddsSnapshot, issueTracker) {
           marketKey,
           selection: bestOffer.selectionName || selectionKey,
           dgPlayerId: bestOffer.selectionId,
+          modelConfidenceJson,
           fairProb,
           marketProb,
           edge,
@@ -639,7 +738,7 @@ async function generateRecommendations(events, oddsSnapshot, issueTracker) {
               book: o.bookmaker,
               odds: o.oddsDecimal
             })),
-          confidence: calculateConfidence(edge),
+          confidence: calculateConfidence(edge, dgProb),
           analysisParagraph: generateAnalysisParagraph({
             selection: bestOffer.selectionName,
             market: marketKey,
@@ -694,20 +793,133 @@ async function generateRecommendations(events, oddsSnapshot, issueTracker) {
     }
   }
 
-  return recommendations
+  const confidenceSummary = buildRunConfidenceSummary(confidenceSamples)
+  return { recommendations, confidenceSummary }
 }
 
 // ============================================================
 // HELPERS
 // ============================================================
 
-function calculateConfidence(edge) {
+function mapMarketKeyToSim(marketKey) {
+  switch (marketKey) {
+    case 'win':
+      return 'win'
+    case 'top_5':
+      return 'top5'
+    case 'top_10':
+      return 'top10'
+    case 'top_20':
+      return 'top20'
+    case 'make_cut':
+      return 'makeCut'
+    default:
+      return null
+  }
+}
+
+function clampScore(value) {
+  if (!Number.isFinite(value)) return null
+  return Math.max(0, Math.min(1, value))
+}
+
+function buildModelConfidence({ dataSufficiency, simulationStability, marketDepth, externalAgreement, context }) {
+  // Confidence measures reliability of the probability distribution, not EV or edge.
+  // DataGolf inputs here are used ONLY for disagreement/confidence metrics.
+  // It must never be used to block bet generation or change selection logic.
+  const dataScore = dataSufficiency.fieldPlayers > 0
+    ? clampScore(dataSufficiency.simPlayers / dataSufficiency.fieldPlayers)
+    : 0
+
+  const stabilityScore = clampScore(simulationStability.simCount / 10000)
+
+  const depthScore = clampScore(marketDepth.booksUsed / 3)
+
+  const agreementScore = Number.isFinite(externalAgreement.dgProb)
+    ? clampScore(1 - Math.min(1, Math.abs(externalAgreement.simProb - externalAgreement.dgProb) / 0.1))
+    : null
+
+  const components = [dataScore, stabilityScore, depthScore, agreementScore].filter(Number.isFinite)
+  const overall = components.length > 0
+    ? components.reduce((sum, value) => sum + value, 0) / components.length
+    : null
+
+  return {
+    overall,
+    dataSufficiency: {
+      score: dataScore,
+      fieldPlayers: dataSufficiency.fieldPlayers,
+      simPlayers: dataSufficiency.simPlayers
+    },
+    simulationStability: {
+      score: stabilityScore,
+      simCount: simulationStability.simCount,
+      seed: simulationStability.seed,
+      simPlayers: simulationStability.simPlayers
+    },
+    marketDepth: {
+      score: depthScore,
+      booksUsed: marketDepth.booksUsed
+    },
+    externalAgreement: {
+      score: agreementScore,
+      simProb: externalAgreement.simProb,
+      dgProb: externalAgreement.dgProb,
+      disagreement: externalAgreement.disagreement
+    },
+    context
+  }
+}
+
+function buildRunConfidenceSummary(samples = []) {
+  const summarize = (extractor) => {
+    const values = samples.map(extractor).filter(Number.isFinite)
+    if (values.length === 0) return null
+    return values.reduce((sum, value) => sum + value, 0) / values.length
+  }
+
+  return {
+    overall: summarize((sample) => sample.overall),
+    dataSufficiency: summarize((sample) => sample.dataSufficiency?.score),
+    simulationStability: summarize((sample) => sample.simulationStability?.score),
+    marketDepth: summarize((sample) => sample.marketDepth?.score),
+    externalAgreement: summarize((sample) => sample.externalAgreement?.score),
+    samples: samples.length
+  }
+}
+
+function deriveDgProbability(marketKey, modelProbs) {
+  if (!modelProbs) return null
+  switch (marketKey) {
+    case 'win':
+      return modelProbs.win
+    case 'top_5':
+      return modelProbs.top5
+    case 'top_10':
+      return modelProbs.top10
+    case 'top_20':
+      return modelProbs.top20
+    case 'make_cut':
+      return modelProbs.makeCut
+    default:
+      return null
+  }
+}
+
+function calculateConfidence(edge, dgProb = null) {
   if (!Number.isFinite(edge)) return 1
-  if (edge >= 0.1) return 5
-  if (edge >= 0.05) return 4
-  if (edge >= 0.02) return 3
-  if (edge >= 0.01) return 2
-  return 1
+  let score = 1
+  if (edge >= 0.1) score = 5
+  else if (edge >= 0.05) score = 4
+  else if (edge >= 0.02) score = 3
+  else if (edge >= 0.01) score = 2
+
+  // Optional DataGolf inputs only affect confidence, not existence.
+  if (!Number.isFinite(dgProb)) {
+    score = Math.max(1, score - 1)
+  }
+
+  return score
 }
 
 function generateAnalysisParagraph({ selection, market, odds, fairProb, ev }) {

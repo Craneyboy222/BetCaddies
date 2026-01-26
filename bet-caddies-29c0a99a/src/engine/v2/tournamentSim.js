@@ -56,11 +56,24 @@ export const simulateTournament = ({
     const roundScores = new Map()
     const totals = new Map()
     const r1Scores = new Map()
+    const playerShocks = new Map()
+
+    // Tournament-level uncertainty shock per player.
+    // This propagates uncertainty without changing selection logic.
+    for (const player of players) {
+      const uncertainty = Number.isFinite(player.uncertainty) ? player.uncertainty : 0.25
+      const shock = normal(rng) * uncertainty
+      playerShocks.set(player.key, shock)
+    }
 
     for (let round = 1; round <= rounds; round += 1) {
       const roundShock = normal(rng) * 0.6
       for (const player of players) {
-        const score = player.mean + roundShock + normal(rng) * player.volatility
+        const playerShock = playerShocks.get(player.key) || 0
+        const rawScore = player.mean + playerShock + roundShock + normal(rng) * player.volatility
+        // Tail-risk control: cap extreme per-round outcomes using player tail parameter.
+        const tailCap = Math.max(3, (player.tail || 6) * player.volatility)
+        const score = Math.max(player.mean - tailCap, Math.min(player.mean + tailCap, rawScore))
         const key = player.key
         const prev = totals.get(key) || 0
         totals.set(key, prev + score)

@@ -1,12 +1,6 @@
-import { clampProbability } from './odds/odds-utils.js'
+import { clampProbability, normalizeImpliedOddsToProbability } from './odds/odds-utils.js'
 
 const normalizeName = (name) => String(name || '').trim().toLowerCase()
-
-const normalizeProb = (value) => {
-  if (!Number.isFinite(value)) return null
-  const normalized = value > 1 ? value / 100 : value
-  return clampProbability(normalized)
-}
 
 const buildMapFromPreds = (preds = []) => {
   const map = new Map()
@@ -14,12 +8,19 @@ const buildMapFromPreds = (preds = []) => {
   for (const row of preds) {
     const name = normalizeName(row.player_name || row.player || row.name)
     if (!name) continue
+    // DataGolf pre-tournament predictions are IMPLIED ODDS (not probabilities).
+    // Example: win = 13.39 means probability = 1 / 13.39.
+    const impliedWinOdds = Number(row.win || row.win_prob || row.p_win)
+    const impliedTop5Odds = Number(row.top_5 || row.top5 || row.p_top5)
+    const impliedTop10Odds = Number(row.top_10 || row.top10 || row.p_top10)
+    const impliedTop20Odds = Number(row.top_20 || row.top20 || row.p_top20)
+    const impliedMakeCutOdds = Number(row.make_cut || row.p_make_cut)
     const entry = {
-      win: normalizeProb(Number(row.win) || Number(row.win_prob) || Number(row.p_win)),
-      top5: normalizeProb(Number(row.top_5) || Number(row.top5) || Number(row.p_top5)),
-      top10: normalizeProb(Number(row.top_10) || Number(row.top10) || Number(row.p_top10)),
-      top20: normalizeProb(Number(row.top_20) || Number(row.top20) || Number(row.p_top20)),
-      makeCut: normalizeProb(Number(row.make_cut) || Number(row.p_make_cut))
+      win: normalizeImpliedOddsToProbability(impliedWinOdds, { label: 'dg_pred_win_odds', context: { player: name } }),
+      top5: normalizeImpliedOddsToProbability(impliedTop5Odds, { label: 'dg_pred_top5_odds', context: { player: name } }),
+      top10: normalizeImpliedOddsToProbability(impliedTop10Odds, { label: 'dg_pred_top10_odds', context: { player: name } }),
+      top20: normalizeImpliedOddsToProbability(impliedTop20Odds, { label: 'dg_pred_top20_odds', context: { player: name } }),
+      makeCut: normalizeImpliedOddsToProbability(impliedMakeCutOdds, { label: 'dg_pred_makecut_odds', context: { player: name } })
     }
     map.set(name, entry)
     const dgId = row.dg_id || row.player_id || row.id

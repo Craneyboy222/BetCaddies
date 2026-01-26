@@ -267,6 +267,7 @@ model BetRecommendation {
   marketKey         String
   selection         String   // Player name or outcome
   dgPlayerId         String?  @map("dg_player_id")
+  modelConfidenceJson Json?
   confidence1To5    Int
   bestBookmaker     String
   bestOdds          Float
@@ -559,6 +560,10 @@ model SelectionRun {
   status            String   // 'pending', 'running', 'completed', 'failed'
   weekStart         DateTime
   weekEnd           DateTime
+  modelConfidenceJson Json?
+  outcomeMetricsJson Json?
+  inputHash         String?
+  inputSummaryJson  Json?
 
   // Data source tracking
   scheduleSuccess   Boolean  @default(false)
@@ -579,6 +584,7 @@ model SelectionRun {
   // Relations
   oddsSnapshot      OddsSnapshot?
   selectionResults  SelectionResult[]
+  outcomeMetrics    SelectionOutcomeMetric[]
 
   @@index([status])
   @@index([createdAt])
@@ -607,6 +613,7 @@ model SelectionResult {
   marketKey         String
   selection         String
   dgPlayerId        String?  @map("dg_player_id")
+  modelConfidenceJson Json?
 
   // Engine output (raw, never modified)
   engineFairProb    Float?
@@ -634,8 +641,37 @@ model SelectionResult {
 
   // Relations
   selectionRun      SelectionRun @relation(fields: [selectionRunId], references: [id], onDelete: Cascade)
+  outcomeMetrics    SelectionOutcomeMetric[]
 
   @@index([selectionRunId])
   @@index([tour, tier])
   @@map("selection_results")
+}
+
+model SelectionOutcomeMetric {
+  id                String   @id @default(cuid())
+  selectionRunId    String
+  selectionResultId String?
+  tour              String
+  eventName         String
+  marketKey         String
+  selection         String
+
+  // Observability-only metrics (no auto-adjustment)
+  predictedProb     Float?
+  actualOutcome     Float?
+  confidenceOverall Float?
+  confidenceJson    Json?
+  dgProb            Float?
+  divergence        Float?
+  settledAt         DateTime?
+  createdAt         DateTime @default(now())
+
+  selectionRun      SelectionRun @relation(fields: [selectionRunId], references: [id], onDelete: Cascade)
+  selectionResult   SelectionResult? @relation(fields: [selectionResultId], references: [id], onDelete: SetNull)
+
+  @@index([selectionRunId])
+  @@index([selectionResultId])
+  @@index([tour, marketKey])
+  @@map("selection_outcome_metrics")
 }
