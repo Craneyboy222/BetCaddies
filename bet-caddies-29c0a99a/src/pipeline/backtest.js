@@ -1,4 +1,19 @@
 #!/usr/bin/env node
+/**
+ * BACKTEST - DISABLED
+ * 
+ * This file used historical odds endpoints which are STRICTLY FORBIDDEN 
+ * per DataGolf API agreement.
+ * 
+ * Historical odds endpoints (historical-odds/*) are NOT permitted.
+ * Only live odds from /betting-tools/outrights and /betting-tools/matchups
+ * may be used.
+ * 
+ * To perform backtesting, you must:
+ * 1. Collect live odds snapshots at the time they're available
+ * 2. Store them in OddsSnapshot table via runSelectionPipeline()
+ * 3. Run analysis on stored snapshots after events complete
+ */
 import 'dotenv/config'
 import { DataGolfClient, normalizeDataGolfArray } from '../sources/datagolf/index.js'
 import { impliedProbability } from '../engine/v2/odds/odds-utils.js'
@@ -36,48 +51,23 @@ const calibrationBins = (probs, outcomes, bins = 10) => {
 }
 
 async function main() {
-  const tour = process.env.BACKTEST_TOUR || 'pga'
-  const year = Number(process.env.BACKTEST_YEAR || new Date().getFullYear())
-  const eventId = process.env.BACKTEST_EVENT_ID
-
-  if (!eventId) {
-    console.error('Missing BACKTEST_EVENT_ID')
-    process.exit(1)
-  }
-
-  const preds = await DataGolfClient.getPreTournamentArchive(tour, { year, eventId })
-  const odds = await DataGolfClient.getHistoricalOutrights(tour, eventId, year, 'win')
-  const rounds = await DataGolfClient.getHistoricalRawRounds(tour, eventId, year)
-
-  const predRows = normalizeDataGolfArray(preds)
-  const oddsRows = normalizeDataGolfArray(odds)
-  const roundRows = normalizeDataGolfArray(rounds)
-
-  const winnerId = roundRows.find((row) => row.position === 1 || row.place === 1 || row.rank === 1)?.player_id
-  if (!winnerId) {
-    console.error('Unable to determine winner from historical rounds')
-    process.exit(1)
-  }
-
-  const oddsById = new Map()
-  for (const row of oddsRows) {
-    const id = row.dg_id || row.player_id || row.id
-    if (!id) continue
-    const oddsDecimal = Number(row.odds_decimal || row.odds || row.price)
-    if (!Number.isFinite(oddsDecimal)) continue
-    oddsById.set(String(id), impliedProbability(oddsDecimal))
-  }
-
-  const probs = []
-  const outcomes = []
-  for (const row of predRows) {
-    const id = row.dg_id || row.player_id || row.id
-    if (!id) continue
-    const p = Number(row.win || row.win_prob || row.p_win)
-    if (!Number.isFinite(p)) continue
-    const prob = p > 1 ? p / 100 : p
-    probs.push(prob)
-    outcomes.push(String(id) === String(winnerId) ? 1 : 0)
+  // ERROR: This script is disabled because it requires historical odds
+  console.error('='.repeat(70))
+  console.error('BACKTEST DISABLED')
+  console.error('='.repeat(70))
+  console.error('')
+  console.error('This backtest script has been disabled because it relies on')
+  console.error('historical odds endpoints which are STRICTLY FORBIDDEN per')
+  console.error('DataGolf API agreement.')
+  console.error('')
+  console.error('To perform backtesting:')
+  console.error('1. Use runSelectionPipeline() to collect live odds snapshots')
+  console.error('2. Store snapshots in OddsSnapshot table at time of fetch')
+  console.error('3. Analyze stored snapshots after events complete')
+  console.error('')
+  console.error('='.repeat(70))
+  process.exit(1)
+}
   }
 
   console.log('Backtest summary')

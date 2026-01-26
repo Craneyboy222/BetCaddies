@@ -548,3 +548,94 @@ model HIOEntry {
   @@index([userEmail])
   @@map("hio_entries")
 }
+
+// ============================================================
+// Selection Pipeline Models (Production-Safe Bet Generation)
+// ============================================================
+
+model SelectionRun {
+  id                String   @id @default(cuid())
+  runKey            String   @unique
+  status            String   // 'pending', 'running', 'completed', 'failed'
+  weekStart         DateTime
+  weekEnd           DateTime
+
+  // Data source tracking
+  scheduleSuccess   Boolean  @default(false)
+  fieldSuccess      Boolean  @default(false)
+  predsSuccess      Boolean  @default(false)
+  oddsSuccess       Boolean  @default(false)
+
+  // Metadata
+  toursProcessed    Json?    // Array of tour codes
+  eventsProcessed   Int      @default(0)
+  recommendationsCreated Int @default(0)
+  failureReason     String?
+  failureStep       String?
+
+  createdAt         DateTime @default(now())
+  completedAt       DateTime?
+
+  // Relations
+  oddsSnapshot      OddsSnapshot?
+  selectionResults  SelectionResult[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("selection_runs")
+}
+
+model OddsSnapshot {
+  id              String   @id @default(cuid())
+  selectionRunId  String   @unique
+  snapshotJson    Json     // Complete odds data at time of fetch
+  toursIncluded   Json     // Array of tour codes
+  marketsIncluded Json     // Array of market keys
+  fetchedAt       DateTime @default(now())
+
+  selectionRun    SelectionRun @relation(fields: [selectionRunId], references: [id], onDelete: Cascade)
+
+  @@map("odds_snapshots")
+}
+
+model SelectionResult {
+  id                String   @id @default(cuid())
+  selectionRunId    String
+  tier              String   // 'PAR', 'BIRDIE', 'EAGLE', 'LONG_SHOTS'
+  tour              String
+  eventName         String
+  marketKey         String
+  selection         String
+  dgPlayerId        String?  @map("dg_player_id")
+
+  // Engine output (raw, never modified)
+  engineFairProb    Float?
+  engineMarketProb  Float?
+  engineEdge        Float?
+  engineEv          Float?
+  engineConfidence  Int
+  engineBestOdds    Float
+  engineBestBook    String
+  engineAltOffers   Json
+
+  // Snapshot reference
+  oddsSnapshotRef   String?  // Reference to which snapshot was used
+
+  // Analysis
+  analysisParagraph String
+  analysisBullets   Json
+
+  // Override tracking (explicit, auditable)
+  hasOverride       Boolean  @default(false)
+  overrideAppliedAt DateTime?
+  overrideBy        String?
+
+  createdAt         DateTime @default(now())
+
+  // Relations
+  selectionRun      SelectionRun @relation(fields: [selectionRunId], references: [id], onDelete: Cascade)
+
+  @@index([selectionRunId])
+  @@index([tour, tier])
+  @@map("selection_results")
+}

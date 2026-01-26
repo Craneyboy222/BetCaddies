@@ -615,56 +615,9 @@ export class WeeklyPipeline {
         }
       }
 
-      const histOddsTour = DataGolfClient.resolveTourCode(event.tour, 'histOdds')
-      if (histOddsTour) {
-        try {
-          const histEvents = await DataGolfClient.getHistoricalOddsEventList(histOddsTour)
-          await this.storeArtifact(run.id, event.tour, 'historical-odds/event-list', { tour: histOddsTour }, histEvents)
-        } catch (error) {
-          safeLogDataGolfError('historical-odds-event-list', error, { tour: event.tour })
-        }
-
-        const eventId = this.getEventMeta(event)?.eventId
-        if (eventId) {
-          const allowedBooks = this.allowedBooks.length > 0 ? this.allowedBooks : getAllowedBooks()
-          const combinedOutrights = []
-          for (const book of allowedBooks) {
-            try {
-              const histOutrights = await DataGolfClient.getHistoricalOutrights(histOddsTour, eventId, season, 'win', book)
-              combinedOutrights.push(...normalizeDataGolfArray(histOutrights))
-            } catch (error) {
-              safeLogDataGolfError('historical-odds-outrights', error, { tour: event.tour, book })
-            }
-          }
-          if (combinedOutrights.length > 0) {
-            await this.storeArtifact(run.id, event.tour, 'historical-odds/outrights', {
-              tour: histOddsTour,
-              eventId,
-              season,
-              market: 'win',
-              books: allowedBooks
-            }, combinedOutrights)
-          }
-
-          const combinedMatchups = []
-          for (const book of allowedBooks) {
-            try {
-              const histMatchups = await DataGolfClient.getHistoricalMatchups(histOddsTour, eventId, season, book)
-              combinedMatchups.push(...normalizeDataGolfArray(histMatchups))
-            } catch (error) {
-              safeLogDataGolfError('historical-odds-matchups', error, { tour: event.tour, book })
-            }
-          }
-          if (combinedMatchups.length > 0) {
-            await this.storeArtifact(run.id, event.tour, 'historical-odds/matchups', {
-              tour: histOddsTour,
-              eventId,
-              season,
-              books: allowedBooks
-            }, combinedMatchups)
-          }
-        }
-      }
+      // REMOVED: Historical odds fetch block
+      // Historical odds endpoints are STRICTLY FORBIDDEN per DataGolf API agreement
+      // Use only live odds from getOutrightsOdds() and getMatchupsOdds()
     }
   }
 
