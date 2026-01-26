@@ -531,12 +531,23 @@ const runWeeklyPipeline = async ({ dryRun = false, runMode = 'CURRENT_WEEK', ove
 
 const cronEnabled = String(process.env.PIPELINE_CRON_ENABLED || 'true').toLowerCase() !== 'false'
 if (cronEnabled) {
+  // Monday 9am GMT - Initial discovery run
   cron.schedule('0 9 * * 1', async () => {
     try {
       logger.info('Starting MONDAY_CURRENT_WEEK scheduled run')
       await runWeeklyPipeline({ dryRun: false, runMode: 'CURRENT_WEEK' })
     } catch (error) {
-      logger.error('Scheduled pipeline run failed', { error: error.message })
+      logger.error('Scheduled pipeline run failed (Monday)', { error: error.message })
+    }
+  }, { timezone: 'Europe/London' })
+
+  // Tuesday 9am GMT - Odds update run (odds typically available 1-2 days before tournament)
+  cron.schedule('0 9 * * 2', async () => {
+    try {
+      logger.info('Starting TUESDAY odds update run')
+      await runWeeklyPipeline({ dryRun: false, runMode: 'CURRENT_WEEK' })
+    } catch (error) {
+      logger.error('Scheduled pipeline run failed (Tuesday)', { error: error.message })
     }
   }, { timezone: 'Europe/London' })
 }

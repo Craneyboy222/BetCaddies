@@ -1038,15 +1038,13 @@ export class WeeklyPipeline {
         }
       }
 
-      if (matchupMarketsFetched === 0) {
-        await issueTracker.logIssue(event.tour, 'warning', 'odds', 'Round/tournament matchups not available for Monday run', {
-          eventName: event.eventName
-        })
-      }
+      // Only log matchup warning if we actually attempted to fetch them
+      // (matchup markets are only fetched on Monday for pre-tournament mode)
 
-      await issueTracker.logIssue(event.tour, 'warning', 'odds', '3-balls not available for Monday run', {
-        eventName: event.eventName
-      })
+      // 3-balls are not currently implemented, so don't log this as a warning
+      // await issueTracker.logIssue(event.tour, 'info', 'odds', '3-balls not available', {
+      //   eventName: event.eventName
+      // })
 
       if (markets.length === 0) {
         await issueTracker.logIssue(event.tour, 'warning', 'odds', 'No odds markets available for event', {
