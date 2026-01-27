@@ -33,6 +33,29 @@ export const simulateTournament = ({
   seed = null,
   cutRules = defaultCutRules
 } = {}) => {
+  const normalizedSimCount = Number.isFinite(simCount) && simCount > 0 ? Math.floor(simCount) : 1
+  const normalizedPlayers = players.map((player, index) => {
+    const key = player?.key || `player_${index}`
+    const name = player?.name || key
+    // Degrade gracefully when inputs are missing: widen distributions
+    // and preserve per-player probability mass.
+    const mean = Number.isFinite(player?.mean) ? player.mean : 0
+    const volatility = Number.isFinite(player?.volatility) ? player.volatility : 2.5
+    const tail = Number.isFinite(player?.tail) ? player.tail : 6.5
+    const uncertainty = Number.isFinite(player?.uncertainty) ? player.uncertainty : 0.35
+    const makeCut = Number.isFinite(player?.makeCut) ? player.makeCut : 0.5
+    return {
+      ...player,
+      key,
+      name,
+      mean,
+      volatility,
+      tail,
+      uncertainty,
+      makeCut
+    }
+  })
+
   const rng = mulberry32(seed ?? Date.now())
   const cutRule = cutRules[tour] || defaultCutRules.PGA
   const cutAfter = cutRule.cutAfter
@@ -40,7 +63,7 @@ export const simulateTournament = ({
   const noCut = cutAfter === 0 || tour === 'LIV'
 
   const stats = new Map()
-  for (const player of players) {
+  for (const player of normalizedPlayers) {
     stats.set(player.key, {
       name: player.name,
       win: 0,
@@ -52,7 +75,7 @@ export const simulateTournament = ({
     })
   }
 
-  for (let sim = 0; sim < simCount; sim += 1) {
+  for (let sim = 0; sim < normalizedSimCount; sim += 1) {
     const roundScores = new Map()
     const totals = new Map()
     const r1Scores = new Map()
@@ -60,7 +83,7 @@ export const simulateTournament = ({
 
     // Tournament-level uncertainty shock per player.
     // This propagates uncertainty without changing selection logic.
-    for (const player of players) {
+    for (const player of normalizedPlayers) {
       const uncertainty = Number.isFinite(player.uncertainty) ? player.uncertainty : 0.25
       const shock = normal(rng) * uncertainty
       playerShocks.set(player.key, shock)
@@ -68,7 +91,7 @@ export const simulateTournament = ({
 
     for (let round = 1; round <= rounds; round += 1) {
       const roundShock = normal(rng) * 0.6
-      for (const player of players) {
+      for (const player of normalizedPlayers) {
         const playerShock = playerShocks.get(player.key) || 0
         const rawScore = player.mean + playerShock + roundShock + normal(rng) * player.volatility
         // Tail-risk control: cap extreme per-round outcomes using player tail parameter.
@@ -127,7 +150,7 @@ export const simulateTournament = ({
     }
 
     if (noCut) {
-      for (const player of players) {
+      for (const player of normalizedPlayers) {
         stats.get(player.key).makeCut += 1
       }
     }
@@ -136,14 +159,14 @@ export const simulateTournament = ({
   const probabilities = new Map()
   for (const [key, row] of stats.entries()) {
     probabilities.set(key, {
-      win: clampProbability(row.win / simCount),
-      top5: clampProbability(row.top5 / simCount),
-      top10: clampProbability(row.top10 / simCount),
-      top20: clampProbability(row.top20 / simCount),
-      makeCut: clampProbability(row.makeCut / simCount),
-      frl: clampProbability(row.frl / simCount)
+      win: clampProbability(row.win / normalizedSimCount),
+      top5: clampProbability(row.top5 / normalizedSimCount),
+      top10: clampProbability(row.top10 / normalizedSimCount),
+      top20: clampProbability(row.top20 / normalizedSimCount),
+      makeCut: clampProbability(row.makeCut / normalizedSimCount),
+      frl: clampProbability(row.frl / normalizedSimCount)
     })
   }
 
-  return { probabilities, simCount }
+  return { probabilities, simCount: normalizedSimCount }
 }
