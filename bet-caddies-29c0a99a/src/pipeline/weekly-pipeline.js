@@ -1095,7 +1095,7 @@ export class WeeklyPipeline {
       // FORBIDDEN: using DataGolf predictions to define fair prices or replace simulation outputs.
       const probabilityModel = this.probabilityEngine.build({ preTournamentPreds: preTournament, skillRatings })
       const predsIndex = this.buildPredsIndex(preTournament)
-      const eventPlayers = fieldEntries
+      let eventPlayers = fieldEntries
         .filter((entry) => entry.tourEventId === event.id && entry.status === 'active')
         .map((entry) => ({ name: entry.player?.canonicalName || entry.playerId }))
       const playerByDgId = new Map()
@@ -1103,6 +1103,18 @@ export class WeeklyPipeline {
         if (entry.tourEventId !== event.id) continue
         if (!entry.player?.dgId || !entry.player?.canonicalName) continue
         playerByDgId.set(String(entry.player.dgId), entry.player.canonicalName)
+      }
+
+      if (eventPlayers.length === 0 && eventOdds?.markets?.length > 0) {
+        // Degrade gracefully: derive players from odds when field data is missing.
+        const oddsPlayers = this.buildPlayersFromOdds(eventOdds)
+        if (oddsPlayers.length > 0) {
+          eventPlayers = oddsPlayers
+          await issueTracker.logIssue(event.tour, 'warning', 'selection', 'FIELD_MISSING_USING_ODDS', {
+            eventName: event.eventName,
+            reason: 'Field data missing; derived players from odds for simulation inputs.'
+          })
+        }
       }
 
       const playerParams = buildPlayerParams({ players: eventPlayers, skillRatings, tour: event.tour })
@@ -1911,6 +1923,23 @@ export class WeeklyPipeline {
       min: Number.isFinite(min) ? min : null,
       max: Number.isFinite(max) ? max : null
     }
+  }
+
+  buildPlayersFromOdds(eventOdds) {
+    const players = []
+    const seen = new Set()
+    const markets = eventOdds?.markets || []
+    for (const market of markets) {
+      const offers = market?.oddsOffers || []
+      for (const offer of offers) {
+        const name = offer.selectionName || offer.selection
+        const key = this.playerNormalizer.cleanPlayerName(name)
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        players.push({ name })
+      }
+    }
+    return players
   }
 
   generateAnalysisParagraph(candidate) {

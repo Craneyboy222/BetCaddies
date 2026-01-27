@@ -581,11 +581,20 @@ async function generateRecommendations(events, oddsSnapshot, issueTracker) {
     }
 
     if (fieldPlayers.length === 0) {
-      await issueTracker.logIssue(event.tour, 'warning', 'selection', 'NO_MODEL', {
+      // Degrade gracefully: derive players from odds when field data is missing.
+      const oddsPlayers = buildPlayersFromOdds(eventOdds, playerNormalizer)
+      if (oddsPlayers.length === 0) {
+        await issueTracker.logIssue(event.tour, 'warning', 'selection', 'NO_MODEL', {
+          eventName: event.eventName,
+          reason: 'Field data missing and odds players unavailable; simulation cannot run.'
+        })
+        continue
+      }
+      await issueTracker.logIssue(event.tour, 'warning', 'selection', 'FIELD_MISSING_USING_ODDS', {
         eventName: event.eventName,
-        reason: 'Field data missing; simulation cannot run.'
+        reason: 'Field data missing; derived players from odds for simulation inputs.'
       })
-      continue
+      fieldPlayers.push(...oddsPlayers)
     }
 
     // Internal simulation is the authoritative probability source.
@@ -865,6 +874,22 @@ function summarizeSimulationProbabilities(probabilities) {
     min: Number.isFinite(min) ? min : null,
     max: Number.isFinite(max) ? max : null
   }
+}
+
+function buildPlayersFromOdds(eventOdds, playerNormalizer) {
+  const players = []
+  const seen = new Set()
+  const markets = eventOdds?.markets || {}
+  for (const offers of Object.values(markets)) {
+    for (const offer of offers) {
+      const name = offer.selectionName || offer.selection
+      const key = playerNormalizer.cleanPlayerName(name)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      players.push({ name })
+    }
+  }
+  return players
 }
 
 function buildModelConfidence({ dataSufficiency, simulationStability, marketDepth, externalAgreement, context }) {
