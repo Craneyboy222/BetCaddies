@@ -668,6 +668,12 @@ async function generateRecommendations(events, oddsSnapshot, issueTracker) {
           }
         )
         if (!Number.isFinite(simProb)) {
+          logStep('selection-boundary', 'Simulation probability missing for selection', {
+            eventName: event.eventName,
+            tour: event.tour,
+            marketKey,
+            selectionKey
+          })
           continue
         }
 
@@ -840,6 +846,10 @@ function mapMarketKeyToSim(marketKey) {
       return 'top20'
     case 'make_cut':
       return 'makeCut'
+    case 'mc':
+      return 'makeCut'
+    case 'frl':
+      return 'frl'
     default:
       return null
   }

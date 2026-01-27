@@ -1,6 +1,11 @@
 import { clampProbability } from './odds/odds-utils.js'
 
-const normalizeName = (name) => String(name || '').trim().toLowerCase()
+// Align simulation keys with selection normalization to prevent fairProb misses.
+const normalizeName = (name) => String(name || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9\s]/g, '')
+  .replace(/\s+/g, ' ')
 
 // Cross-tour normalization factors (keeps distributions comparable across tours)
 const tourRatingScale = {
