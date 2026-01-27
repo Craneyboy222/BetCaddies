@@ -1117,6 +1117,16 @@ export class WeeklyPipeline {
       const simProbabilities = simResults.probabilities
       const modelAvailable = simProbabilities && simProbabilities.size > 0
       const recommendationMode = event.inPlay && !this.excludeInPlay ? 'IN_PLAY' : 'PRE_TOURNAMENT'
+
+      const simStats = this.summarizeSimulationProbabilities(simProbabilities)
+      logStep('simulation-boundary', 'Simulation output summary', {
+        eventName: event.eventName,
+        tour: event.tour,
+        hasProbabilities: Boolean(simProbabilities),
+        playersWithProbabilities: simStats.count,
+        minProbability: simStats.min,
+        maxProbability: simStats.max
+      })
       const fieldStats = fieldIndex.get(event.id)
       const fieldPlayersCount = fieldStats?.names?.size || 0
 
@@ -1456,6 +1466,14 @@ export class WeeklyPipeline {
           })
         }
       }
+
+      const fairProbCount = candidates.filter((candidate) => Number.isFinite(candidate.fairProb)).length
+      logStep('selection-boundary', 'Selection input summary', {
+        eventName: event.eventName,
+        tour: event.tour,
+        hasProbabilities: modelAvailable,
+        fairProbCount
+      })
 
       const tiered = await this.selectTieredPortfolio(candidates, issueTracker, event, marketStats)
       for (const entry of tiered) {
@@ -1866,6 +1884,32 @@ export class WeeklyPipeline {
     return {
       overall: values.reduce((sum, value) => sum + value, 0) / values.length,
       samples: values.length
+    }
+  }
+
+  summarizeSimulationProbabilities(probabilities) {
+    if (!probabilities || probabilities.size === 0) {
+      return { count: 0, min: null, max: null }
+    }
+
+    let min = Number.POSITIVE_INFINITY
+    let max = Number.NEGATIVE_INFINITY
+    let count = 0
+
+    for (const [, probs] of probabilities.entries()) {
+      if (!probs || typeof probs !== 'object') continue
+      for (const value of Object.values(probs)) {
+        if (!Number.isFinite(value)) continue
+        count += 1
+        if (value < min) min = value
+        if (value > max) max = value
+      }
+    }
+
+    return {
+      count,
+      min: Number.isFinite(min) ? min : null,
+      max: Number.isFinite(max) ? max : null
     }
   }
 

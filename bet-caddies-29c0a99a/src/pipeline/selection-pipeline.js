@@ -601,6 +601,16 @@ async function generateRecommendations(events, oddsSnapshot, issueTracker) {
     const simProbabilities = simResults?.probabilities
     const modelAvailable = simProbabilities && simProbabilities.size > 0
 
+    const simStats = summarizeSimulationProbabilities(simProbabilities)
+    logStep('simulation-boundary', 'Simulation output summary', {
+      eventName: event.eventName,
+      tour: event.tour,
+      hasProbabilities: Boolean(simProbabilities),
+      playersWithProbabilities: simStats.count,
+      minProbability: simStats.min,
+      maxProbability: simStats.max
+    })
+
     if (!modelAvailable) {
       await issueTracker.logIssue(event.tour, 'warning', 'selection', 'NO_MODEL', {
         eventName: event.eventName,
@@ -759,6 +769,14 @@ async function generateRecommendations(events, oddsSnapshot, issueTracker) {
       }
 
       // Select tiered portfolio
+      const fairProbCount = candidates.filter(c => Number.isFinite(c.fairProb)).length
+      logStep('selection-boundary', 'Selection input summary', {
+        eventName: event.eventName,
+        tour: event.tour,
+        marketKey,
+        hasProbabilities: modelAvailable,
+        fairProbCount
+      })
       for (const tier of tierOrder) {
         const range = tierOddsRanges[tier]
         const tierCandidates = candidates.filter(c =>
@@ -821,6 +839,32 @@ function mapMarketKeyToSim(marketKey) {
 function clampScore(value) {
   if (!Number.isFinite(value)) return null
   return Math.max(0, Math.min(1, value))
+}
+
+function summarizeSimulationProbabilities(probabilities) {
+  if (!probabilities || probabilities.size === 0) {
+    return { count: 0, min: null, max: null }
+  }
+
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  let count = 0
+
+  for (const [, probs] of probabilities.entries()) {
+    if (!probs || typeof probs !== 'object') continue
+    for (const value of Object.values(probs)) {
+      if (!Number.isFinite(value)) continue
+      count += 1
+      if (value < min) min = value
+      if (value > max) max = value
+    }
+  }
+
+  return {
+    count,
+    min: Number.isFinite(min) ? min : null,
+    max: Number.isFinite(max) ? max : null
+  }
 }
 
 function buildModelConfidence({ dataSufficiency, simulationStability, marketDepth, externalAgreement, context }) {
