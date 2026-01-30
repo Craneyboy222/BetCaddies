@@ -16,6 +16,10 @@ import multer from 'multer'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
 import { liveTrackingService } from '../live-tracking/live-tracking-service.js'
+import { createPlayerStatsService } from '../services/player-stats.js'
+
+// Initialize player stats service for real form/course fit data
+const playerStatsService = createPlayerStatsService(prisma)
 
 console.log('==== Starting BetCaddies server ====');
 
@@ -653,6 +657,95 @@ const seedCmsPages = async () => {
   }
 }
 
+/**
+ * Format a bet recommendation with real player stats from DataGolf
+ * This replaces hardcoded form/course fit with actual data
+ */
+async function formatBetWithRealStats(bet, playerStats) {
+  const displayTier = bet.override?.tierOverride || bet.tier
+  const dgPlayerId = bet.dgPlayerId
+
+  // Get real stats if we have a dgPlayerId
+  let form = { sgTotal: null, formLabel: 'Unknown', formIndicator: 'neutral', formScore: null, dgRank: null }
+  let courseFit = { totalFitAdjustment: null, courseFitScore: null }
+  let confidenceScore = null
+
+  if (dgPlayerId && playerStats) {
+    const stats = playerStatsService.getPlayerStats(playerStats, dgPlayerId)
+    form = stats.form
+    courseFit = stats.courseFit
+
+    // Calculate enhanced confidence score
+    confidenceScore = playerStatsService.calculateConfidenceScore(stats, {
+      edge: bet.edge ?? 0,
+      modelProb: bet.fairProb ?? 0,
+      impliedProb: bet.marketProb ?? 0,
+      offerCount: bet.altOffersJson?.length ?? 0
+    })
+  }
+
+  // Transform altOffersJson to alternative_odds format for frontend
+  const alternativeOdds = (bet.altOffersJson || []).map(offer => ({
+    provider_slug: (offer.bookmaker || 'unknown').toLowerCase().replace(/\s+/g, '-'),
+    odds_display: offer.oddsDecimal?.toFixed(2) || 'N/A',
+    odds_decimal: offer.oddsDecimal
+  }))
+
+  return {
+    id: bet.id,
+    category: displayTier.toLowerCase().replace(/_/g, ''),
+    tier: displayTier,
+    is_fallback: bet.isFallback === true,
+    fallback_reason: bet.fallbackReason || null,
+    fallback_type: bet.fallbackType || null,
+    tier_status: bet.tierStatus || null,
+    mode: bet.mode || 'PRE_TOURNAMENT',
+    books_used: bet.booksUsed || [],
+    selection_name: bet.override?.selectionName || bet.selection,
+    confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
+    confidence_score: confidenceScore,  // New: 0-100 score
+    bestBookmaker: bet.bestBookmaker,
+    bestOdds: bet.bestOdds,
+    edge: bet.edge ?? null,
+    ev: bet.ev ?? null,
+    fair_prob: bet.fairProb ?? null,
+    market_prob: bet.marketProb ?? null,
+    prob_source: bet.probSource ?? null,
+    market_prob_source: bet.marketProbSource ?? null,
+    bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
+    tour: bet.tourEvent?.tour || null,
+    tournament_name: bet.tourEvent?.eventName || null,
+    analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
+    provider_best_slug: bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-'),
+    odds_display_best: bet.bestOdds?.toString() || '',
+    odds_decimal_best: bet.bestOdds,
+    // Real stats from DataGolf
+    sg_total: form.sgTotal,
+    form_label: bet.override?.formLabel || form.formLabel,
+    form_indicator: form.formIndicator,
+    form_score: form.formScore,
+    dg_rank: form.dgRank,
+    owgr_rank: form.owgrRank,
+    course_fit_score: bet.override?.courseFitScore ?? courseFit.courseFitScore ?? null,
+    course_fit_adjustment: courseFit.totalFitAdjustment,
+    course_history_adjustment: courseFit.courseHistoryAdjustment,
+    driving_advantage: courseFit.drivingAdvantage,
+    // Weather (still using override or defaults for now)
+    weather_icon: 'sunny',
+    weather_label: bet.override?.weatherLabel || 'Clear',
+    ai_analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
+    ai_analysis_bullets: bet.analysisBullets || [],
+    // Alternative odds for comparison
+    alternative_odds: alternativeOdds,
+    books_compared: alternativeOdds.length + 1,  // +1 for best bookmaker
+    affiliate_link: bet.override?.affiliateLinkOverride || `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
+    tourEvent: {
+      tour: bet.tourEvent?.tour || null,
+      eventName: bet.tourEvent?.eventName || null
+    }
+  }
+}
+
 // Health check - independent of database connection
 app.get('/health', (req, res) => {
   // Always return a 200 response for Railway healthchecks
@@ -679,6 +772,7 @@ app.get('/api/bets/latest', async (req, res) => {
       include: {
         run: {
           select: {
+            id: true,
             weekStart: true,
             weekEnd: true
           }
@@ -703,50 +797,17 @@ app.get('/api/bets/latest', async (req, res) => {
       })
       .slice(0, 30)
 
-    // Transform to frontend format
-    const formattedBets = visible.map(bet => {
-      const displayTier = bet.override?.tierOverride || bet.tier
-      return ({
-      id: bet.id,
-      category: displayTier.toLowerCase().replace(/_/g, ''),
-      tier: displayTier,
-      is_fallback: bet.isFallback === true,
-      fallback_reason: bet.fallbackReason || null,
-      fallback_type: bet.fallbackType || null,
-      tier_status: bet.tierStatus || null,
-      mode: bet.mode || 'PRE_TOURNAMENT',
-      books_used: bet.booksUsed || [],
-      selection_name: bet.override?.selectionName || bet.selection,
-      confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
-      bestBookmaker: bet.bestBookmaker,
-      bestOdds: bet.bestOdds,
-      edge: bet.edge ?? null,
-      ev: bet.ev ?? null,
-      fair_prob: bet.fairProb ?? null,
-      market_prob: bet.marketProb ?? null,
-      prob_source: bet.probSource ?? null,
-      market_prob_source: bet.marketProbSource ?? null,
-      bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
-      tour: bet.tourEvent?.tour || null,
-      tournament_name: bet.tourEvent?.eventName || null,
-      analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
-      provider_best_slug: bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-'),
-      odds_display_best: bet.bestOdds?.toString() || '',
-      odds_decimal_best: bet.bestOdds,
-      course_fit_score: bet.override?.courseFitScore ?? 8,
-      form_label: bet.override?.formLabel || 'Good',
-      form_indicator: 'up',
-      weather_icon: 'sunny',
-      weather_label: bet.override?.weatherLabel || 'Clear',
-      ai_analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
-      ai_analysis_bullets: bet.analysisBullets || [],
-      affiliate_link: bet.override?.affiliateLinkOverride || `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
-      tourEvent: {
-        tour: bet.tourEvent?.tour || null,
-        eventName: bet.tourEvent?.eventName || null
-      }
-    })
-    })
+    // Load player stats for all runs
+    const runIds = [...new Set(visible.map(b => b.run?.id).filter(Boolean))]
+    const statsPromises = runIds.map(runId => playerStatsService.loadStatsForRun(runId))
+    const statsArrays = await Promise.all(statsPromises)
+    const statsByRun = new Map(runIds.map((id, i) => [id, statsArrays[i]]))
+
+    // Transform to frontend format with real player stats
+    const formattedBets = await Promise.all(visible.map(bet => {
+      const playerStats = statsByRun.get(bet.run?.id)
+      return formatBetWithRealStats(bet, playerStats)
+    }))
 
     res.json({
       data: formattedBets,
@@ -784,6 +845,11 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
       },
       take: 200,
       include: {
+        run: {
+          select: {
+            id: true
+          }
+        },
         tourEvent: true,
         override: true
       }
@@ -805,50 +871,17 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
       })
       .slice(0, 200)
 
-    // Transform to frontend format (same as above)
-    const formattedBets = filtered.map(bet => {
-      const displayTier = bet.override?.tierOverride || bet.tier
-      return ({
-      id: bet.id,
-      category: displayTier.toLowerCase().replace(/_/g, ''),
-      tier: displayTier,
-      is_fallback: bet.isFallback === true,
-      fallback_reason: bet.fallbackReason || null,
-      fallback_type: bet.fallbackType || null,
-      tier_status: bet.tierStatus || null,
-      mode: bet.mode || 'PRE_TOURNAMENT',
-      books_used: bet.booksUsed || [],
-      selection_name: bet.override?.selectionName || bet.selection,
-      confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
-      bestBookmaker: bet.bestBookmaker,
-      bestOdds: bet.bestOdds,
-      edge: bet.edge ?? null,
-      ev: bet.ev ?? null,
-      fair_prob: bet.fairProb ?? null,
-      market_prob: bet.marketProb ?? null,
-      prob_source: bet.probSource ?? null,
-      market_prob_source: bet.marketProbSource ?? null,
-      bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
-      tour: bet.tourEvent?.tour || null,
-      tournament_name: bet.tourEvent?.eventName || null,
-      analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
-      provider_best_slug: bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-'),
-      odds_display_best: bet.bestOdds?.toString() || '',
-      odds_decimal_best: bet.bestOdds,
-      course_fit_score: bet.override?.courseFitScore ?? 8,
-      form_label: bet.override?.formLabel || 'Good',
-      form_indicator: 'up',
-      weather_icon: 'sunny',
-      weather_label: bet.override?.weatherLabel || 'Clear',
-      ai_analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
-      ai_analysis_bullets: bet.analysisBullets || [],
-      affiliate_link: bet.override?.affiliateLinkOverride || `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
-      tourEvent: {
-        tour: bet.tourEvent?.tour || null,
-        eventName: bet.tourEvent?.eventName || null
-      }
-    })
-    })
+    // Load player stats for all runs
+    const runIds = [...new Set(filtered.map(b => b.run?.id).filter(Boolean))]
+    const statsPromises = runIds.map(runId => playerStatsService.loadStatsForRun(runId))
+    const statsArrays = await Promise.all(statsPromises)
+    const statsByRun = new Map(runIds.map((id, i) => [id, statsArrays[i]]))
+
+    // Transform to frontend format with real player stats
+    const formattedBets = await Promise.all(filtered.map(bet => {
+      const playerStats = statsByRun.get(bet.run?.id)
+      return formatBetWithRealStats(bet, playerStats)
+    }))
 
     res.json({
       data: formattedBets,

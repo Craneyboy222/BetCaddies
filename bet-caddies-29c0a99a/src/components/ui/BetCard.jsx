@@ -121,32 +121,65 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
           </div>
         </div>
 
-        {/* Signals Row */}
+        {/* Signals Row - Now showing real DataGolf stats */}
         <div className="grid grid-cols-3 gap-3 mb-4">
+          {/* SG Total / Form */}
+          <div className="bg-slate-800/50 rounded-xl p-3">
+            <div className="text-xs text-slate-500 mb-1">SG Total</div>
+            <div className="flex items-center gap-2">
+              {bet.sg_total != null ? (
+                <>
+                  <span className={`text-lg font-semibold ${bet.sg_total >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {bet.sg_total >= 0 ? '+' : ''}{bet.sg_total.toFixed(2)}
+                  </span>
+                  <FormIndicator indicator={bet.form_indicator} />
+                </>
+              ) : (
+                <span className="text-lg font-semibold text-white">{bet.form_label || '—'}</span>
+              )}
+            </div>
+            {bet.dg_rank && bet.dg_rank <= 100 && (
+              <div className="text-xs text-slate-500 mt-1">DG Rank #{bet.dg_rank}</div>
+            )}
+          </div>
+          
+          {/* Course Fit - Now using real adjustment */}
           <div className="bg-slate-800/50 rounded-xl p-3">
             <div className="text-xs text-slate-500 mb-1">Course Fit</div>
             <div className="flex items-center gap-2">
-              <div className="text-lg font-semibold text-white">{bet.course_fit_score}/10</div>
-              <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full"
-                  style={{ width: `${bet.course_fit_score * 10}%` }}
-                />
-              </div>
+              {bet.course_fit_adjustment != null ? (
+                <span className={`text-lg font-semibold ${bet.course_fit_adjustment >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {bet.course_fit_adjustment >= 0 ? '+' : ''}{bet.course_fit_adjustment.toFixed(2)}
+                </span>
+              ) : bet.course_fit_score != null ? (
+                <>
+                  <div className="text-lg font-semibold text-white">{bet.course_fit_score}/100</div>
+                  <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full"
+                      style={{ width: `${bet.course_fit_score}%` }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <span className="text-lg font-semibold text-slate-400">—</span>
+              )}
             </div>
+            {bet.course_history_adjustment != null && bet.course_history_adjustment > 0 && (
+              <div className="text-xs text-emerald-400 mt-1">History +{bet.course_history_adjustment.toFixed(2)}</div>
+            )}
           </div>
+          
+          {/* Confidence Score */}
           <div className="bg-slate-800/50 rounded-xl p-3">
-            <div className="text-xs text-slate-500 mb-1">Form</div>
+            <div className="text-xs text-slate-500 mb-1">Confidence</div>
             <div className="flex items-center gap-2">
-              <span className="text-lg font-semibold text-white">{bet.form_label}</span>
-              <FormIndicator indicator={bet.form_indicator} />
+              <span className="text-lg font-semibold text-white">
+                {bet.confidence_score != null ? `${bet.confidence_score}/100` : `${bet.confidence_rating}/5`}
+              </span>
             </div>
-          </div>
-          <div className="bg-slate-800/50 rounded-xl p-3">
-            <div className="text-xs text-slate-500 mb-1">Weather</div>
-            <div className="flex items-center gap-2">
-              <WeatherIcon className="w-5 h-5 text-slate-300" />
-              <span className="text-sm font-medium text-white">{bet.weather_label}</span>
+            <div className="mt-1">
+              <ConfidenceRating rating={bet.confidence_rating} />
             </div>
           </div>
         </div>
@@ -164,7 +197,7 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
           onClick={() => setShowOdds(!showOdds)}
           className="w-full flex items-center justify-between py-2 text-sm text-slate-400 hover:text-white transition-colors"
         >
-          <span>Compare odds across {bet.alternative_odds?.length || 0} bookmakers</span>
+          <span>Compare odds across {bet.books_compared || (bet.alternative_odds?.length + 1) || 1} bookmakers</span>
           {showOdds ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </button>
 
