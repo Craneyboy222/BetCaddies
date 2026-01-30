@@ -1029,7 +1029,8 @@ export class WeeklyPipeline {
       }
       const set = fieldIndex.get(key)
       const name = entry.player?.canonicalName || entry.playerId
-      if (name) set.names.add(name)
+      // Normalize names for consistent matching with cleanPlayerName() keys
+      if (name) set.names.add(this.playerNormalizer.cleanPlayerName(name))
       if (entry.player?.dgId) set.dgIds.add(String(entry.player.dgId))
     }
 
