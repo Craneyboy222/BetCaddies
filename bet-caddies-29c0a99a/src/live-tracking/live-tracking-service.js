@@ -87,10 +87,17 @@ const resolvePlayerName = (row) => {
 
 const extractScoringFields = (row) => {
   if (!row || typeof row !== 'object') return null
-  const position = row.position ?? row.pos ?? row.rank ?? row.place ?? row.leaderboard_position ?? null
-  const totalToPar = row.total_to_par ?? row.to_par ?? row.score ?? row.total_score ?? row.total ?? null
-  const todayToPar = row.today_to_par ?? row.round_score ?? row.today ?? row.round ?? null
+  const position = row.current_pos ?? row.position ?? row.pos ?? row.rank ?? row.place ?? row.leaderboard_position ?? null
+  const totalToPar = row.current_score ?? row.total_to_par ?? row.to_par ?? row.score ?? row.total_score ?? row.total ?? null
+  const todayToPar = row.today ?? row.today_to_par ?? row.round_score ?? row.round ?? null
   const thru = row.thru ?? row.through ?? row.hole ?? row.current_hole ?? row.thru_hole ?? null
+  
+  // Extract round-by-round scores (R1, R2, R3, R4)
+  const r1 = row.R1 ?? row.r1 ?? row.round_1 ?? row.round1 ?? null
+  const r2 = row.R2 ?? row.r2 ?? row.round_2 ?? row.round2 ?? null
+  const r3 = row.R3 ?? row.r3 ?? row.round_3 ?? row.round3 ?? null
+  const r4 = row.R4 ?? row.r4 ?? row.round_4 ?? row.round4 ?? null
+  const currentRound = row.round ?? null
 
   if (position == null && totalToPar == null && todayToPar == null && thru == null) return null
 
@@ -98,7 +105,12 @@ const extractScoringFields = (row) => {
     position,
     totalToPar,
     todayToPar,
-    thru
+    thru,
+    r1,
+    r2,
+    r3,
+    r4,
+    currentRound
   }
 }
 
@@ -585,6 +597,12 @@ export const createLiveTrackingService = ({
         totalToPar: scoring?.totalToPar ?? null,
         todayToPar: scoring?.todayToPar ?? null,
         thru: scoring?.thru ?? null,
+        // Round-by-round scores
+        r1: scoring?.r1 ?? null,
+        r2: scoring?.r2 ?? null,
+        r3: scoring?.r3 ?? null,
+        r4: scoring?.r4 ?? null,
+        currentRound: scoring?.currentRound ?? null,
         baselineOddsDecimal: Number.isFinite(resolvedBaselineOdds) ? resolvedBaselineOdds : null,
         baselineBook: resolvedBaselineBook,
         baselineCapturedAt,

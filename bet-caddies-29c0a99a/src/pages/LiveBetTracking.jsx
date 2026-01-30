@@ -42,41 +42,51 @@ const formatDate = (dateStr) => {
   return date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
 }
 
-const MovementIndicator = ({ movement }) => {
+const MovementIndicator = ({ movement, baseline, current }) => {
   if (!movement) return <span className="text-slate-500">—</span>
   const direction = movement.direction
   const pct = formatPct(movement.pctChange)
   const delta = formatDelta(movement.deltaDecimal)
   const crossBook = movement.crossBook
 
-  if (direction === 'UP') {
+  // For bettors: odds going DOWN means the player's chances improved (good for you if you bet early)
+  // Odds going UP means player's chances got worse (bad for your bet)
+  
+  if (direction === 'DOWN') {
+    // Odds shortened (went down) = player more likely to win = GOOD for your bet
     return (
-      <div className="flex items-center gap-1 text-emerald-400">
-        <ArrowUp className="w-4 h-4" />
-        <span>{delta}</span>
-        {pct ? <span>({pct})</span> : null}
-        {crossBook ? <span className="text-xs text-slate-400">cross-book</span> : null}
+      <div className="flex flex-col items-start">
+        <div className="flex items-center gap-1 text-emerald-400 font-semibold">
+          <ArrowDown className="w-4 h-4" />
+          <span>{delta}</span>
+        </div>
+        <span className="text-xs text-emerald-400/80">✓ Looking good</span>
+        {crossBook && <span className="text-xs text-slate-500">cross-book</span>}
       </div>
     )
   }
 
-  if (direction === 'DOWN') {
+  if (direction === 'UP') {
+    // Odds drifted (went up) = player less likely to win = BAD for your bet
     return (
-      <div className="flex items-center gap-1 text-rose-400">
-        <ArrowDown className="w-4 h-4" />
-        <span>{delta}</span>
-        {pct ? <span>({pct})</span> : null}
-        {crossBook ? <span className="text-xs text-slate-400">cross-book</span> : null}
+      <div className="flex flex-col items-start">
+        <div className="flex items-center gap-1 text-rose-400 font-semibold">
+          <ArrowUp className="w-4 h-4" />
+          <span>{delta}</span>
+        </div>
+        <span className="text-xs text-rose-400/80">Drifting</span>
+        {crossBook && <span className="text-xs text-slate-500">cross-book</span>}
       </div>
     )
   }
 
   return (
-    <div className="flex items-center gap-1 text-slate-400">
-      <Minus className="w-4 h-4" />
-      <span>{delta || '0.00'}</span>
-      {pct ? <span>({pct})</span> : null}
-      {crossBook ? <span className="text-xs text-slate-400">cross-book</span> : null}
+    <div className="flex flex-col items-start">
+      <div className="flex items-center gap-1 text-slate-400">
+        <Minus className="w-4 h-4" />
+        <span>{delta || '0.00'}</span>
+      </div>
+      <span className="text-xs text-slate-500">No change</span>
     </div>
   )
 }
@@ -132,22 +142,22 @@ const UpcomingEventCard = ({ event, rows }) => {
               <th className="py-3">Player</th>
               <th>Market</th>
               <th>Tier</th>
-              <th>Odds</th>
+              <th>Our Pick Odds</th>
               <th>Edge</th>
-              <th>EV</th>
+              <th>Expected Value</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row, idx) => (
-              <tr key={`${row.dgPlayerId || row.playerName}-${row.market}-${idx}`} className="border-b border-slate-800">
+              <tr key={`${row.dgPlayerId || row.playerName}-${row.market}-${idx}`} className="border-b border-slate-800 hover:bg-slate-800/50">
                 <td className="py-3 font-medium text-white">{row.playerName}</td>
                 <td className="uppercase text-xs text-slate-300">{row.market}</td>
                 <td><TierBadge tier={row.tier} /></td>
                 <td>
                   {row.baselineOddsDecimal ? (
                     <div className="flex flex-col">
-                      <span>{row.baselineOddsDecimal.toFixed(2)}</span>
-                      <span className="text-xs text-slate-500">{row.baselineBook || 'unknown'}</span>
+                      <span className="font-mono">{row.baselineOddsDecimal.toFixed(2)}</span>
+                      <span className="text-xs text-slate-500">{row.baselineBook || ''}</span>
                     </div>
                   ) : '—'}
                 </td>
@@ -162,56 +172,95 @@ const UpcomingEventCard = ({ event, rows }) => {
   )
 }
 
+// Helper to format round score (show relative to par or actual strokes)
+const RoundScore = ({ score }) => {
+  if (score == null) return <span className="text-slate-600">—</span>
+  return <span>{score}</span>
+}
+
 const LiveEventTable = ({ rows, status }) => {
   // Always show all columns - live data columns will show "—" when not available
   return (
     <div className="overflow-x-auto">
+      {/* Legend for non-bettors */}
+      <div className="mb-4 p-3 bg-slate-800/50 rounded-lg text-xs text-slate-400">
+        <span className="font-semibold text-white">Quick Guide:</span>{' '}
+        <span className="text-emerald-400">↓ Green = Good</span> (odds dropped, your pick is doing well) •{' '}
+        <span className="text-rose-400">↑ Red = Drifting</span> (odds rising, player losing ground)
+      </div>
+      
       <table className="w-full text-sm text-left text-slate-200">
         <thead className="text-xs uppercase text-slate-400 border-b border-slate-700">
           <tr>
-            <th className="py-3">Player</th>
+            <th className="py-3 sticky left-0 bg-slate-900">Player</th>
             <th>Pos</th>
-            <th>Score</th>
+            <th>Total</th>
+            <th className="text-center" colSpan="4">Round Scores</th>
             <th>Today</th>
             <th>Thru</th>
             <th>Market</th>
             <th>Tier</th>
-            <th>Baseline</th>
-            <th>Live Odds</th>
-            <th>Move</th>
+            <th>Our Pick</th>
+            <th>Now</th>
+            <th>Status</th>
             <th>Edge</th>
+          </tr>
+          <tr className="text-[10px] text-slate-500">
+            <th className="sticky left-0 bg-slate-900"></th>
+            <th></th>
+            <th></th>
+            <th>R1</th>
+            <th>R2</th>
+            <th>R3</th>
+            <th>R4</th>
+            <th></th>
+            <th></th>
+            <th></th>
+            <th></th>
+            <th className="text-slate-500 font-normal">When we picked</th>
+            <th className="text-slate-500 font-normal">Current</th>
+            <th></th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row, idx) => (
-            <tr key={`${row.dgPlayerId || row.playerName}-${row.market}-${idx}`} className="border-b border-slate-800">
-              <td className="py-3 font-medium text-white">{row.playerName}</td>
-              <td className={row.position != null && row.position <= 10 ? 'text-emerald-400 font-semibold' : ''}>
+            <tr key={`${row.dgPlayerId || row.playerName}-${row.market}-${idx}`} className="border-b border-slate-800 hover:bg-slate-800/50">
+              <td className="py-3 font-medium text-white sticky left-0 bg-slate-900">{row.playerName}</td>
+              <td className={row.position != null && row.position <= 10 ? 'text-emerald-400 font-bold' : ''}>
                 {row.position != null ? (row.position <= 1 ? '🏆 ' : '') + row.position : '—'}
               </td>
-              <td>{row.totalToPar ?? '—'}</td>
+              <td className="font-semibold">{row.totalToPar ?? '—'}</td>
+              <td className="text-slate-400"><RoundScore score={row.r1} /></td>
+              <td className="text-slate-400"><RoundScore score={row.r2} /></td>
+              <td className="text-slate-400"><RoundScore score={row.r3} /></td>
+              <td className="text-slate-400"><RoundScore score={row.r4} /></td>
               <td>{row.todayToPar ?? '—'}</td>
-              <td>{row.thru ?? '—'}</td>
+              <td className="text-slate-400">{row.thru ?? '—'}</td>
               <td className="uppercase text-xs text-slate-300">{row.market}</td>
               <td><TierBadge tier={row.tier} /></td>
               <td>
                 {row.baselineOddsDecimal ? (
                   <div className="flex flex-col">
-                    <span>{row.baselineOddsDecimal.toFixed(2)}</span>
-                    <span className="text-xs text-slate-500">{row.baselineBook || 'unknown'}</span>
+                    <span className="font-mono">{row.baselineOddsDecimal.toFixed(2)}</span>
+                    <span className="text-xs text-slate-500">{row.baselineBook || ''}</span>
                   </div>
                 ) : '—'}
               </td>
               <td>
                 {row.currentOddsDecimal ? (
                   <div className="flex flex-col">
-                    <span>{row.currentOddsDecimal.toFixed(2)}</span>
-                    <span className="text-xs text-slate-500">{row.currentBook || 'unknown'}</span>
+                    <span className="font-mono">{row.currentOddsDecimal.toFixed(2)}</span>
+                    <span className="text-xs text-slate-500">{row.currentBook || ''}</span>
                   </div>
                 ) : '—'}
               </td>
               <td>
-                <MovementIndicator movement={row.oddsMovement} />
+                <MovementIndicator 
+                  movement={row.oddsMovement} 
+                  baseline={row.baselineOddsDecimal}
+                  current={row.currentOddsDecimal}
+                />
               </td>
               <td className="text-emerald-400">{formatEdge(row.edge) || '—'}</td>
             </tr>
