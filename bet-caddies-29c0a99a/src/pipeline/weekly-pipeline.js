@@ -53,6 +53,8 @@ export class WeeklyPipeline {
     this.runMode = process.env.RUN_MODE || 'CURRENT_WEEK'
     this.allowFallback = String(process.env.ALLOW_FALLBACK || '').toLowerCase() === 'true'
     this.excludeInPlay = String(process.env.EXCLUDE_IN_PLAY || 'true').toLowerCase() !== 'false'
+    // Allow events that started within the last N hours (for mid-week regeneration)
+    this.inPlayGraceHours = Number(process.env.IN_PLAY_GRACE_HOURS || 48)
     this.oddsMatchConfidenceThreshold = Number(process.env.ODDS_MATCH_CONFIDENCE_THRESHOLD || 0.8)
     this.allowedBooks = getAllowedBooks()
     this.allowedBooksSet = getAllowedBooksSet()
@@ -385,13 +387,19 @@ export class WeeklyPipeline {
         const eventName = event.event_name || event.name || event.tournament_name || 'Unknown Event'
         const startDate = this.parseDate(event.start_date || event.start_date_utc || event.start) || weekStart
         const endDate = this.parseDate(event.end_date || event.end_date_utc || event.end) || weekEnd
-        const inPlay = startDate < new Date()
+        const now = new Date()
+        const inPlay = startDate < now
+        // Allow events that started within the grace period (default 48 hours)
+        const graceMs = this.inPlayGraceHours * 60 * 60 * 1000
+        const withinGracePeriod = inPlay && (now.getTime() - startDate.getTime()) <= graceMs
 
-        if (this.runMode === 'CURRENT_WEEK' && this.excludeInPlay && inPlay) {
+        if (this.runMode === 'CURRENT_WEEK' && this.excludeInPlay && inPlay && !withinGracePeriod) {
           await issueTracker.logIssue(tour, 'warning', 'discover', 'EVENT_IN_PLAY_SKIPPED', {
             tour,
             eventName,
-            startDate: startDate.toISOString()
+            startDate: startDate.toISOString(),
+            hoursSinceStart: Math.round((now.getTime() - startDate.getTime()) / (60 * 60 * 1000)),
+            graceHours: this.inPlayGraceHours
           })
           continue
         }
