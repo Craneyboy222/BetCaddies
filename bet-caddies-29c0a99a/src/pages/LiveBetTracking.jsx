@@ -163,27 +163,22 @@ const UpcomingEventCard = ({ event, rows }) => {
 }
 
 const LiveEventTable = ({ rows, status }) => {
-  const showLiveData = status === 'live'
-  
+  // Always show all columns - live data columns will show "—" when not available
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm text-left text-slate-200">
         <thead className="text-xs uppercase text-slate-400 border-b border-slate-700">
           <tr>
             <th className="py-3">Player</th>
-            {showLiveData && (
-              <>
-                <th>Pos</th>
-                <th>Score</th>
-                <th>Today</th>
-                <th>Thru</th>
-              </>
-            )}
+            <th>Pos</th>
+            <th>Score</th>
+            <th>Today</th>
+            <th>Thru</th>
             <th>Market</th>
             <th>Tier</th>
             <th>Baseline</th>
-            {showLiveData && <th>Live Odds</th>}
-            {showLiveData && <th>Move</th>}
+            <th>Live Odds</th>
+            <th>Move</th>
             <th>Edge</th>
           </tr>
         </thead>
@@ -191,16 +186,12 @@ const LiveEventTable = ({ rows, status }) => {
           {rows.map((row, idx) => (
             <tr key={`${row.dgPlayerId || row.playerName}-${row.market}-${idx}`} className="border-b border-slate-800">
               <td className="py-3 font-medium text-white">{row.playerName}</td>
-              {showLiveData && (
-                <>
-                  <td className={row.position != null && row.position <= 10 ? 'text-emerald-400 font-semibold' : ''}>
-                    {row.position != null ? (row.position <= 1 ? '🏆 ' : '') + row.position : '—'}
-                  </td>
-                  <td>{row.totalToPar ?? '—'}</td>
-                  <td>{row.todayToPar ?? '—'}</td>
-                  <td>{row.thru ?? '—'}</td>
-                </>
-              )}
+              <td className={row.position != null && row.position <= 10 ? 'text-emerald-400 font-semibold' : ''}>
+                {row.position != null ? (row.position <= 1 ? '🏆 ' : '') + row.position : '—'}
+              </td>
+              <td>{row.totalToPar ?? '—'}</td>
+              <td>{row.todayToPar ?? '—'}</td>
+              <td>{row.thru ?? '—'}</td>
               <td className="uppercase text-xs text-slate-300">{row.market}</td>
               <td><TierBadge tier={row.tier} /></td>
               <td>
@@ -211,21 +202,17 @@ const LiveEventTable = ({ rows, status }) => {
                   </div>
                 ) : '—'}
               </td>
-              {showLiveData && (
-                <td>
-                  {row.currentOddsDecimal ? (
-                    <div className="flex flex-col">
-                      <span>{row.currentOddsDecimal.toFixed(2)}</span>
-                      <span className="text-xs text-slate-500">{row.currentBook || 'unknown'}</span>
-                    </div>
-                  ) : '—'}
-                </td>
-              )}
-              {showLiveData && (
-                <td>
-                  <MovementIndicator movement={row.oddsMovement} />
-                </td>
-              )}
+              <td>
+                {row.currentOddsDecimal ? (
+                  <div className="flex flex-col">
+                    <span>{row.currentOddsDecimal.toFixed(2)}</span>
+                    <span className="text-xs text-slate-500">{row.currentBook || 'unknown'}</span>
+                  </div>
+                ) : '—'}
+              </td>
+              <td>
+                <MovementIndicator movement={row.oddsMovement} />
+              </td>
               <td className="text-emerald-400">{formatEdge(row.edge) || '—'}</td>
             </tr>
           ))}
