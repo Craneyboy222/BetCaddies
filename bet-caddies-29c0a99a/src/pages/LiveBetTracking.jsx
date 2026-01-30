@@ -277,7 +277,7 @@ export default function LiveBetTracking() {
   const { data: activeResponse, isLoading: activeLoading } = useQuery({
     queryKey: ['liveTrackingActive'],
     queryFn: () => api.liveTracking.active(),
-    refetchInterval: 60000
+    refetchInterval: 300000
   })
 
   const activeEvents = useMemo(() => {
@@ -295,7 +295,7 @@ export default function LiveBetTracking() {
     queryKey: ['liveTrackingEvent', selectedEvent?.dgEventId, selectedEvent?.tour],
     enabled: Boolean(selectedEvent?.dgEventId && selectedEvent?.tour),
     queryFn: () => api.liveTracking.event(selectedEvent.dgEventId, selectedEvent.tour),
-    refetchInterval: selectedEvent?.status === 'live' ? 60000 : 300000
+    refetchInterval: selectedEvent?.status === 'live' ? 300000 : 600000
   })
 
   const rows = eventResponse?.rows || []

@@ -5,7 +5,7 @@ import { DataIssueTracker } from '../observability/data-issue-tracker.js'
 import { logger } from '../observability/logger.js'
 import { prisma } from '../db/client.js'
 
-const DEFAULT_TTL_MS = Number(process.env.LIVE_TRACKING_CACHE_TTL_MS || 60000)
+const DEFAULT_TTL_MS = Number(process.env.LIVE_TRACKING_CACHE_TTL_MS || 300000)
 const DEFAULT_CONCURRENCY = Number(process.env.LIVE_TRACKING_MAX_CONCURRENCY || 3)
 
 const DEFAULT_TOURS = ['PGA', 'DPWT', 'KFT', 'LIV']
