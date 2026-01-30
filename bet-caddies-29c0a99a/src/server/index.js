@@ -552,6 +552,36 @@ if (cronEnabled) {
   }, { timezone: 'Europe/London' })
 }
 
+// Railway cron endpoint - can be called by Railway Cron or external scheduler
+// Protected by a secret token to prevent unauthorized access
+const CRON_SECRET = process.env.CRON_SECRET || null
+
+app.post('/api/cron/pipeline', async (req, res) => {
+  // Validate cron secret
+  const authHeader = req.headers.authorization || ''
+  const providedSecret = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : req.body?.secret
+  
+  if (!CRON_SECRET) {
+    logger.warn('Cron endpoint called but CRON_SECRET not configured')
+    return res.status(503).json({ error: 'Cron endpoint not configured' })
+  }
+  
+  if (providedSecret !== CRON_SECRET) {
+    logger.warn('Cron endpoint called with invalid secret')
+    return res.status(401).json({ error: 'Invalid cron secret' })
+  }
+
+  try {
+    const runMode = req.body?.run_mode || 'CURRENT_WEEK'
+    logger.info('Starting pipeline via cron endpoint', { runMode })
+    const result = await runWeeklyPipeline({ dryRun: false, runMode })
+    res.json({ success: true, message: 'Pipeline started', runKey: result.runKey })
+  } catch (error) {
+    logger.error('Cron pipeline trigger failed', { error: error.message })
+    res.status(500).json({ error: 'Failed to start pipeline', message: error.message })
+  }
+})
+
 const buildBlocksFromSiteContent = (key, json = {}) => {
   const blocks = []
   const hero = json?.hero || null

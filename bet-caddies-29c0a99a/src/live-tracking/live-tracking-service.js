@@ -163,84 +163,108 @@ export const createLiveTrackingService = ({
     return { issues, logIssue }
   }
 
-  const discoverActiveEventsByTour = async (tours = DEFAULT_TOURS) => {
-    const cacheKey = getCacheKey('active-events', tours.join(','))
+  const discoverActiveEventsByTour = async (tours = DEFAULT_TOURS, includeUpcoming = true) => {
+    const cacheKey = getCacheKey('active-events', tours.join(','), includeUpcoming ? 'with-upcoming' : 'live-only')
     const cached = getCached(cacheKey)
     if (cached) return cached
 
     const { issues, logIssue } = await buildIssueLogger()
     const results = []
+    const now = new Date()
 
-    for (const tour of tours) {
+    // First, find all events with bet recommendations (both live and upcoming)
+    const eventsWithPicks = await prisma.tourEvent.findMany({
+      where: {
+        tour: { in: tours },
+        betRecommendations: {
+          some: {
+            run: { status: 'completed' }
+          }
+        },
+        // Include events that haven't ended yet (upcoming + in progress)
+        endDate: { gte: now }
+      },
+      include: {
+        _count: {
+          select: { betRecommendations: true }
+        }
+      },
+      orderBy: { startDate: 'asc' }
+    })
+
+    for (const tourEvent of eventsWithPicks) {
+      const tour = tourEvent.tour
       const tourCode = dataGolfClient.resolveTourCode(tour, 'preds')
-      if (!tourCode) {
-        await logIssue(tour, 'warning', 'TOUR_NOT_SUPPORTED', 'Tour not supported for live tracking', { tour })
-        continue
+      
+      // Check if tournament is in play (started but not ended)
+      const isInPlay = tourEvent.startDate <= now && tourEvent.endDate >= now
+      const isUpcoming = tourEvent.startDate > now
+      
+      let liveDataAvailable = false
+      
+      if (isInPlay && tourCode) {
+        // Try to fetch live data to confirm tournament is actually in play
+        try {
+          const payload = await dataGolfClient.getInPlayPreds(tourCode)
+          const rows = normalizeDataGolfArray(payload)
+          liveDataAvailable = rows.length > 0
+        } catch (error) {
+          // Live data not available yet (tournament may not have started play)
+          await logIssue(tour, 'info', 'EVENT_NOT_IN_PLAY', 'Live feed not available yet', { 
+            tour, 
+            eventName: tourEvent.eventName,
+            message: error?.message 
+          })
+        }
       }
 
-      let payload
-      try {
-        payload = await dataGolfClient.getInPlayPreds(tourCode)
-      } catch (error) {
-        await logIssue(tour, 'error', 'EVENT_NOT_IN_PLAY', 'Failed to fetch in-play feed', { tour, message: error?.message })
-        continue
+      // Calculate days until start for upcoming events
+      let daysUntilStart = null
+      if (isUpcoming) {
+        const diffMs = tourEvent.startDate.getTime() - now.getTime()
+        daysUntilStart = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
       }
 
-      const rows = normalizeDataGolfArray(payload)
-      const eventId = resolveEventId(payload, rows)
-      const eventName = resolveEventName(payload)
-
-      if (!eventId) {
-        await logIssue(tour, 'warning', 'LIVE_FEED_SHAPE_UNKNOWN', 'In-play feed missing event_id', {
-          tour,
-          keys: payload ? Object.keys(payload) : []
-        })
+      // Determine event status
+      let status = 'upcoming'
+      if (liveDataAvailable) {
+        status = 'live'
+      } else if (isInPlay) {
+        status = 'in_progress_no_data' // Tournament dates say in progress but no live feed yet
       }
 
-      if (!rows.length) {
-        await logIssue(tour, 'info', 'EVENT_NOT_IN_PLAY', 'No in-play rows returned', { tour })
-        continue
-      }
-
-      let tourEvent = null
-      if (eventId) {
-        tourEvent = await prisma.tourEvent.findFirst({
-          where: { tour, dgEventId: String(eventId) },
-          orderBy: { startDate: 'desc' }
-        })
-      }
-
-      if (!tourEvent) {
-        tourEvent = await prisma.tourEvent.findFirst({
-          where: { tour, startDate: { lte: new Date() }, endDate: { gte: new Date() } },
-          orderBy: { startDate: 'desc' }
-        })
-      }
-
-      const resolvedEventId = eventId || tourEvent?.dgEventId || null
-      if (!resolvedEventId) {
-        await logIssue(tour, 'warning', 'LIVE_FEED_SHAPE_UNKNOWN', 'Unable to resolve event_id for live tracking', {
-          tour,
-          eventName: eventName || tourEvent?.eventName || null
-        })
+      // Skip upcoming events if not requested
+      if (!includeUpcoming && status === 'upcoming') {
         continue
       }
 
       const trackedCount = await prisma.betRecommendation.count({
         where: {
-          tourEvent: { dgEventId: String(resolvedEventId), tour },
+          tourEventId: tourEvent.id,
           run: { status: 'completed' }
         }
       })
 
       results.push({
         tour,
-        dgEventId: String(resolvedEventId),
-        eventName: eventName || tourEvent?.eventName || 'Unknown Event',
+        dgEventId: tourEvent.dgEventId || tourEvent.id,
+        eventName: tourEvent.eventName,
+        startDate: tourEvent.startDate.toISOString(),
+        endDate: tourEvent.endDate.toISOString(),
+        status,
+        liveDataAvailable,
+        daysUntilStart,
         lastUpdated: new Date().toISOString(),
         trackedCount
       })
     }
+
+    // Sort: live events first, then by start date
+    results.sort((a, b) => {
+      if (a.status === 'live' && b.status !== 'live') return -1
+      if (b.status === 'live' && a.status !== 'live') return 1
+      return new Date(a.startDate) - new Date(b.startDate)
+    })
 
     const response = { data: results, issues }
     setCached(cacheKey, response, ttlMs)
@@ -248,10 +272,19 @@ export const createLiveTrackingService = ({
   }
 
   const getTrackedPlayersForEvent = async (dgEventId, tour) => {
-    const tourEvent = await prisma.tourEvent.findFirst({
+    // Try to find by dgEventId first, then by id (for events without dgEventId)
+    let tourEvent = await prisma.tourEvent.findFirst({
       where: { tour, dgEventId: String(dgEventId) },
       orderBy: { startDate: 'desc' }
     })
+
+    // Fallback: try finding by tourEvent.id directly
+    if (!tourEvent) {
+      tourEvent = await prisma.tourEvent.findFirst({
+        where: { tour, id: String(dgEventId) },
+        orderBy: { startDate: 'desc' }
+      })
+    }
 
     if (!tourEvent) return { tourEvent: null, picks: [] }
 
@@ -319,6 +352,59 @@ export const createLiveTrackingService = ({
         eventName: 'Unknown Event',
         updatedAt: new Date().toISOString(),
         rows: [],
+        dataIssues: issues
+      }
+      setCached(cacheKey, response, ttlMs)
+      return response
+    }
+
+    // Determine tournament status
+    const now = new Date()
+    const isUpcoming = tourEvent.startDate > now
+    const isCompleted = tourEvent.endDate < now
+    const isInProgress = !isUpcoming && !isCompleted
+
+    // Calculate days until start for upcoming events
+    let daysUntilStart = null
+    if (isUpcoming) {
+      const diffMs = tourEvent.startDate.getTime() - now.getTime()
+      daysUntilStart = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+    }
+
+    // For upcoming events, return picks without live data
+    if (isUpcoming) {
+      const rows = picks.map((pick) => ({
+        dgPlayerId: pick.dgPlayerId || null,
+        playerName: pick.selection,
+        market: pick.marketKey,
+        position: null,
+        totalToPar: null,
+        todayToPar: null,
+        thru: null,
+        baselineOddsDecimal: Number.isFinite(pick.bestOdds) ? pick.bestOdds : null,
+        baselineBook: pick.bestBookmaker || null,
+        baselineCapturedAt: pick.createdAt?.toISOString?.() || pick.createdAt || null,
+        currentOddsDecimal: null,
+        currentBook: null,
+        currentFetchedAt: null,
+        oddsMovement: null,
+        tier: pick.tier,
+        edge: pick.edge,
+        ev: pick.ev,
+        confidence: pick.confidence1To5,
+        dataIssues: []
+      }))
+
+      const response = {
+        dgEventId: String(dgEventId),
+        tour,
+        eventName: tourEvent.eventName,
+        startDate: tourEvent.startDate.toISOString(),
+        endDate: tourEvent.endDate.toISOString(),
+        status: 'upcoming',
+        daysUntilStart,
+        updatedAt: new Date().toISOString(),
+        rows,
         dataIssues: issues
       }
       setCached(cacheKey, response, ttlMs)
@@ -513,14 +599,26 @@ export const createLiveTrackingService = ({
             crossBook
           }
           : null,
+        tier: pick.tier,
+        edge: pick.edge,
+        ev: pick.ev,
+        confidence: pick.confidence1To5,
         dataIssues: []
       })
     }
+
+    // Determine if we got any live data
+    const hasLiveScoring = rows.some(r => r.position != null || r.totalToPar != null)
+    const status = hasLiveScoring ? 'live' : (isCompleted ? 'completed' : 'in_progress_no_data')
 
     const response = {
       dgEventId: String(dgEventId),
       tour,
       eventName: tourEvent.eventName,
+      startDate: tourEvent.startDate.toISOString(),
+      endDate: tourEvent.endDate.toISOString(),
+      status,
+      daysUntilStart: null,
       updatedAt: new Date().toISOString(),
       rows,
       dataIssues: issues
