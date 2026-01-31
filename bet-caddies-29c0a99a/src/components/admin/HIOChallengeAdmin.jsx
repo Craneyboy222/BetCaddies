@@ -79,6 +79,16 @@ export default function HIOChallengeAdmin() {
     enabled: !!activeChallenge
   });
 
+  // Auto-generate weekly challenge from current events
+  const generateWeeklyMutation = useMutation({
+    mutationFn: async () => {
+      return api.entities.HIOChallenge.generateWeekly('£100 Amazon Voucher')
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allHIOChallenges'] });
+    }
+  })
+
   // Placeholder (Base44 AI generator removed)
   const regenerateQuestionMutation = useMutation({
     mutationFn: async (index) => {
@@ -157,7 +167,24 @@ export default function HIOChallengeAdmin() {
     return (
       <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-8 text-center">
         <Trophy className="w-12 h-12 text-slate-400 mx-auto mb-3" />
-        <p className="text-slate-400">No active challenge. Will be created Monday at 6am GMT.</p>
+        <p className="text-slate-400 mb-4">No active challenge.</p>
+        <Button
+          onClick={() => generateWeeklyMutation.mutate()}
+          disabled={generateWeeklyMutation.isPending}
+          className="bg-emerald-500 hover:bg-emerald-600"
+        >
+          {generateWeeklyMutation.isPending ? (
+            <>
+              <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+              Generating...
+            </>
+          ) : (
+            <>
+              <Plus className="w-4 h-4 mr-2" />
+              Generate Weekly Challenge
+            </>
+          )}
+        </Button>
       </div>
     );
   }

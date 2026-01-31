@@ -507,6 +507,12 @@ export class BetCaddiesApi {
       calculateScores: async (id) => {
         const response = await this.client.post(`/api/entities/hio-challenges/${id}/calculate-scores`, {})
         return response.data || response
+      },
+      generateWeekly: async (prizeDescription) => {
+        const response = await this.client.post('/api/entities/hio-challenges/generate-weekly', {
+          prize_description: prizeDescription
+        })
+        return response.data || response
       }
     },
 

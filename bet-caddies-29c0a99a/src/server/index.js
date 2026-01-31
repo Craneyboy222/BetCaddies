@@ -2165,6 +2165,56 @@ app.post(
   }
 )
 
+// Admin: Auto-generate weekly HIO challenge
+app.post(
+  '/api/entities/hio-challenges/generate-weekly',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    prize_description: z.string().optional()
+  })),
+  async (req, res) => {
+    try {
+      const { createOrUpdateWeeklyChallenge } = await import('../services/hio-question-generator.js')
+      const prizeDescription = req.body.prize_description || '£100 Amazon Voucher'
+      
+      const challenge = await createOrUpdateWeeklyChallenge(prizeDescription)
+      
+      await writeAuditLog({
+        req,
+        action: 'hio_challenge.generate_weekly',
+        entityType: 'HIOChallenge',
+        entityId: challenge.id,
+        beforeJson: null,
+        afterJson: challenge
+      })
+      
+      logger.info('Generated weekly HIO challenge', { 
+        challengeId: challenge.id,
+        questionCount: challenge.questions?.length || 0,
+        tournaments: challenge.tournamentNames
+      })
+      
+      res.json({
+        data: {
+          id: challenge.id,
+          status: challenge.status,
+          prize_description: challenge.prizeDescription,
+          tournament_names: challenge.tournamentNames,
+          questions: challenge.questions,
+          total_entries: challenge.totalEntries,
+          perfect_scores: challenge.perfectScores,
+          created_at: challenge.createdAt?.toISOString?.() || challenge.createdAt,
+          updated_at: challenge.updatedAt?.toISOString?.() || challenge.updatedAt
+        }
+      })
+    } catch (error) {
+      logger.error('Failed to generate weekly HIO challenge', { error: error?.message, stack: error?.stack })
+      res.status(500).json({ error: 'Failed to generate weekly challenge' })
+    }
+  }
+)
+
 app.put(
   '/api/entities/hio-challenges/:id',
   authRequired,
