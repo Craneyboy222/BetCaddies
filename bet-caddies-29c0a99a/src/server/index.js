@@ -824,6 +824,17 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
   try {
     const { tier } = req.params
     const TOP_PICKS_LIMIT = 5 // Only show top 5 best picks per category
+    const now = new Date()
+    
+    // Calculate this week's date range (Sunday to Sunday)
+    const dayOfWeek = now.getDay()
+    const startOfWeek = new Date(now)
+    startOfWeek.setDate(now.getDate() - dayOfWeek) // Go back to Sunday
+    startOfWeek.setHours(0, 0, 0, 0)
+    
+    const endOfWeek = new Date(startOfWeek)
+    endOfWeek.setDate(startOfWeek.getDate() + 7) // Next Sunday
+    endOfWeek.setHours(23, 59, 59, 999)
     
     const tierMap = {
       'par': 'PAR',
@@ -836,10 +847,17 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
 
     const requestedTier = tierMap[tier] || tier.toUpperCase()
 
+    // Only fetch bets from THIS WEEK's tournaments (endDate within this week)
     const bets = await prisma.betRecommendation.findMany({
       where: {
         run: {
           status: 'completed'
+        },
+        tourEvent: {
+          endDate: {
+            gte: startOfWeek, // Tournament ends this week or later
+            lte: endOfWeek    // Tournament ends by end of this week
+          }
         }
       },
       orderBy: [
@@ -859,46 +877,78 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
       }
     })
 
-    const filtered = bets
+    // Filter by tier and not archived
+    const tieredBets = bets
       .filter(bet => bet.override?.status !== 'archived')
       .filter(bet => (bet.override?.tierOverride || bet.tier) === requestedTier)
-      .sort((a, b) => {
-        // Pinned items always come first
-        const aPinned = a.override?.pinned === true
-        const bPinned = b.override?.pinned === true
-        if (aPinned !== bPinned) return aPinned ? -1 : 1
 
-        const aOrder = Number.isFinite(a.override?.pinOrder) ? a.override.pinOrder : Number.POSITIVE_INFINITY
-        const bOrder = Number.isFinite(b.override?.pinOrder) ? b.override.pinOrder : Number.POSITIVE_INFINITY
-        if (aOrder !== bOrder) return aOrder - bOrder
+    // Sort by quality metrics
+    const sortedBets = tieredBets.sort((a, b) => {
+      // Pinned items always come first
+      const aPinned = a.override?.pinned === true
+      const bPinned = b.override?.pinned === true
+      if (aPinned !== bPinned) return aPinned ? -1 : 1
 
-        // Sort by confidence rating (higher is better)
-        const confA = a.override?.confidenceRating ?? a.confidence1To5 ?? 0
-        const confB = b.override?.confidenceRating ?? b.confidence1To5 ?? 0
-        if (confB !== confA) return confB - confA
+      const aOrder = Number.isFinite(a.override?.pinOrder) ? a.override.pinOrder : Number.POSITIVE_INFINITY
+      const bOrder = Number.isFinite(b.override?.pinOrder) ? b.override.pinOrder : Number.POSITIVE_INFINITY
+      if (aOrder !== bOrder) return aOrder - bOrder
 
-        // Then by edge (higher is better)
-        const edgeA = a.edge ?? 0
-        const edgeB = b.edge ?? 0
-        if (edgeB !== edgeA) return edgeB - edgeA
+      // Sort by confidence rating (higher is better)
+      const confA = a.override?.confidenceRating ?? a.confidence1To5 ?? 0
+      const confB = b.override?.confidenceRating ?? b.confidence1To5 ?? 0
+      if (confB !== confA) return confB - confA
 
-        // Then by best odds (higher odds = more value)
-        const oddsA = a.bestOdds ?? 0
-        const oddsB = b.bestOdds ?? 0
-        if (oddsB !== oddsA) return oddsB - oddsA
+      // Then by edge (higher is better)
+      const edgeA = a.edge ?? 0
+      const edgeB = b.edge ?? 0
+      if (edgeB !== edgeA) return edgeB - edgeA
 
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      })
-      .slice(0, TOP_PICKS_LIMIT) // Only return top 5 best picks
+      // Then by best odds (higher odds = more value)
+      const oddsA = a.bestOdds ?? 0
+      const oddsB = b.bestOdds ?? 0
+      if (oddsB !== oddsA) return oddsB - oddsA
+
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    })
+
+    // Select top 5 picks with VARIETY in bet types (marketKey)
+    // Ensure we don't have all picks of the same type (e.g., all MC or all Top 20)
+    const selectedPicks = []
+    const usedMarketKeys = new Map() // Track count per market key
+    
+    for (const bet of sortedBets) {
+      if (selectedPicks.length >= TOP_PICKS_LIMIT) break
+      
+      const marketKey = bet.marketKey || 'unknown'
+      const currentCount = usedMarketKeys.get(marketKey) || 0
+      
+      // Allow max 2 picks per market type to ensure variety
+      // But if we can't fill 5 picks, we'll relax this constraint
+      if (currentCount < 2) {
+        selectedPicks.push(bet)
+        usedMarketKeys.set(marketKey, currentCount + 1)
+      }
+    }
+    
+    // If we couldn't fill 5 picks with variety, fill remaining with best available
+    if (selectedPicks.length < TOP_PICKS_LIMIT) {
+      const selectedIds = new Set(selectedPicks.map(b => b.id))
+      for (const bet of sortedBets) {
+        if (selectedPicks.length >= TOP_PICKS_LIMIT) break
+        if (!selectedIds.has(bet.id)) {
+          selectedPicks.push(bet)
+        }
+      }
+    }
 
     // Load player stats for all runs
-    const runIds = [...new Set(filtered.map(b => b.run?.id).filter(Boolean))]
+    const runIds = [...new Set(selectedPicks.map(b => b.run?.id).filter(Boolean))]
     const statsPromises = runIds.map(runId => playerStatsService.loadStatsForRun(runId))
     const statsArrays = await Promise.all(statsPromises)
     const statsByRun = new Map(runIds.map((id, i) => [id, statsArrays[i]]))
 
     // Transform to frontend format with real player stats
-    const formattedBets = await Promise.all(filtered.map(bet => {
+    const formattedBets = await Promise.all(selectedPicks.map(bet => {
       const playerStats = statsByRun.get(bet.run?.id)
       return formatBetWithRealStats(bet, playerStats)
     }))
