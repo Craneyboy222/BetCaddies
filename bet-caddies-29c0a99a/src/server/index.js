@@ -893,19 +893,30 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
   }
 })
 
-// Get settled bet results (for Results page)
+// Get historical bet picks (for Results page)
+// Shows all picks from completed tournaments as a showcase of our selections
 app.get('/api/results', async (req, res) => {
   try {
     const { week, limit = 500 } = req.query
+    const now = new Date()
 
-    // Find all bet recommendations that have settled status overrides
+    // Find all bet recommendations from completed tournaments (endDate < now)
+    // This shows our historical picks without requiring manual settlement
     const bets = await prisma.betRecommendation.findMany({
       where: {
-        override: {
-          status: {
-            in: ['settled_won', 'settled_lost', 'settled_void', 'settled_push']
+        run: {
+          status: 'completed'
+        },
+        tourEvent: {
+          endDate: {
+            lt: now // Tournament has ended
           }
-        }
+        },
+        // Exclude archived bets
+        OR: [
+          { override: null },
+          { override: { status: { not: 'archived' } } }
+        ]
       },
       orderBy: {
         createdAt: 'desc'
@@ -935,9 +946,9 @@ app.get('/api/results', async (req, res) => {
     const uniqueRuns = [...new Set(bets.map(b => b.run?.runKey).filter(Boolean))]
 
     // Transform to frontend format
+    // All picks from completed tournaments are shown as "historical picks"
     const formattedBets = filtered.map(bet => {
       const displayTier = bet.override?.tierOverride || bet.tier
-      const status = bet.override?.status || 'active'
       
       return {
         id: bet.id,
@@ -947,7 +958,7 @@ app.get('/api/results', async (req, res) => {
         tier: displayTier,
         tour: bet.tourEvent?.tour || null,
         tournament_name: bet.tourEvent?.eventName || null,
-        status: status,
+        tournament_end_date: bet.tourEvent?.endDate || null,
         odds_display_best: bet.bestOdds?.toString() || '',
         odds_decimal_best: bet.bestOdds,
         confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
@@ -957,36 +968,24 @@ app.get('/api/results', async (req, res) => {
         run_id: bet.run?.runKey || null,
         run_week_start: bet.run?.weekStart || null,
         run_week_end: bet.run?.weekEnd || null,
-        settled_at: bet.override?.updatedAt || bet.createdAt,
-        result_position: null // Can be populated from leaderboard data in future
+        created_at: bet.createdAt
       }
     })
 
     // Calculate summary statistics
     const stats = {
       total: formattedBets.length,
-      won: formattedBets.filter(b => b.status === 'settled_won').length,
-      lost: formattedBets.filter(b => b.status === 'settled_lost').length,
-      void: formattedBets.filter(b => b.status === 'settled_void' || b.status === 'settled_push').length
+      totalPicks: formattedBets.length
     }
-    stats.hitRate = (stats.won + stats.lost) > 0 
-      ? ((stats.won / (stats.won + stats.lost)) * 100).toFixed(1)
-      : 0
 
     // Category breakdown
     const categoryStats = ['par', 'birdie', 'eagle', 'longshots'].map(cat => {
       const catBets = formattedBets.filter(b => 
         b.category === cat || b.category === cat.replace('_', '')
       )
-      const won = catBets.filter(b => b.status === 'settled_won').length
-      const lost = catBets.filter(b => b.status === 'settled_lost').length
-      const total = won + lost
       return {
         category: cat,
-        total: catBets.length,
-        won,
-        lost,
-        hitRate: total > 0 ? ((won / total) * 100).toFixed(1) : 0
+        total: catBets.length
       }
     })
 
@@ -994,15 +993,9 @@ app.get('/api/results', async (req, res) => {
     const tours = ['PGA', 'LPGA', 'LIV', 'DP_WORLD']
     const tourStats = tours.map(tour => {
       const tourBets = formattedBets.filter(b => b.tour === tour)
-      const won = tourBets.filter(b => b.status === 'settled_won').length
-      const lost = tourBets.filter(b => b.status === 'settled_lost').length
-      const total = won + lost
       return {
         tour,
-        total: tourBets.length,
-        won,
-        lost,
-        hitRate: total > 0 ? ((won / total) * 100).toFixed(1) : 0
+        total: tourBets.length
       }
     }).filter(t => t.total > 0)
 
@@ -1015,7 +1008,7 @@ app.get('/api/results', async (req, res) => {
       count: formattedBets.length
     })
   } catch (error) {
-    logger.error('Failed to fetch settled results', { error: error.message })
+    logger.error('Failed to fetch historical picks', { error: error.message })
     res.status(500).json({ error: 'Failed to fetch results' })
   }
 })
