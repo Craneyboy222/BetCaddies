@@ -145,6 +145,12 @@ export class BetCaddiesApi {
     return response.data || response
   }
 
+  async getSettledResults(week = 'all') {
+    const qs = week && week !== 'all' ? `?week=${encodeURIComponent(week)}` : ''
+    const response = await this.client.get(`/api/results${qs}`)
+    return response
+  }
+
   async getTournaments() {
     const response = await this.client.get('/api/tournaments')
     return response.data || response
