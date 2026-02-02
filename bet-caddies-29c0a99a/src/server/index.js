@@ -826,15 +826,23 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
     const TOP_PICKS_LIMIT = 5 // Only show top 5 best picks per category
     const now = new Date()
     
-    // Calculate this week's date range (Sunday to Sunday)
-    const dayOfWeek = now.getDay()
+    // Calculate THIS WEEK's date range (Monday 00:00 to Sunday 23:59)
+    const dayOfWeek = now.getDay() // 0 = Sunday, 1 = Monday, etc.
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek // If Sunday, go back 6 days
+    
     const startOfWeek = new Date(now)
-    startOfWeek.setDate(now.getDate() - dayOfWeek) // Go back to Sunday
+    startOfWeek.setDate(now.getDate() + diffToMonday) // Go to Monday
     startOfWeek.setHours(0, 0, 0, 0)
     
     const endOfWeek = new Date(startOfWeek)
-    endOfWeek.setDate(startOfWeek.getDate() + 7) // Next Sunday
+    endOfWeek.setDate(startOfWeek.getDate() + 6) // Sunday
     endOfWeek.setHours(23, 59, 59, 999)
+    
+    logger.info('Fetching bets for current week', { 
+      startOfWeek: startOfWeek.toISOString(), 
+      endOfWeek: endOfWeek.toISOString(),
+      tier 
+    })
     
     const tierMap = {
       'par': 'PAR',
@@ -847,7 +855,7 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
 
     const requestedTier = tierMap[tier] || tier.toUpperCase()
 
-    // Only fetch bets from THIS WEEK's tournaments (endDate within this week)
+    // Only fetch bets from THIS WEEK's tournaments (endDate within Monday-Sunday)
     const bets = await prisma.betRecommendation.findMany({
       where: {
         run: {
@@ -855,8 +863,8 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
         },
         tourEvent: {
           endDate: {
-            gte: startOfWeek, // Tournament ends this week or later
-            lte: endOfWeek    // Tournament ends by end of this week
+            gte: startOfWeek, // Tournament ends on or after Monday
+            lte: endOfWeek    // Tournament ends on or before Sunday
           }
         }
       },
