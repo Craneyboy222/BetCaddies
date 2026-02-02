@@ -84,8 +84,11 @@ export default function ParBets() {
             <Target className="w-6 h-6 text-emerald-400" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold text-white">Par Bets</h1>
-            <p className="text-slate-400">5/1 odds and under • Lower risk selections</p>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold text-white">Par Bets</h1>
+              <span className="px-2 py-0.5 text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full">Top 5 Picks</span>
+            </div>
+            <p className="text-slate-400">5/1 odds and under • Our best lower risk selections</p>
           </div>
         </div>
       </motion.div>
@@ -145,7 +148,7 @@ export default function ParBets() {
       {/* Count */}
       {!isLoading && filteredBets.length > 0 && (
         <div className="mt-8 text-center text-slate-500 text-sm">
-          Showing {filteredBets.length} of {bets.length} Par Bets
+          Showing our top {filteredBets.length} Par Bets
         </div>
       )}
     </div>

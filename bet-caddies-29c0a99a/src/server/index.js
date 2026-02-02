@@ -823,6 +823,8 @@ app.get('/api/bets/latest', async (req, res) => {
 app.get('/api/bets/tier/:tier', async (req, res) => {
   try {
     const { tier } = req.params
+    const TOP_PICKS_LIMIT = 5 // Only show top 5 best picks per category
+    
     const tierMap = {
       'par': 'PAR',
       'birdie': 'BIRDIE',
@@ -840,10 +842,12 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
           status: 'completed'
         }
       },
-      orderBy: {
-        createdAt: 'desc'
-      },
-      take: 200,
+      orderBy: [
+        { confidence1To5: 'desc' },
+        { edge: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      take: 500, // Fetch more to filter down to best picks
       include: {
         run: {
           select: {
@@ -859,6 +863,7 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
       .filter(bet => bet.override?.status !== 'archived')
       .filter(bet => (bet.override?.tierOverride || bet.tier) === requestedTier)
       .sort((a, b) => {
+        // Pinned items always come first
         const aPinned = a.override?.pinned === true
         const bPinned = b.override?.pinned === true
         if (aPinned !== bPinned) return aPinned ? -1 : 1
@@ -867,9 +872,24 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
         const bOrder = Number.isFinite(b.override?.pinOrder) ? b.override.pinOrder : Number.POSITIVE_INFINITY
         if (aOrder !== bOrder) return aOrder - bOrder
 
+        // Sort by confidence rating (higher is better)
+        const confA = a.override?.confidenceRating ?? a.confidence1To5 ?? 0
+        const confB = b.override?.confidenceRating ?? b.confidence1To5 ?? 0
+        if (confB !== confA) return confB - confA
+
+        // Then by edge (higher is better)
+        const edgeA = a.edge ?? 0
+        const edgeB = b.edge ?? 0
+        if (edgeB !== edgeA) return edgeB - edgeA
+
+        // Then by best odds (higher odds = more value)
+        const oddsA = a.bestOdds ?? 0
+        const oddsB = b.bestOdds ?? 0
+        if (oddsB !== oddsA) return oddsB - oddsA
+
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       })
-      .slice(0, 200)
+      .slice(0, TOP_PICKS_LIMIT) // Only return top 5 best picks
 
     // Load player stats for all runs
     const runIds = [...new Set(filtered.map(b => b.run?.id).filter(Boolean))]
@@ -893,7 +913,7 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
   }
 })
 
-// Get historical bet picks (for Results page)
+// Get historical bet picks (for Results/Our Picks page)
 // Shows all picks from completed tournaments as a showcase of our selections
 app.get('/api/results', async (req, res) => {
   try {
@@ -918,9 +938,11 @@ app.get('/api/results', async (req, res) => {
           { override: { status: { not: 'archived' } } }
         ]
       },
-      orderBy: {
-        createdAt: 'desc'
-      },
+      orderBy: [
+        { confidence1To5: 'desc' },
+        { edge: 'desc' },
+        { createdAt: 'desc' }
+      ],
       take: parseInt(limit, 10),
       include: {
         run: {
@@ -946,7 +968,6 @@ app.get('/api/results', async (req, res) => {
     const uniqueRuns = [...new Set(bets.map(b => b.run?.runKey).filter(Boolean))]
 
     // Transform to frontend format
-    // All picks from completed tournaments are shown as "historical picks"
     const formattedBets = filtered.map(bet => {
       const displayTier = bet.override?.tierOverride || bet.tier
       
@@ -979,15 +1000,11 @@ app.get('/api/results', async (req, res) => {
     }
 
     // Category breakdown
-    const categoryStats = ['par', 'birdie', 'eagle', 'longshots'].map(cat => {
-      const catBets = formattedBets.filter(b => 
-        b.category === cat || b.category === cat.replace('_', '')
-      )
-      return {
-        category: cat,
-        total: catBets.length
-      }
-    })
+    const categories = ['par', 'birdie', 'eagle', 'longshots']
+    const categoryStats = categories.map(cat => ({
+      category: cat,
+      total: formattedBets.filter(b => b.category === cat || b.category === cat.replace('_', '')).length
+    }))
 
     // Tour breakdown
     const tours = ['PGA', 'LPGA', 'LIV', 'DP_WORLD']

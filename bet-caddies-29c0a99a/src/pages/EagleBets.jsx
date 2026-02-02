@@ -82,8 +82,11 @@ export default function EagleBets() {
             <Trophy className="w-6 h-6 text-violet-400" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold text-white">Eagle Bets</h1>
-            <p className="text-slate-400">11/1+ odds • Higher risk, higher reward</p>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold text-white">Eagle Bets</h1>
+              <span className="px-2 py-0.5 text-xs font-semibold bg-violet-500/20 text-violet-400 border border-violet-500/30 rounded-full">Top 5 Picks</span>
+            </div>
+            <p className="text-slate-400">11/1+ odds • Our best higher risk, higher reward selections</p>
           </div>
         </div>
       </motion.div>
@@ -140,7 +143,7 @@ export default function EagleBets() {
 
       {!isLoading && filteredBets.length > 0 && (
         <div className="mt-8 text-center text-slate-500 text-sm">
-          Showing {filteredBets.length} of {bets.length} Eagle Bets
+          Showing our top {filteredBets.length} Eagle Bets
         </div>
       )}
     </div>
