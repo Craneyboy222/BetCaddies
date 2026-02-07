@@ -116,6 +116,48 @@ const TierBadge = ({ tier }) => {
   )
 }
 
+const BetOutcomeBadge = ({ outcome, playerStatus }) => {
+  if (outcome === 'won') {
+    return (
+      <Badge className="bg-emerald-500/30 text-emerald-300 border border-emerald-500/50 font-semibold animate-pulse">
+        🏆 WON
+      </Badge>
+    )
+  }
+  if (outcome === 'lost') {
+    return (
+      <Badge className="bg-red-500/20 text-red-400 border border-red-500/50">
+        ✗ Lost
+      </Badge>
+    )
+  }
+  if (playerStatus === 'MC') {
+    return (
+      <Badge className="bg-amber-500/20 text-amber-400 border border-amber-500/50">
+        MC
+      </Badge>
+    )
+  }
+  if (playerStatus === 'WD') {
+    return (
+      <Badge className="bg-slate-500/20 text-slate-400 border border-slate-500/50">
+        WD
+      </Badge>
+    )
+  }
+  if (playerStatus === 'DQ') {
+    return (
+      <Badge className="bg-slate-500/20 text-slate-400 border border-slate-500/50">
+        DQ
+      </Badge>
+    )
+  }
+  // Pending
+  return (
+    <span className="text-slate-500 text-xs">In Play</span>
+  )
+}
+
 const UpcomingEventCard = ({ event, rows }) => {
   return (
     <div className="space-y-4">
@@ -179,14 +221,50 @@ const RoundScore = ({ score }) => {
 }
 
 const LiveEventTable = ({ rows, status }) => {
-  // Always show all columns - live data columns will show "—" when not available
+  // Calculate results summary
+  const wins = rows.filter(r => r.betOutcome === 'won')
+  const losses = rows.filter(r => r.betOutcome === 'lost')
+  const pending = rows.filter(r => r.betOutcome === 'pending' || !r.betOutcome)
+  
   return (
     <div className="overflow-x-auto">
+      {/* Results Summary */}
+      {(wins.length > 0 || losses.length > 0) && (
+        <div className="mb-4 p-4 bg-gradient-to-r from-emerald-900/30 to-slate-800/50 rounded-lg border border-emerald-500/30">
+          <div className="flex items-center gap-6 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-emerald-400 text-2xl font-bold">{wins.length}</span>
+              <span className="text-emerald-300 font-medium">🏆 Wins</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-red-400 text-2xl font-bold">{losses.length}</span>
+              <span className="text-red-300 font-medium">Losses</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400 text-2xl font-bold">{pending.length}</span>
+              <span className="text-slate-300 font-medium">In Play</span>
+            </div>
+          </div>
+          {wins.length > 0 && (
+            <div className="mt-3 text-sm text-emerald-300">
+              <span className="font-semibold">Winners:</span>{' '}
+              {wins.map((w, i) => (
+                <span key={i}>
+                  {w.playerName} ({w.market.toUpperCase()})
+                  {i < wins.length - 1 ? ', ' : ''}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      
       {/* Legend for non-bettors */}
       <div className="mb-4 p-3 bg-slate-800/50 rounded-lg text-xs text-slate-400">
         <span className="font-semibold text-white">Quick Guide:</span>{' '}
         <span className="text-emerald-400">↓ Green = Good</span> (odds dropped, your pick is doing well) •{' '}
-        <span className="text-rose-400">↑ Red = Drifting</span> (odds rising, player losing ground)
+        <span className="text-rose-400">↑ Red = Drifting</span> (odds rising, player losing ground) •{' '}
+        <span className="text-emerald-300">🏆 WON = Bet Settled</span>
       </div>
       
       <table className="w-full text-sm text-left text-slate-200">
@@ -202,7 +280,8 @@ const LiveEventTable = ({ rows, status }) => {
             <th>Tier</th>
             <th>Our Pick</th>
             <th>Now</th>
-            <th>Status</th>
+            <th>Movement</th>
+            <th>Result</th>
             <th>Edge</th>
           </tr>
           <tr className="text-[10px] text-slate-500">
@@ -221,14 +300,30 @@ const LiveEventTable = ({ rows, status }) => {
             <th className="text-slate-500 font-normal">Current</th>
             <th></th>
             <th></th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, idx) => (
-            <tr key={`${row.dgPlayerId || row.playerName}-${row.market}-${idx}`} className="border-b border-slate-800 hover:bg-slate-800/50">
-              <td className="py-3 font-medium text-white sticky left-0 bg-slate-900">{row.playerName}</td>
+          {rows.map((row, idx) => {
+            const isWin = row.betOutcome === 'won'
+            const rowClass = isWin 
+              ? 'border-b border-emerald-500/50 bg-emerald-500/10' 
+              : 'border-b border-slate-800 hover:bg-slate-800/50'
+            return (
+            <tr key={`${row.dgPlayerId || row.playerName}-${row.market}-${idx}`} className={rowClass}>
+              <td className={`py-3 font-medium sticky left-0 ${isWin ? 'text-emerald-300 bg-emerald-500/10' : 'text-white bg-slate-900'}`}>
+                {isWin && '🏆 '}{row.playerName}
+              </td>
               <td className={row.position != null && row.position <= 10 ? 'text-emerald-400 font-bold' : ''}>
-                {row.position != null ? (row.position <= 1 ? '🏆 ' : '') + row.position : '—'}
+                {row.playerStatus === 'MC' ? (
+                  <span className="text-amber-400 font-semibold">MC</span>
+                ) : row.playerStatus === 'WD' ? (
+                  <span className="text-slate-400">WD</span>
+                ) : row.playerStatus === 'DQ' ? (
+                  <span className="text-slate-400">DQ</span>
+                ) : row.position != null ? (
+                  (row.position <= 1 ? '🏆 ' : '') + row.position
+                ) : '—'}
               </td>
               <td className="font-semibold">{row.totalToPar ?? '—'}</td>
               <td className="text-slate-400"><RoundScore score={row.r1} /></td>
@@ -262,9 +357,12 @@ const LiveEventTable = ({ rows, status }) => {
                   current={row.currentOddsDecimal}
                 />
               </td>
+              <td>
+                <BetOutcomeBadge outcome={row.betOutcome} playerStatus={row.playerStatus} />
+              </td>
               <td className="text-emerald-400">{formatEdge(row.edge) || '—'}</td>
             </tr>
-          ))}
+          )})}
         </tbody>
       </table>
     </div>

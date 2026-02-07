@@ -87,7 +87,7 @@ const resolvePlayerName = (row) => {
 
 const extractScoringFields = (row) => {
   if (!row || typeof row !== 'object') return null
-  const position = row.current_pos ?? row.position ?? row.pos ?? row.rank ?? row.place ?? row.leaderboard_position ?? null
+  const rawPosition = row.current_pos ?? row.position ?? row.pos ?? row.rank ?? row.place ?? row.leaderboard_position ?? null
   const totalToPar = row.current_score ?? row.total_to_par ?? row.to_par ?? row.score ?? row.total_score ?? row.total ?? null
   const todayToPar = row.today ?? row.today_to_par ?? row.round_score ?? row.round ?? null
   const thru = row.thru ?? row.through ?? row.hole ?? row.current_hole ?? row.thru_hole ?? null
@@ -98,11 +98,36 @@ const extractScoringFields = (row) => {
   const r3 = row.R3 ?? row.r3 ?? row.round_3 ?? row.round3 ?? null
   const r4 = row.R4 ?? row.r4 ?? row.round_4 ?? row.round4 ?? null
   const currentRound = row.round ?? null
+  
+  // Parse position - check for special statuses like MC (missed cut), WD (withdrawn), DQ (disqualified)
+  let position = rawPosition
+  let status = null
+  if (typeof rawPosition === 'string') {
+    const normalized = rawPosition.toUpperCase().trim()
+    if (normalized === 'MC' || normalized === 'CUT' || normalized === 'MISSED CUT') {
+      status = 'MC'
+      position = null
+    } else if (normalized === 'WD' || normalized === 'W/D' || normalized === 'WITHDRAWN') {
+      status = 'WD'
+      position = null
+    } else if (normalized === 'DQ' || normalized === 'DISQUALIFIED') {
+      status = 'DQ'
+      position = null
+    } else if (/^T?\d+$/.test(normalized)) {
+      // Handle tied positions like "T10" or plain numbers "10"
+      position = parseInt(normalized.replace('T', ''), 10)
+    } else {
+      // Try to parse as number
+      const parsed = parseInt(rawPosition, 10)
+      if (!isNaN(parsed)) position = parsed
+    }
+  }
 
-  if (position == null && totalToPar == null && todayToPar == null && thru == null) return null
+  if (position == null && totalToPar == null && todayToPar == null && thru == null && status == null) return null
 
   return {
     position,
+    status,
     totalToPar,
     todayToPar,
     thru,
@@ -112,6 +137,87 @@ const extractScoringFields = (row) => {
     r4,
     currentRound
   }
+}
+
+/**
+ * Determine the outcome of a bet based on market type and scoring data.
+ * Returns: 'won', 'lost', 'pending', or null (insufficient data)
+ */
+const determineBetOutcome = (market, scoring, eventStatus) => {
+  if (!market) return null
+  
+  const marketKey = market.toLowerCase()
+  const position = scoring?.position
+  const status = scoring?.status
+  const hasR3 = scoring?.r3 != null
+  const hasR4 = scoring?.r4 != null
+  
+  // For miss cut market
+  if (marketKey === 'mc') {
+    // Player missed cut (MC status) = bet WON
+    if (status === 'MC') return 'won'
+    // Player withdrew/disqualified before cut = bet lost (most books void or settle as loss)
+    if (status === 'WD' || status === 'DQ') return 'lost'
+    // If player made the weekend (has R3/R4 scores or still in position), bet is lost
+    if (hasR3 || hasR4) return 'lost'
+    if (typeof position === 'number' && position > 0) {
+      // Player is still playing weekend rounds - they made the cut
+      return 'lost'
+    }
+    // Event completed but we don't have clear status - check if end of tournament
+    if (eventStatus === 'completed') {
+      // If event is completed and no MC status, assume they made the cut
+      return 'lost'
+    }
+    return 'pending'
+  }
+  
+  // For make cut market (opposite of mc)
+  if (marketKey === 'make_cut') {
+    if (status === 'MC') return 'lost'
+    if (status === 'WD' || status === 'DQ') return 'lost'
+    if (hasR3 || hasR4) return 'won'
+    if (typeof position === 'number' && position > 0) {
+      return 'won' // On weekend = made cut
+    }
+    if (eventStatus === 'completed') {
+      return 'won'
+    }
+    return 'pending'
+  }
+  
+  // For win market
+  if (marketKey === 'win') {
+    if (status === 'MC' || status === 'WD' || status === 'DQ') return 'lost'
+    if (eventStatus === 'completed') {
+      // Only position 1 wins
+      if (position === 1) return 'won'
+      if (typeof position === 'number') return 'lost'
+    }
+    return 'pending'
+  }
+  
+  // For top N markets (top_5, top_10, top_20)
+  const topNMatch = marketKey.match(/^top_?(\d+)$/)
+  if (topNMatch) {
+    const n = parseInt(topNMatch[1], 10)
+    if (status === 'MC' || status === 'WD' || status === 'DQ') return 'lost'
+    if (eventStatus === 'completed') {
+      if (typeof position === 'number') {
+        return position <= n ? 'won' : 'lost'
+      }
+    }
+    return 'pending'
+  }
+  
+  // For FRL (first round leader)
+  if (marketKey === 'frl') {
+    // Would need R1 leaderboard data - mark as pending for now
+    return 'pending'
+  }
+  
+  // Unknown market type
+  return null
 }
 
 export const computeOddsMovement = (baseline, current) => {
@@ -589,11 +695,17 @@ export const createLiveTrackingService = ({
       const movement = computeOddsMovement(resolvedBaselineOdds, currentOdds)
       const crossBook = Boolean(resolvedBaselineBook && currentBook && resolvedBaselineBook !== currentBook)
 
+      // Determine if we have enough info to determine the event status for outcome calculation
+      // We'll calculate this properly after all rows are processed
+      const preliminaryEventStatus = isCompleted ? 'completed' : 'live'
+      const betOutcome = determineBetOutcome(pick.marketKey, scoring, preliminaryEventStatus)
+
       rows.push({
         dgPlayerId: dgPlayerId || null,
         playerName: pick.selection,
         market: pick.marketKey,
         position: scoring?.position ?? null,
+        playerStatus: scoring?.status ?? null,
         totalToPar: scoring?.totalToPar ?? null,
         todayToPar: scoring?.todayToPar ?? null,
         thru: scoring?.thru ?? null,
@@ -621,12 +733,13 @@ export const createLiveTrackingService = ({
         edge: pick.edge,
         ev: pick.ev,
         confidence: pick.confidence1To5,
+        betOutcome,
         dataIssues: []
       })
     }
 
     // Determine if we got any live data
-    const hasLiveScoring = rows.some(r => r.position != null || r.totalToPar != null)
+    const hasLiveScoring = rows.some(r => r.position != null || r.totalToPar != null || r.playerStatus != null)
     const status = hasLiveScoring ? 'live' : (isCompleted ? 'completed' : 'in_progress_no_data')
 
     const response = {
