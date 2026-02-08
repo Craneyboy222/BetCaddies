@@ -1066,7 +1066,7 @@ app.get('/api/results', async (req, res) => {
       if (!te?.dgEventId) continue
       
       try {
-        const trackingData = await liveTrackingService.getEventTracking(te.dgEventId, te.tour)
+        const trackingData = await liveTrackingService.getEventTracking({ dgEventId: te.dgEventId, tour: te.tour })
         if (trackingData?.rows?.length) {
           const playerMap = new Map()
           for (const row of trackingData.rows) {
