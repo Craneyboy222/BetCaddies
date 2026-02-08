@@ -5,6 +5,9 @@ import { DataIssueTracker } from '../observability/data-issue-tracker.js'
 import { logger } from '../observability/logger.js'
 import { prisma } from '../db/client.js'
 
+// Debug version - used to verify deployment. Updated: 2026-02-08T17:30:00Z
+const LIVE_TRACKING_VERSION = 'v2.1.0-fix-all-picks'
+
 const DEFAULT_TTL_MS = Number(process.env.LIVE_TRACKING_CACHE_TTL_MS || 300000)
 const DEFAULT_CONCURRENCY = Number(process.env.LIVE_TRACKING_MAX_CONCURRENCY || 3)
 
@@ -786,7 +789,12 @@ export const createLiveTrackingService = ({
       daysUntilStart: null,
       updatedAt: new Date().toISOString(),
       rows,
-      dataIssues: issues
+      dataIssues: issues,
+      _debug: {
+        version: LIVE_TRACKING_VERSION,
+        picksFromDb: picks.length,
+        rowsReturned: rows.length
+      }
     }
 
     setCached(cacheKey, response, ttlMs)
