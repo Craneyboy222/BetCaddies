@@ -777,7 +777,39 @@ export const createLiveTrackingService = ({
 
     // Determine if we got any live data
     const hasLiveScoring = rows.some(r => r.position != null || r.totalToPar != null || r.playerStatus != null)
-    const status = hasLiveScoring ? 'live' : (isCompleted ? 'completed' : 'in_progress_no_data')
+    
+    // Detect tournament completion from scoring data
+    // Tournament is complete when all players with scoring data have finished round 4
+    const rowsWithScoring = rows.filter(r => r.currentRound != null && r.thru != null)
+    const allFinishedR4 = rowsWithScoring.length > 0 && rowsWithScoring.every(r => {
+      // Round 4 is typically the final round
+      // Player is done when in round 4 and thru=18 (or 'F' for finished)
+      const isInFinalRound = r.currentRound === 4
+      const hasCompletedRound = r.thru === 18 || r.thru === 'F' || r.thru === 'finished'
+      return isInFinalRound && hasCompletedRound
+    })
+    
+    // Tournament is completed if:
+    // 1. endDate has passed (isCompleted), OR
+    // 2. All tracked players have completed the final round
+    const isTournamentComplete = isCompleted || allFinishedR4
+    
+    // If tournament is detected as complete from scoring, re-calculate bet outcomes
+    if (isTournamentComplete && !isCompleted) {
+      // Re-calculate outcomes with 'completed' status
+      for (const row of rows) {
+        const scoring = {
+          position: row.position,
+          status: row.playerStatus,
+          r3: row.r3,
+          r4: row.r4
+        }
+        row.betOutcome = determineBetOutcome(row.market, scoring, 'completed')
+      }
+    }
+    
+    // Determine final status
+    const status = isTournamentComplete ? 'completed' : (hasLiveScoring ? 'live' : 'in_progress_no_data')
 
     const response = {
       dgEventId: String(dgEventId),
