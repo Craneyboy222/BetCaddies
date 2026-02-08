@@ -15,7 +15,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import multer from 'multer'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
-import { liveTrackingService } from '../live-tracking/live-tracking-service.js'
+import { liveTrackingService, determineBetOutcome } from '../live-tracking/live-tracking-service.js'
 import { createPlayerStatsService } from '../services/player-stats.js'
 
 // Initialize player stats service for real form/course fit data
@@ -972,14 +972,13 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
 })
 
 // Get historical bet picks (for Results/Our Picks page)
-// Shows all picks from completed tournaments as a showcase of our selections
+// Shows all picks from completed tournaments with win/loss outcomes
 app.get('/api/results', async (req, res) => {
   try {
     const { week, limit = 500 } = req.query
     const now = new Date()
 
     // Find all bet recommendations from completed tournaments (endDate < now)
-    // This shows our historical picks without requiring manual settlement
     const bets = await prisma.betRecommendation.findMany({
       where: {
         run: {
@@ -1016,6 +1015,102 @@ app.get('/api/results', async (req, res) => {
       }
     })
 
+    // Get unique tourEventIds for leaderboard lookup
+    const tourEventIds = [...new Set(bets.map(b => b.tourEventId))]
+    
+    // Fetch final leaderboard snapshots for all relevant tournaments
+    const leaderboards = await prisma.leaderboardSnapshot.findMany({
+      where: {
+        tourEventId: { in: tourEventIds },
+        round: 4 // Final round
+      },
+      orderBy: { fetchedAt: 'desc' }
+    })
+    
+    // Also try to get round 2 data (for cut status) if no round 4
+    const cutLeaderboards = await prisma.leaderboardSnapshot.findMany({
+      where: {
+        tourEventId: { in: tourEventIds },
+        round: 2
+      },
+      orderBy: { fetchedAt: 'desc' }
+    })
+    
+    // Create lookup maps
+    const finalLeaderboardMap = new Map()
+    for (const lb of leaderboards) {
+      if (!finalLeaderboardMap.has(lb.tourEventId)) {
+        finalLeaderboardMap.set(lb.tourEventId, lb.leaderboardJson)
+      }
+    }
+    
+    const cutLeaderboardMap = new Map()
+    for (const lb of cutLeaderboards) {
+      if (!cutLeaderboardMap.has(lb.tourEventId)) {
+        cutLeaderboardMap.set(lb.tourEventId, lb.leaderboardJson)
+      }
+    }
+    
+    // Helper to find player in leaderboard JSON
+    const findPlayerInLeaderboard = (leaderboardJson, dgPlayerId, playerName) => {
+      if (!leaderboardJson || !Array.isArray(leaderboardJson)) return null
+      
+      // Try to find by dg_id first
+      if (dgPlayerId) {
+        const byId = leaderboardJson.find(p => 
+          String(p.dg_id) === String(dgPlayerId) || 
+          String(p.player_id) === String(dgPlayerId)
+        )
+        if (byId) return byId
+      }
+      
+      // Fallback to name matching
+      if (playerName) {
+        const nameLower = playerName.toLowerCase()
+        const byName = leaderboardJson.find(p => 
+          (p.player_name || p.name || '').toLowerCase() === nameLower
+        )
+        if (byName) return byName
+      }
+      
+      return null
+    }
+    
+    // Helper to parse position/status from leaderboard entry
+    const parsePlayerScoring = (entry) => {
+      if (!entry) return null
+      
+      const rawPosition = entry.position ?? entry.pos ?? entry.current_pos ?? null
+      let position = rawPosition
+      let status = null
+      
+      if (typeof rawPosition === 'string') {
+        const normalized = rawPosition.toUpperCase().trim()
+        if (normalized === 'MC' || normalized === 'CUT' || normalized === 'MISSED CUT') {
+          status = 'MC'
+          position = null
+        } else if (normalized === 'WD' || normalized === 'W/D' || normalized === 'WITHDRAWN') {
+          status = 'WD'
+          position = null
+        } else if (normalized === 'DQ' || normalized === 'DISQUALIFIED') {
+          status = 'DQ'
+          position = null
+        } else if (/^T?\d+$/.test(normalized)) {
+          position = parseInt(normalized.replace('T', ''), 10)
+        } else {
+          const parsed = parseInt(rawPosition, 10)
+          if (!isNaN(parsed)) position = parsed
+        }
+      }
+      
+      return {
+        position,
+        status,
+        r3: entry.R3 ?? entry.r3 ?? entry.round_3 ?? null,
+        r4: entry.R4 ?? entry.r4 ?? entry.round_4 ?? null
+      }
+    }
+
     // Filter by week/run if specified
     let filtered = bets
     if (week && week !== 'all') {
@@ -1025,9 +1120,22 @@ app.get('/api/results', async (req, res) => {
     // Get unique run keys for the filter dropdown
     const uniqueRuns = [...new Set(bets.map(b => b.run?.runKey).filter(Boolean))]
 
-    // Transform to frontend format
+    // Transform to frontend format with outcome calculation
     const formattedBets = filtered.map(bet => {
       const displayTier = bet.override?.tierOverride || bet.tier
+      
+      // Look up player in leaderboard
+      const finalLb = finalLeaderboardMap.get(bet.tourEventId)
+      const cutLb = cutLeaderboardMap.get(bet.tourEventId)
+      
+      // Try final leaderboard first, then cut leaderboard
+      let playerEntry = findPlayerInLeaderboard(finalLb, bet.dgPlayerId, bet.selection)
+      if (!playerEntry) {
+        playerEntry = findPlayerInLeaderboard(cutLb, bet.dgPlayerId, bet.selection)
+      }
+      
+      const scoring = parsePlayerScoring(playerEntry)
+      const outcome = determineBetOutcome(bet.marketKey, scoring, 'completed')
       
       return {
         id: bet.id,
@@ -1038,6 +1146,7 @@ app.get('/api/results', async (req, res) => {
         tour: bet.tourEvent?.tour || null,
         tournament_name: bet.tourEvent?.eventName || null,
         tournament_end_date: bet.tourEvent?.endDate || null,
+        market_key: bet.marketKey,
         odds_display_best: bet.bestOdds?.toString() || '',
         odds_decimal_best: bet.bestOdds,
         confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
@@ -1047,30 +1156,50 @@ app.get('/api/results', async (req, res) => {
         run_id: bet.run?.runKey || null,
         run_week_start: bet.run?.weekStart || null,
         run_week_end: bet.run?.weekEnd || null,
-        created_at: bet.createdAt
+        created_at: bet.createdAt,
+        // Outcome fields
+        outcome: outcome,
+        final_position: scoring?.position ?? null,
+        player_status: scoring?.status ?? null
       }
     })
 
     // Calculate summary statistics
+    const wins = formattedBets.filter(b => b.outcome === 'won')
+    const losses = formattedBets.filter(b => b.outcome === 'lost')
+    const pending = formattedBets.filter(b => !b.outcome || b.outcome === 'pending')
+    
     const stats = {
       total: formattedBets.length,
-      totalPicks: formattedBets.length
+      totalPicks: formattedBets.length,
+      wins: wins.length,
+      losses: losses.length,
+      pending: pending.length,
+      winRate: formattedBets.length > 0 ? (wins.length / (wins.length + losses.length) * 100).toFixed(1) : 0
     }
 
-    // Category breakdown
+    // Category breakdown with outcomes
     const categories = ['par', 'birdie', 'eagle', 'longshots']
-    const categoryStats = categories.map(cat => ({
-      category: cat,
-      total: formattedBets.filter(b => b.category === cat || b.category === cat.replace('_', '')).length
-    }))
+    const categoryStats = categories.map(cat => {
+      const catBets = formattedBets.filter(b => b.category === cat || b.category === cat.replace('_', ''))
+      const catWins = catBets.filter(b => b.outcome === 'won')
+      return {
+        category: cat,
+        total: catBets.length,
+        wins: catWins.length,
+        losses: catBets.filter(b => b.outcome === 'lost').length
+      }
+    })
 
-    // Tour breakdown
-    const tours = ['PGA', 'LPGA', 'LIV', 'DP_WORLD']
+    // Tour breakdown with outcomes
+    const tours = ['PGA', 'LPGA', 'LIV', 'DP_WORLD', 'DPWT', 'KFT']
     const tourStats = tours.map(tour => {
       const tourBets = formattedBets.filter(b => b.tour === tour)
       return {
         tour,
-        total: tourBets.length
+        total: tourBets.length,
+        wins: tourBets.filter(b => b.outcome === 'won').length,
+        losses: tourBets.filter(b => b.outcome === 'lost').length
       }
     }).filter(t => t.total > 0)
 

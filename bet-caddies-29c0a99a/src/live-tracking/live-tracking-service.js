@@ -143,7 +143,7 @@ const extractScoringFields = (row) => {
  * Determine the outcome of a bet based on market type and scoring data.
  * Returns: 'won', 'lost', 'pending', or null (insufficient data)
  */
-const determineBetOutcome = (market, scoring, eventStatus) => {
+export const determineBetOutcome = (market, scoring, eventStatus) => {
   if (!market) return null
   
   const marketKey = market.toLowerCase()
