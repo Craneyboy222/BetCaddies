@@ -1056,16 +1056,12 @@ app.get('/api/results', async (req, res) => {
       }
     }
     
-    // Fallback: For events without leaderboard snapshots, fetch from live tracking
-    // This ensures we can calculate outcomes even without stored snapshots
-    const liveTrackingMap = new Map() // tourEventId -> Map<selectionName, { position, status, r3, r4 }>
+    // Fetch live tracking data for ALL events to get current scoring
+    // This provides real-time outcomes even when leaderboard snapshots are stale or missing
+    const liveTrackingMap = new Map() // tourEventId -> Map<selectionName, { position, status, r3, r4, betOutcome }>
     
-    const eventsWithoutSnapshots = tourEventIds.filter(id => 
-      !finalLeaderboardMap.has(id) && !cutLeaderboardMap.has(id)
-    )
-    
-    // Fetch live tracking data for events without snapshots
-    for (const tourEventId of eventsWithoutSnapshots) {
+    // Fetch live tracking data for all events
+    for (const tourEventId of tourEventIds) {
       const te = tourEventMap.get(tourEventId)
       if (!te?.dgEventId) continue
       
@@ -1189,8 +1185,8 @@ app.get('/api/results', async (req, res) => {
       let scoring = parsePlayerScoring(playerEntry)
       let outcome = determineBetOutcome(bet.marketKey, scoring, 'completed')
       
-      // Fallback to live tracking data if no leaderboard snapshot found
-      if (!scoring && liveTrackingMap.has(bet.tourEventId)) {
+      // Prefer live tracking data when available - it's more current than stored snapshots
+      if (liveTrackingMap.has(bet.tourEventId)) {
         const livePlayerMap = liveTrackingMap.get(bet.tourEventId)
         // Try by dgPlayerId first, then by name
         let liveEntry = bet.dgPlayerId ? livePlayerMap.get(`id:${bet.dgPlayerId}`) : null
