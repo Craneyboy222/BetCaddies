@@ -1014,6 +1014,12 @@ app.get('/api/results', async (req, res) => {
     // Get unique tourEventIds for leaderboard lookup
     const tourEventIds = [...new Set(bets.map(b => b.tourEventId))]
     
+    // Get tourEvents for dgEventId lookup
+    const tourEvents = await prisma.tourEvent.findMany({
+      where: { id: { in: tourEventIds } }
+    })
+    const tourEventMap = new Map(tourEvents.map(te => [te.id, te]))
+    
     // Fetch final leaderboard snapshots for all relevant tournaments
     const leaderboards = await prisma.leaderboardSnapshot.findMany({
       where: {
@@ -1044,6 +1050,53 @@ app.get('/api/results', async (req, res) => {
     for (const lb of cutLeaderboards) {
       if (!cutLeaderboardMap.has(lb.tourEventId)) {
         cutLeaderboardMap.set(lb.tourEventId, lb.leaderboardJson)
+      }
+    }
+    
+    // Fallback: For events without leaderboard snapshots, fetch from live tracking
+    // This ensures we can calculate outcomes even without stored snapshots
+    const liveTrackingMap = new Map() // tourEventId -> Map<selectionName, { position, status, r3, r4 }>
+    
+    const eventsWithoutSnapshots = tourEventIds.filter(id => 
+      !finalLeaderboardMap.has(id) && !cutLeaderboardMap.has(id)
+    )
+    
+    // Fetch live tracking data for events without snapshots
+    for (const tourEventId of eventsWithoutSnapshots) {
+      const te = tourEventMap.get(tourEventId)
+      if (!te?.dgEventId) continue
+      
+      try {
+        const trackingData = await liveTrackingService.getEventTracking(te.dgEventId, te.tour)
+        if (trackingData?.rows?.length) {
+          const playerMap = new Map()
+          for (const row of trackingData.rows) {
+            const key = row.playerName?.toLowerCase()
+            if (key) {
+              playerMap.set(key, {
+                position: row.position,
+                status: row.playerStatus,
+                r3: row.r3,
+                r4: row.r4,
+                betOutcome: row.betOutcome // Pre-calculated by live tracking
+              })
+            }
+            // Also map by dgPlayerId if available
+            if (row.dgPlayerId) {
+              playerMap.set(`id:${row.dgPlayerId}`, {
+                position: row.position,
+                status: row.playerStatus,
+                r3: row.r3,
+                r4: row.r4,
+                betOutcome: row.betOutcome
+              })
+            }
+          }
+          liveTrackingMap.set(tourEventId, playerMap)
+        }
+      } catch (e) {
+        // Ignore errors - fallback won't be available
+        console.error(`Failed to fetch live tracking for ${tourEventId}:`, e.message)
       }
     }
     
@@ -1130,8 +1183,23 @@ app.get('/api/results', async (req, res) => {
         playerEntry = findPlayerInLeaderboard(cutLb, bet.dgPlayerId, bet.selection)
       }
       
-      const scoring = parsePlayerScoring(playerEntry)
-      const outcome = determineBetOutcome(bet.marketKey, scoring, 'completed')
+      let scoring = parsePlayerScoring(playerEntry)
+      let outcome = determineBetOutcome(bet.marketKey, scoring, 'completed')
+      
+      // Fallback to live tracking data if no leaderboard snapshot found
+      if (!scoring && liveTrackingMap.has(bet.tourEventId)) {
+        const livePlayerMap = liveTrackingMap.get(bet.tourEventId)
+        // Try by dgPlayerId first, then by name
+        let liveEntry = bet.dgPlayerId ? livePlayerMap.get(`id:${bet.dgPlayerId}`) : null
+        if (!liveEntry && bet.selection) {
+          liveEntry = livePlayerMap.get(bet.selection.toLowerCase())
+        }
+        if (liveEntry) {
+          scoring = liveEntry
+          // Use the pre-calculated betOutcome from live tracking if available
+          outcome = liveEntry.betOutcome || determineBetOutcome(bet.marketKey, scoring, 'completed')
+        }
+      }
       
       return {
         id: bet.id,
