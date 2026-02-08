@@ -390,28 +390,62 @@ export const createLiveTrackingService = ({
   }
 
   const getTrackedPlayersForEvent = async (dgEventId, tour) => {
-    // Try to find by dgEventId first, then by id (for events without dgEventId)
+    // Find the most recent tourEvent with matching tour and dgEventId
+    // Order by createdAt DESC to get the latest pipeline run's event
     let tourEvent = await prisma.tourEvent.findFirst({
       where: { tour, dgEventId: String(dgEventId) },
-      orderBy: { startDate: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      include: {
+        run: { select: { id: true, status: true, runKey: true } }
+      }
     })
 
     // Fallback: try finding by tourEvent.id directly
     if (!tourEvent) {
       tourEvent = await prisma.tourEvent.findFirst({
         where: { tour, id: String(dgEventId) },
-        orderBy: { startDate: 'desc' }
+        orderBy: { createdAt: 'desc' },
+        include: {
+          run: { select: { id: true, status: true, runKey: true } }
+        }
       })
     }
 
     if (!tourEvent) return { tourEvent: null, picks: [] }
 
+    // Only show bets if the run is completed
+    if (tourEvent.run?.status !== 'completed') {
+      logger.info('Live tracking: tourEvent run not completed', { 
+        tour, dgEventId, runStatus: tourEvent.run?.status 
+      })
+      return { tourEvent, picks: [] }
+    }
+
+    // Get only non-archived picks from this specific tour event
     const picks = await prisma.betRecommendation.findMany({
       where: {
         tourEventId: tourEvent.id,
-        run: { status: 'completed' }
+        // Exclude archived bets
+        OR: [
+          { override: null },
+          { override: { status: { not: 'archived' } } }
+        ]
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: [
+        { tier: 'asc' },  // EAGLE, BIRDIE, PAR ordering
+        { confidence1To5: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      include: { override: true }
+    })
+
+    logger.info('Live tracking: found picks for event', {
+      tour,
+      dgEventId,
+      tourEventId: tourEvent.id,
+      runKey: tourEvent.run?.runKey,
+      pickCount: picks.length,
+      markets: [...new Set(picks.map(p => p.marketKey))]
     })
 
     return { tourEvent, picks }
