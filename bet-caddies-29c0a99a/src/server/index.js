@@ -1478,6 +1478,101 @@ app.post('/api/admin/consolidate-tour-events', authRequired, adminOnly, async (r
   }
 })
 
+// Admin: full cleanup - delete duplicate tourEvents and archive all old bets
+// This will leave only the current week's selections
+app.post('/api/admin/full-cleanup', authRequired, adminOnly, async (req, res) => {
+  try {
+    const now = new Date()
+    const results = { deletedTourEvents: 0, deletedBets: 0, archivedBets: 0 }
+
+    // Step 1: Find all duplicate tourEvents (same dgEventId + tour) and delete duplicates
+    // Keep only the one used by live tracking (most recent createdAt for current week)
+    const allTourEvents = await prisma.tourEvent.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { run: { select: { id: true, weekEnd: true, status: true } } }
+    })
+
+    // Group by dgEventId + tour
+    const grouped = {}
+    for (const te of allTourEvents) {
+      const key = `${te.dgEventId}:${te.tour}`
+      if (!grouped[key]) grouped[key] = []
+      grouped[key].push(te)
+    }
+
+    // For each group with duplicates, keep only the most recent (first in list since ordered DESC)
+    for (const key of Object.keys(grouped)) {
+      const events = grouped[key]
+      if (events.length > 1) {
+        // Delete all but the first (most recent)
+        for (let i = 1; i < events.length; i++) {
+          const te = events[i]
+          // Delete bets first (cascade might handle this but be explicit)
+          const deletedBets = await prisma.betRecommendation.deleteMany({
+            where: { tourEventId: te.id }
+          })
+          results.deletedBets += deletedBets.count
+          
+          await prisma.tourEvent.delete({ where: { id: te.id } })
+          results.deletedTourEvents++
+        }
+      }
+    }
+
+    // Step 2: Archive all bets from runs where weekEnd is in the past
+    const oldRuns = await prisma.run.findMany({
+      where: { weekEnd: { lt: now } },
+      select: { id: true }
+    })
+
+    if (oldRuns.length > 0) {
+      const oldRunIds = oldRuns.map(r => r.id)
+      const betsToArchive = await prisma.betRecommendation.findMany({
+        where: {
+          runId: { in: oldRunIds },
+          OR: [
+            { override: null },
+            { override: { status: { not: 'archived' } } }
+          ]
+        },
+        select: { id: true }
+      })
+
+      for (const bet of betsToArchive) {
+        await prisma.betOverride.upsert({
+          where: { betRecommendationId: bet.id },
+          create: { betRecommendationId: bet.id, status: 'archived', pinned: false, pinOrder: null, tierOverride: null },
+          update: { status: 'archived' }
+        })
+        results.archivedBets++
+      }
+    }
+
+    // Clear caches
+    liveTrackingService.clearCache()
+
+    // Count remaining active bets
+    const remainingBets = await prisma.betRecommendation.count({
+      where: {
+        OR: [
+          { override: null },
+          { override: { status: { not: 'archived' } } }
+        ]
+      }
+    })
+
+    res.json({
+      success: true,
+      ...results,
+      remainingActiveBets: remainingBets,
+      message: `Cleanup complete. ${remainingBets} active bets remaining.`
+    })
+  } catch (error) {
+    logger.error('Error in full cleanup', { error: error.message })
+    res.status(500).json({ error: 'Failed to perform cleanup' })
+  }
+})
+
 app.post(
   '/api/membership-subscriptions/checkout',
   authRequired,
