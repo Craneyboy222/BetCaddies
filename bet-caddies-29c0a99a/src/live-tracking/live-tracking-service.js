@@ -792,6 +792,8 @@ export const createLiveTrackingService = ({
       dataIssues: issues,
       _debug: {
         version: LIVE_TRACKING_VERSION,
+        tourEventId: tourEvent.id,
+        runKey: tourEvent.run?.runKey,
         picksFromDb: picks.length,
         rowsReturned: rows.length
       }
