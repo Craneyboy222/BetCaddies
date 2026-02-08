@@ -979,6 +979,7 @@ app.get('/api/results', async (req, res) => {
     const now = new Date()
 
     // Find all bet recommendations from completed tournaments (endDate < now)
+    // Include archived bets - Results page should show all historical bets
     const bets = await prisma.betRecommendation.findMany({
       where: {
         run: {
@@ -988,12 +989,7 @@ app.get('/api/results', async (req, res) => {
           endDate: {
             lt: now // Tournament has ended
           }
-        },
-        // Exclude archived bets
-        OR: [
-          { override: null },
-          { override: { status: { not: 'archived' } } }
-        ]
+        }
       },
       orderBy: [
         { confidence1To5: 'desc' },
