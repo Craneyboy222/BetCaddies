@@ -15,7 +15,11 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import multer from 'multer'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
-import { liveTrackingService } from '../live-tracking/live-tracking-service.js'
+import { liveTrackingService, determineBetOutcome } from '../live-tracking/live-tracking-service.js'
+import { createPlayerStatsService } from '../services/player-stats.js'
+
+// Initialize player stats service for real form/course fit data
+const playerStatsService = createPlayerStatsService(prisma)
 
 console.log('==== Starting BetCaddies server ====');
 
@@ -552,6 +556,36 @@ if (cronEnabled) {
   }, { timezone: 'Europe/London' })
 }
 
+// Railway cron endpoint - can be called by Railway Cron or external scheduler
+// Protected by a secret token to prevent unauthorized access
+const CRON_SECRET = process.env.CRON_SECRET || null
+
+app.post('/api/cron/pipeline', async (req, res) => {
+  // Validate cron secret
+  const authHeader = req.headers.authorization || ''
+  const providedSecret = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : req.body?.secret
+  
+  if (!CRON_SECRET) {
+    logger.warn('Cron endpoint called but CRON_SECRET not configured')
+    return res.status(503).json({ error: 'Cron endpoint not configured' })
+  }
+  
+  if (providedSecret !== CRON_SECRET) {
+    logger.warn('Cron endpoint called with invalid secret')
+    return res.status(401).json({ error: 'Invalid cron secret' })
+  }
+
+  try {
+    const runMode = req.body?.run_mode || 'CURRENT_WEEK'
+    logger.info('Starting pipeline via cron endpoint', { runMode })
+    const result = await runWeeklyPipeline({ dryRun: false, runMode })
+    res.json({ success: true, message: 'Pipeline started', runKey: result.runKey })
+  } catch (error) {
+    logger.error('Cron pipeline trigger failed', { error: error.message })
+    res.status(500).json({ error: 'Failed to start pipeline', message: error.message })
+  }
+})
+
 const buildBlocksFromSiteContent = (key, json = {}) => {
   const blocks = []
   const hero = json?.hero || null
@@ -623,6 +657,95 @@ const seedCmsPages = async () => {
   }
 }
 
+/**
+ * Format a bet recommendation with real player stats from DataGolf
+ * This replaces hardcoded form/course fit with actual data
+ */
+async function formatBetWithRealStats(bet, playerStats) {
+  const displayTier = bet.override?.tierOverride || bet.tier
+  const dgPlayerId = bet.dgPlayerId
+
+  // Get real stats if we have a dgPlayerId
+  let form = { sgTotal: null, formLabel: 'Unknown', formIndicator: 'neutral', formScore: null, dgRank: null }
+  let courseFit = { totalFitAdjustment: null, courseFitScore: null }
+  let confidenceScore = null
+
+  if (dgPlayerId && playerStats) {
+    const stats = playerStatsService.getPlayerStats(playerStats, dgPlayerId)
+    form = stats.form
+    courseFit = stats.courseFit
+
+    // Calculate enhanced confidence score
+    confidenceScore = playerStatsService.calculateConfidenceScore(stats, {
+      edge: bet.edge ?? 0,
+      modelProb: bet.fairProb ?? 0,
+      impliedProb: bet.marketProb ?? 0,
+      offerCount: bet.altOffersJson?.length ?? 0
+    })
+  }
+
+  // Transform altOffersJson to alternative_odds format for frontend
+  const alternativeOdds = (bet.altOffersJson || []).map(offer => ({
+    provider_slug: (offer.bookmaker || 'unknown').toLowerCase().replace(/\s+/g, '-'),
+    odds_display: offer.oddsDecimal?.toFixed(2) || 'N/A',
+    odds_decimal: offer.oddsDecimal
+  }))
+
+  return {
+    id: bet.id,
+    category: displayTier.toLowerCase().replace(/_/g, ''),
+    tier: displayTier,
+    is_fallback: bet.isFallback === true,
+    fallback_reason: bet.fallbackReason || null,
+    fallback_type: bet.fallbackType || null,
+    tier_status: bet.tierStatus || null,
+    mode: bet.mode || 'PRE_TOURNAMENT',
+    books_used: bet.booksUsed || [],
+    selection_name: bet.override?.selectionName || bet.selection,
+    confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
+    confidence_score: confidenceScore,  // New: 0-100 score
+    bestBookmaker: bet.bestBookmaker,
+    bestOdds: bet.bestOdds,
+    edge: bet.edge ?? null,
+    ev: bet.ev ?? null,
+    fair_prob: bet.fairProb ?? null,
+    market_prob: bet.marketProb ?? null,
+    prob_source: bet.probSource ?? null,
+    market_prob_source: bet.marketProbSource ?? null,
+    bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
+    tour: bet.tourEvent?.tour || null,
+    tournament_name: bet.tourEvent?.eventName || null,
+    analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
+    provider_best_slug: bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-'),
+    odds_display_best: bet.bestOdds?.toString() || '',
+    odds_decimal_best: bet.bestOdds,
+    // Real stats from DataGolf
+    sg_total: form.sgTotal,
+    form_label: bet.override?.formLabel || form.formLabel,
+    form_indicator: form.formIndicator,
+    form_score: form.formScore,
+    dg_rank: form.dgRank,
+    owgr_rank: form.owgrRank,
+    course_fit_score: bet.override?.courseFitScore ?? courseFit.courseFitScore ?? null,
+    course_fit_adjustment: courseFit.totalFitAdjustment,
+    course_history_adjustment: courseFit.courseHistoryAdjustment,
+    driving_advantage: courseFit.drivingAdvantage,
+    // Weather (still using override or defaults for now)
+    weather_icon: 'sunny',
+    weather_label: bet.override?.weatherLabel || 'Clear',
+    ai_analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
+    ai_analysis_bullets: bet.analysisBullets || [],
+    // Alternative odds for comparison
+    alternative_odds: alternativeOdds,
+    books_compared: alternativeOdds.length + 1,  // +1 for best bookmaker
+    affiliate_link: bet.override?.affiliateLinkOverride || `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
+    tourEvent: {
+      tour: bet.tourEvent?.tour || null,
+      eventName: bet.tourEvent?.eventName || null
+    }
+  }
+}
+
 // Health check - independent of database connection
 app.get('/health', (req, res) => {
   // Always return a 200 response for Railway healthchecks
@@ -649,6 +772,7 @@ app.get('/api/bets/latest', async (req, res) => {
       include: {
         run: {
           select: {
+            id: true,
             weekStart: true,
             weekEnd: true
           }
@@ -673,50 +797,17 @@ app.get('/api/bets/latest', async (req, res) => {
       })
       .slice(0, 30)
 
-    // Transform to frontend format
-    const formattedBets = visible.map(bet => {
-      const displayTier = bet.override?.tierOverride || bet.tier
-      return ({
-      id: bet.id,
-      category: displayTier.toLowerCase().replace(/_/g, ''),
-      tier: displayTier,
-      is_fallback: bet.isFallback === true,
-      fallback_reason: bet.fallbackReason || null,
-      fallback_type: bet.fallbackType || null,
-      tier_status: bet.tierStatus || null,
-      mode: bet.mode || 'PRE_TOURNAMENT',
-      books_used: bet.booksUsed || [],
-      selection_name: bet.override?.selectionName || bet.selection,
-      confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
-      bestBookmaker: bet.bestBookmaker,
-      bestOdds: bet.bestOdds,
-      edge: bet.edge ?? null,
-      ev: bet.ev ?? null,
-      fair_prob: bet.fairProb ?? null,
-      market_prob: bet.marketProb ?? null,
-      prob_source: bet.probSource ?? null,
-      market_prob_source: bet.marketProbSource ?? null,
-      bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
-      tour: bet.tourEvent?.tour || null,
-      tournament_name: bet.tourEvent?.eventName || null,
-      analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
-      provider_best_slug: bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-'),
-      odds_display_best: bet.bestOdds?.toString() || '',
-      odds_decimal_best: bet.bestOdds,
-      course_fit_score: bet.override?.courseFitScore ?? 8,
-      form_label: bet.override?.formLabel || 'Good',
-      form_indicator: 'up',
-      weather_icon: 'sunny',
-      weather_label: bet.override?.weatherLabel || 'Clear',
-      ai_analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
-      ai_analysis_bullets: bet.analysisBullets || [],
-      affiliate_link: bet.override?.affiliateLinkOverride || `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
-      tourEvent: {
-        tour: bet.tourEvent?.tour || null,
-        eventName: bet.tourEvent?.eventName || null
-      }
-    })
-    })
+    // Load player stats for all runs
+    const runIds = [...new Set(visible.map(b => b.run?.id).filter(Boolean))]
+    const statsPromises = runIds.map(runId => playerStatsService.loadStatsForRun(runId))
+    const statsArrays = await Promise.all(statsPromises)
+    const statsByRun = new Map(runIds.map((id, i) => [id, statsArrays[i]]))
+
+    // Transform to frontend format with real player stats
+    const formattedBets = await Promise.all(visible.map(bet => {
+      const playerStats = statsByRun.get(bet.run?.id)
+      return formatBetWithRealStats(bet, playerStats)
+    }))
 
     res.json({
       data: formattedBets,
@@ -732,6 +823,27 @@ app.get('/api/bets/latest', async (req, res) => {
 app.get('/api/bets/tier/:tier', async (req, res) => {
   try {
     const { tier } = req.params
+    const TOP_PICKS_LIMIT = 5 // Only show top 5 best picks per category
+    const now = new Date()
+    
+    // Calculate THIS WEEK's date range (Monday 00:00 to Sunday 23:59)
+    const dayOfWeek = now.getDay() // 0 = Sunday, 1 = Monday, etc.
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek // If Sunday, go back 6 days
+    
+    const startOfWeek = new Date(now)
+    startOfWeek.setDate(now.getDate() + diffToMonday) // Go to Monday
+    startOfWeek.setHours(0, 0, 0, 0)
+    
+    const endOfWeek = new Date(startOfWeek)
+    endOfWeek.setDate(startOfWeek.getDate() + 6) // Sunday
+    endOfWeek.setHours(23, 59, 59, 999)
+    
+    logger.info('Fetching bets for current week', { 
+      startOfWeek: startOfWeek.toISOString(), 
+      endOfWeek: endOfWeek.toISOString(),
+      tier 
+    })
+    
     const tierMap = {
       'par': 'PAR',
       'birdie': 'BIRDIE',
@@ -743,82 +855,111 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
 
     const requestedTier = tierMap[tier] || tier.toUpperCase()
 
+    // Only fetch bets from THIS WEEK's tournaments (endDate within Monday-Sunday)
     const bets = await prisma.betRecommendation.findMany({
       where: {
         run: {
           status: 'completed'
+        },
+        tourEvent: {
+          endDate: {
+            gte: startOfWeek, // Tournament ends on or after Monday
+            lte: endOfWeek    // Tournament ends on or before Sunday
+          }
         }
       },
-      orderBy: {
-        createdAt: 'desc'
-      },
-      take: 200,
+      orderBy: [
+        { confidence1To5: 'desc' },
+        { edge: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      take: 500, // Fetch more to filter down to best picks
       include: {
+        run: {
+          select: {
+            id: true
+          }
+        },
         tourEvent: true,
         override: true
       }
     })
 
-    const filtered = bets
+    // Filter by tier and not archived
+    const tieredBets = bets
       .filter(bet => bet.override?.status !== 'archived')
       .filter(bet => (bet.override?.tierOverride || bet.tier) === requestedTier)
-      .sort((a, b) => {
-        const aPinned = a.override?.pinned === true
-        const bPinned = b.override?.pinned === true
-        if (aPinned !== bPinned) return aPinned ? -1 : 1
 
-        const aOrder = Number.isFinite(a.override?.pinOrder) ? a.override.pinOrder : Number.POSITIVE_INFINITY
-        const bOrder = Number.isFinite(b.override?.pinOrder) ? b.override.pinOrder : Number.POSITIVE_INFINITY
-        if (aOrder !== bOrder) return aOrder - bOrder
+    // Sort by quality metrics
+    const sortedBets = tieredBets.sort((a, b) => {
+      // Pinned items always come first
+      const aPinned = a.override?.pinned === true
+      const bPinned = b.override?.pinned === true
+      if (aPinned !== bPinned) return aPinned ? -1 : 1
 
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      })
-      .slice(0, 200)
+      const aOrder = Number.isFinite(a.override?.pinOrder) ? a.override.pinOrder : Number.POSITIVE_INFINITY
+      const bOrder = Number.isFinite(b.override?.pinOrder) ? b.override.pinOrder : Number.POSITIVE_INFINITY
+      if (aOrder !== bOrder) return aOrder - bOrder
 
-    // Transform to frontend format (same as above)
-    const formattedBets = filtered.map(bet => {
-      const displayTier = bet.override?.tierOverride || bet.tier
-      return ({
-      id: bet.id,
-      category: displayTier.toLowerCase().replace(/_/g, ''),
-      tier: displayTier,
-      is_fallback: bet.isFallback === true,
-      fallback_reason: bet.fallbackReason || null,
-      fallback_type: bet.fallbackType || null,
-      tier_status: bet.tierStatus || null,
-      mode: bet.mode || 'PRE_TOURNAMENT',
-      books_used: bet.booksUsed || [],
-      selection_name: bet.override?.selectionName || bet.selection,
-      confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
-      bestBookmaker: bet.bestBookmaker,
-      bestOdds: bet.bestOdds,
-      edge: bet.edge ?? null,
-      ev: bet.ev ?? null,
-      fair_prob: bet.fairProb ?? null,
-      market_prob: bet.marketProb ?? null,
-      prob_source: bet.probSource ?? null,
-      market_prob_source: bet.marketProbSource ?? null,
-      bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
-      tour: bet.tourEvent?.tour || null,
-      tournament_name: bet.tourEvent?.eventName || null,
-      analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
-      provider_best_slug: bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-'),
-      odds_display_best: bet.bestOdds?.toString() || '',
-      odds_decimal_best: bet.bestOdds,
-      course_fit_score: bet.override?.courseFitScore ?? 8,
-      form_label: bet.override?.formLabel || 'Good',
-      form_indicator: 'up',
-      weather_icon: 'sunny',
-      weather_label: bet.override?.weatherLabel || 'Clear',
-      ai_analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
-      ai_analysis_bullets: bet.analysisBullets || [],
-      affiliate_link: bet.override?.affiliateLinkOverride || `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
-      tourEvent: {
-        tour: bet.tourEvent?.tour || null,
-        eventName: bet.tourEvent?.eventName || null
+      // Sort by confidence rating (higher is better)
+      const confA = a.override?.confidenceRating ?? a.confidence1To5 ?? 0
+      const confB = b.override?.confidenceRating ?? b.confidence1To5 ?? 0
+      if (confB !== confA) return confB - confA
+
+      // Then by edge (higher is better)
+      const edgeA = a.edge ?? 0
+      const edgeB = b.edge ?? 0
+      if (edgeB !== edgeA) return edgeB - edgeA
+
+      // Then by best odds (higher odds = more value)
+      const oddsA = a.bestOdds ?? 0
+      const oddsB = b.bestOdds ?? 0
+      if (oddsB !== oddsA) return oddsB - oddsA
+
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    })
+
+    // Select top 5 picks with VARIETY in bet types (marketKey)
+    // Ensure we don't have all picks of the same type (e.g., all MC or all Top 20)
+    const selectedPicks = []
+    const usedMarketKeys = new Map() // Track count per market key
+    
+    for (const bet of sortedBets) {
+      if (selectedPicks.length >= TOP_PICKS_LIMIT) break
+      
+      const marketKey = bet.marketKey || 'unknown'
+      const currentCount = usedMarketKeys.get(marketKey) || 0
+      
+      // Allow max 2 picks per market type to ensure variety
+      // But if we can't fill 5 picks, we'll relax this constraint
+      if (currentCount < 2) {
+        selectedPicks.push(bet)
+        usedMarketKeys.set(marketKey, currentCount + 1)
       }
-    })
-    })
+    }
+    
+    // If we couldn't fill 5 picks with variety, fill remaining with best available
+    if (selectedPicks.length < TOP_PICKS_LIMIT) {
+      const selectedIds = new Set(selectedPicks.map(b => b.id))
+      for (const bet of sortedBets) {
+        if (selectedPicks.length >= TOP_PICKS_LIMIT) break
+        if (!selectedIds.has(bet.id)) {
+          selectedPicks.push(bet)
+        }
+      }
+    }
+
+    // Load player stats for all runs
+    const runIds = [...new Set(selectedPicks.map(b => b.run?.id).filter(Boolean))]
+    const statsPromises = runIds.map(runId => playerStatsService.loadStatsForRun(runId))
+    const statsArrays = await Promise.all(statsPromises)
+    const statsByRun = new Map(runIds.map((id, i) => [id, statsArrays[i]]))
+
+    // Transform to frontend format with real player stats
+    const formattedBets = await Promise.all(selectedPicks.map(bet => {
+      const playerStats = statsByRun.get(bet.run?.id)
+      return formatBetWithRealStats(bet, playerStats)
+    }))
 
     res.json({
       data: formattedBets,
@@ -827,6 +968,248 @@ app.get('/api/bets/tier/:tier', async (req, res) => {
   } catch (error) {
     logger.error('Failed to fetch bets by tier', { error: error.message, tier: req.params.tier })
     res.status(500).json({ error: 'Failed to fetch bets' })
+  }
+})
+
+// Get historical bet picks (for Results/Our Picks page)
+// Shows all picks from completed tournaments with win/loss outcomes
+app.get('/api/results', async (req, res) => {
+  try {
+    const { week, limit = 500 } = req.query
+    const now = new Date()
+
+    // Find all bet recommendations from completed tournaments (endDate < now)
+    // Include archived bets - Results page should show all historical bets
+    const bets = await prisma.betRecommendation.findMany({
+      where: {
+        run: {
+          status: 'completed'
+        },
+        tourEvent: {
+          endDate: {
+            lt: now // Tournament has ended
+          }
+        }
+      },
+      orderBy: [
+        { confidence1To5: 'desc' },
+        { edge: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      take: parseInt(limit, 10),
+      include: {
+        run: {
+          select: {
+            id: true,
+            runKey: true,
+            weekStart: true,
+            weekEnd: true
+          }
+        },
+        tourEvent: true,
+        override: true
+      }
+    })
+
+    // Get unique tourEventIds for leaderboard lookup
+    const tourEventIds = [...new Set(bets.map(b => b.tourEventId))]
+    
+    // Fetch final leaderboard snapshots for all relevant tournaments
+    const leaderboards = await prisma.leaderboardSnapshot.findMany({
+      where: {
+        tourEventId: { in: tourEventIds },
+        round: 4 // Final round
+      },
+      orderBy: { fetchedAt: 'desc' }
+    })
+    
+    // Also try to get round 2 data (for cut status) if no round 4
+    const cutLeaderboards = await prisma.leaderboardSnapshot.findMany({
+      where: {
+        tourEventId: { in: tourEventIds },
+        round: 2
+      },
+      orderBy: { fetchedAt: 'desc' }
+    })
+    
+    // Create lookup maps
+    const finalLeaderboardMap = new Map()
+    for (const lb of leaderboards) {
+      if (!finalLeaderboardMap.has(lb.tourEventId)) {
+        finalLeaderboardMap.set(lb.tourEventId, lb.leaderboardJson)
+      }
+    }
+    
+    const cutLeaderboardMap = new Map()
+    for (const lb of cutLeaderboards) {
+      if (!cutLeaderboardMap.has(lb.tourEventId)) {
+        cutLeaderboardMap.set(lb.tourEventId, lb.leaderboardJson)
+      }
+    }
+    
+    // Helper to find player in leaderboard JSON
+    const findPlayerInLeaderboard = (leaderboardJson, dgPlayerId, playerName) => {
+      if (!leaderboardJson || !Array.isArray(leaderboardJson)) return null
+      
+      // Try to find by dg_id first
+      if (dgPlayerId) {
+        const byId = leaderboardJson.find(p => 
+          String(p.dg_id) === String(dgPlayerId) || 
+          String(p.player_id) === String(dgPlayerId)
+        )
+        if (byId) return byId
+      }
+      
+      // Fallback to name matching
+      if (playerName) {
+        const nameLower = playerName.toLowerCase()
+        const byName = leaderboardJson.find(p => 
+          (p.player_name || p.name || '').toLowerCase() === nameLower
+        )
+        if (byName) return byName
+      }
+      
+      return null
+    }
+    
+    // Helper to parse position/status from leaderboard entry
+    const parsePlayerScoring = (entry) => {
+      if (!entry) return null
+      
+      const rawPosition = entry.position ?? entry.pos ?? entry.current_pos ?? null
+      let position = rawPosition
+      let status = null
+      
+      if (typeof rawPosition === 'string') {
+        const normalized = rawPosition.toUpperCase().trim()
+        if (normalized === 'MC' || normalized === 'CUT' || normalized === 'MISSED CUT') {
+          status = 'MC'
+          position = null
+        } else if (normalized === 'WD' || normalized === 'W/D' || normalized === 'WITHDRAWN') {
+          status = 'WD'
+          position = null
+        } else if (normalized === 'DQ' || normalized === 'DISQUALIFIED') {
+          status = 'DQ'
+          position = null
+        } else if (/^T?\d+$/.test(normalized)) {
+          position = parseInt(normalized.replace('T', ''), 10)
+        } else {
+          const parsed = parseInt(rawPosition, 10)
+          if (!isNaN(parsed)) position = parsed
+        }
+      }
+      
+      return {
+        position,
+        status,
+        r3: entry.R3 ?? entry.r3 ?? entry.round_3 ?? null,
+        r4: entry.R4 ?? entry.r4 ?? entry.round_4 ?? null
+      }
+    }
+
+    // Filter by week/run if specified
+    let filtered = bets
+    if (week && week !== 'all') {
+      filtered = bets.filter(b => b.run?.runKey === week)
+    }
+
+    // Get unique run keys for the filter dropdown
+    const uniqueRuns = [...new Set(bets.map(b => b.run?.runKey).filter(Boolean))]
+
+    // Transform to frontend format with outcome calculation
+    const formattedBets = filtered.map(bet => {
+      const displayTier = bet.override?.tierOverride || bet.tier
+      
+      // Look up player in leaderboard
+      const finalLb = finalLeaderboardMap.get(bet.tourEventId)
+      const cutLb = cutLeaderboardMap.get(bet.tourEventId)
+      
+      // Try final leaderboard first, then cut leaderboard
+      let playerEntry = findPlayerInLeaderboard(finalLb, bet.dgPlayerId, bet.selection)
+      if (!playerEntry) {
+        playerEntry = findPlayerInLeaderboard(cutLb, bet.dgPlayerId, bet.selection)
+      }
+      
+      const scoring = parsePlayerScoring(playerEntry)
+      const outcome = determineBetOutcome(bet.marketKey, scoring, 'completed')
+      
+      return {
+        id: bet.id,
+        selection_name: bet.override?.selectionName || bet.selection,
+        bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
+        category: displayTier?.toLowerCase().replace(/_/g, ''),
+        tier: displayTier,
+        tour: bet.tourEvent?.tour || null,
+        tournament_name: bet.tourEvent?.eventName || null,
+        tournament_end_date: bet.tourEvent?.endDate || null,
+        market_key: bet.marketKey,
+        odds_display_best: bet.bestOdds?.toString() || '',
+        odds_decimal_best: bet.bestOdds,
+        confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
+        edge: bet.edge ?? null,
+        fair_prob: bet.fairProb ?? null,
+        market_prob: bet.marketProb ?? null,
+        run_id: bet.run?.runKey || null,
+        run_week_start: bet.run?.weekStart || null,
+        run_week_end: bet.run?.weekEnd || null,
+        created_at: bet.createdAt,
+        // Outcome fields
+        outcome: outcome,
+        final_position: scoring?.position ?? null,
+        player_status: scoring?.status ?? null
+      }
+    })
+
+    // Calculate summary statistics
+    const wins = formattedBets.filter(b => b.outcome === 'won')
+    const losses = formattedBets.filter(b => b.outcome === 'lost')
+    const pending = formattedBets.filter(b => !b.outcome || b.outcome === 'pending')
+    
+    const stats = {
+      total: formattedBets.length,
+      totalPicks: formattedBets.length,
+      wins: wins.length,
+      losses: losses.length,
+      pending: pending.length,
+      winRate: formattedBets.length > 0 ? (wins.length / (wins.length + losses.length) * 100).toFixed(1) : 0
+    }
+
+    // Category breakdown with outcomes
+    const categories = ['par', 'birdie', 'eagle', 'longshots']
+    const categoryStats = categories.map(cat => {
+      const catBets = formattedBets.filter(b => b.category === cat || b.category === cat.replace('_', ''))
+      const catWins = catBets.filter(b => b.outcome === 'won')
+      return {
+        category: cat,
+        total: catBets.length,
+        wins: catWins.length,
+        losses: catBets.filter(b => b.outcome === 'lost').length
+      }
+    })
+
+    // Tour breakdown with outcomes
+    const tours = ['PGA', 'LPGA', 'LIV', 'DP_WORLD', 'DPWT', 'KFT']
+    const tourStats = tours.map(tour => {
+      const tourBets = formattedBets.filter(b => b.tour === tour)
+      return {
+        tour,
+        total: tourBets.length,
+        wins: tourBets.filter(b => b.outcome === 'won').length,
+        losses: tourBets.filter(b => b.outcome === 'lost').length
+      }
+    }).filter(t => t.total > 0)
+
+    res.json({
+      data: formattedBets,
+      stats,
+      categoryStats,
+      tourStats,
+      availableWeeks: uniqueRuns,
+      count: formattedBets.length
+    })
+  } catch (error) {
+    logger.error('Failed to fetch historical picks', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch results' })
   }
 })
 
@@ -1601,6 +1984,60 @@ app.delete('/api/entities/golf-bets/:id', authRequired, adminOnly, async (req, r
   }
 })
 
+// Archive all bets from runs whose weekEnd has passed
+app.post('/api/admin/archive-old-bets', authRequired, adminOnly, async (req, res) => {
+  try {
+    const now = new Date()
+    
+    // Find all runs whose weekEnd is in the past
+    const oldRuns = await prisma.run.findMany({
+      where: {
+        weekEnd: { lt: now }
+      },
+      select: { id: true, runKey: true }
+    })
+
+    if (oldRuns.length === 0) {
+      return res.json({ success: true, archivedCount: 0, message: 'No old runs found' })
+    }
+
+    const oldRunIds = oldRuns.map(r => r.id)
+
+    // Find all bet recommendations from old runs that are not already archived
+    const betsToArchive = await prisma.betRecommendation.findMany({
+      where: {
+        runId: { in: oldRunIds },
+        OR: [
+          { override: null },
+          { override: { status: { not: 'archived' } } }
+        ]
+      },
+      select: { id: true }
+    })
+
+    let archivedCount = 0
+    for (const bet of betsToArchive) {
+      await prisma.betOverride.upsert({
+        where: { betRecommendationId: bet.id },
+        create: { betRecommendationId: bet.id, status: 'archived', pinned: false, pinOrder: null, tierOverride: null },
+        update: { status: 'archived', pinned: false, pinOrder: null, tierOverride: null }
+      })
+      archivedCount++
+    }
+
+    logger.info(`Archived ${archivedCount} bets from ${oldRuns.length} old runs`)
+    res.json({ 
+      success: true, 
+      archivedCount, 
+      oldRunCount: oldRuns.length,
+      message: `Archived ${archivedCount} bets from ${oldRuns.length} old runs` 
+    })
+  } catch (error) {
+    logger.error('Error archiving old bets:', error)
+    res.status(500).json({ error: 'Failed to archive old bets' })
+  }
+})
+
 app.get('/api/entities/tour-events', authRequired, adminOnly, async (req, res) => {
   try {
     const events = await prisma.tourEvent.findMany({
@@ -2098,6 +2535,56 @@ app.post(
     } catch (error) {
       logger.error('Failed to create HIO challenge', { error: error?.message })
       res.status(500).json({ error: 'Failed to create HIO challenge' })
+    }
+  }
+)
+
+// Admin: Auto-generate weekly HIO challenge
+app.post(
+  '/api/entities/hio-challenges/generate-weekly',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    prize_description: z.string().optional()
+  })),
+  async (req, res) => {
+    try {
+      const { createOrUpdateWeeklyChallenge } = await import('../services/hio-question-generator.js')
+      const prizeDescription = req.body.prize_description || '£100 Amazon Voucher'
+      
+      const challenge = await createOrUpdateWeeklyChallenge(prizeDescription)
+      
+      await writeAuditLog({
+        req,
+        action: 'hio_challenge.generate_weekly',
+        entityType: 'HIOChallenge',
+        entityId: challenge.id,
+        beforeJson: null,
+        afterJson: challenge
+      })
+      
+      logger.info('Generated weekly HIO challenge', { 
+        challengeId: challenge.id,
+        questionCount: challenge.questions?.length || 0,
+        tournaments: challenge.tournamentNames
+      })
+      
+      res.json({
+        data: {
+          id: challenge.id,
+          status: challenge.status,
+          prize_description: challenge.prizeDescription,
+          tournament_names: challenge.tournamentNames,
+          questions: challenge.questions,
+          total_entries: challenge.totalEntries,
+          perfect_scores: challenge.perfectScores,
+          created_at: challenge.createdAt?.toISOString?.() || challenge.createdAt,
+          updated_at: challenge.updatedAt?.toISOString?.() || challenge.updatedAt
+        }
+      })
+    } catch (error) {
+      logger.error('Failed to generate weekly HIO challenge', { error: error?.message, stack: error?.stack })
+      res.status(500).json({ error: 'Failed to generate weekly challenge' })
     }
   }
 )

@@ -33,8 +33,8 @@ const ARTIFACT_DIR = path.join(process.cwd(), 'logs', 'artifacts')
 
 export class WeeklyPipeline {
   constructor() {
-    this.minPicksPerTier = Number(process.env.MIN_PICKS_PER_TIER || 5)
-    this.maxPicksPerTier = Number(process.env.MAX_PICKS_PER_TIER || 8)
+    this.minPicksPerTier = Number(process.env.MIN_PICKS_PER_TIER || 3)
+    this.maxPicksPerTier = Number(process.env.MAX_PICKS_PER_TIER || 5)  // Reduced to 5 best picks per tier
     this.maxOddsAgeHours = Number(process.env.ODDS_FRESHNESS_HOURS || 6)
     this.lookaheadDays = Number(process.env.TOUR_LOOKAHEAD_DAYS || 0)
     this.maxPicksPerPlayer = Number(process.env.MAX_PICKS_PER_PLAYER || 2)
@@ -53,6 +53,8 @@ export class WeeklyPipeline {
     this.runMode = process.env.RUN_MODE || 'CURRENT_WEEK'
     this.allowFallback = String(process.env.ALLOW_FALLBACK || '').toLowerCase() === 'true'
     this.excludeInPlay = String(process.env.EXCLUDE_IN_PLAY || 'true').toLowerCase() !== 'false'
+    // Allow events that started within the last N hours (for mid-week regeneration)
+    this.inPlayGraceHours = Number(process.env.IN_PLAY_GRACE_HOURS || 48)
     this.oddsMatchConfidenceThreshold = Number(process.env.ODDS_MATCH_CONFIDENCE_THRESHOLD || 0.8)
     this.allowedBooks = getAllowedBooks()
     this.allowedBooksSet = getAllowedBooksSet()
@@ -107,6 +109,9 @@ export class WeeklyPipeline {
       }
 
       logStep('pipeline', `Starting weekly pipeline run: ${runKey}`)
+
+      // Auto-archive bets from old runs before starting a new run
+      await this.archiveOldBets()
 
       const existingRun = await prisma.run.findUnique({
         where: { runKey }
@@ -241,6 +246,56 @@ export class WeeklyPipeline {
       await prisma.runArtifact.deleteMany({
         where: { runId: run.id }
       })
+    }
+  }
+
+  async archiveOldBets() {
+    try {
+      const now = new Date()
+      
+      // Find all runs whose weekEnd is in the past
+      const oldRuns = await prisma.run.findMany({
+        where: {
+          weekEnd: { lt: now }
+        },
+        select: { id: true, runKey: true }
+      })
+
+      if (oldRuns.length === 0) {
+        logStep('pipeline', 'No old runs to archive')
+        return { archivedCount: 0 }
+      }
+
+      const oldRunIds = oldRuns.map(r => r.id)
+
+      // Find all bet recommendations from old runs that are not already archived
+      const betsToArchive = await prisma.betRecommendation.findMany({
+        where: {
+          runId: { in: oldRunIds },
+          OR: [
+            { override: null },
+            { override: { status: { not: 'archived' } } }
+          ]
+        },
+        select: { id: true }
+      })
+
+      let archivedCount = 0
+      for (const bet of betsToArchive) {
+        await prisma.betOverride.upsert({
+          where: { betRecommendationId: bet.id },
+          create: { betRecommendationId: bet.id, status: 'archived', pinned: false, pinOrder: null, tierOverride: null },
+          update: { status: 'archived', pinned: false, pinOrder: null, tierOverride: null }
+        })
+        archivedCount++
+      }
+
+      logStep('pipeline', `Auto-archived ${archivedCount} bets from ${oldRuns.length} old runs`)
+      return { archivedCount, oldRunCount: oldRuns.length }
+    } catch (error) {
+      logError('pipeline', error, { context: 'archiveOldBets' })
+      // Don't fail the pipeline if archiving fails
+      return { archivedCount: 0, error: error?.message }
     }
   }
 
@@ -385,13 +440,19 @@ export class WeeklyPipeline {
         const eventName = event.event_name || event.name || event.tournament_name || 'Unknown Event'
         const startDate = this.parseDate(event.start_date || event.start_date_utc || event.start) || weekStart
         const endDate = this.parseDate(event.end_date || event.end_date_utc || event.end) || weekEnd
-        const inPlay = startDate < new Date()
+        const now = new Date()
+        const inPlay = startDate < now
+        // Allow events that started within the grace period (default 48 hours)
+        const graceMs = this.inPlayGraceHours * 60 * 60 * 1000
+        const withinGracePeriod = inPlay && (now.getTime() - startDate.getTime()) <= graceMs
 
-        if (this.runMode === 'CURRENT_WEEK' && this.excludeInPlay && inPlay) {
+        if (this.runMode === 'CURRENT_WEEK' && this.excludeInPlay && inPlay && !withinGracePeriod) {
           await issueTracker.logIssue(tour, 'warning', 'discover', 'EVENT_IN_PLAY_SKIPPED', {
             tour,
             eventName,
-            startDate: startDate.toISOString()
+            startDate: startDate.toISOString(),
+            hoursSinceStart: Math.round((now.getTime() - startDate.getTime()) / (60 * 60 * 1000)),
+            graceHours: this.inPlayGraceHours
           })
           continue
         }
@@ -1029,7 +1090,8 @@ export class WeeklyPipeline {
       }
       const set = fieldIndex.get(key)
       const name = entry.player?.canonicalName || entry.playerId
-      if (name) set.names.add(name)
+      // Normalize names for consistent matching with cleanPlayerName() keys
+      if (name) set.names.add(this.playerNormalizer.cleanPlayerName(name))
       if (entry.player?.dgId) set.dgIds.add(String(entry.player.dgId))
     }
 
@@ -1833,12 +1895,14 @@ export class WeeklyPipeline {
   }
 
   calculateConfidence(edge) {
+    // Improved confidence calculation with realistic edge thresholds
+    // Most golf betting edges are in the 1-5% range
     if (edge <= 0) return 1
-    if (edge > 0.1) return 5
-    if (edge > 0.07) return 4
-    if (edge > 0.05) return 3
-    if (edge > 0.03) return 2
-    return 1
+    if (edge > 0.06) return 5  // 6%+ edge = exceptional
+    if (edge > 0.04) return 4  // 4-6% edge = very good
+    if (edge > 0.025) return 3 // 2.5-4% edge = good
+    if (edge > 0.01) return 2  // 1-2.5% edge = moderate
+    return 1                   // <1% edge = low confidence
   }
 
   buildModelConfidence({ dataSufficiency, simulationStability, marketDepth, externalAgreement, context }) {
@@ -1943,23 +2007,67 @@ export class WeeklyPipeline {
   }
 
   generateAnalysisParagraph(candidate) {
+    const playerName = candidate.selection
     const odds = candidate.bestOffer.oddsDecimal.toFixed(2)
-    const edge = (candidate.edge * 100).toFixed(1)
+    const edge = ((candidate.edge || 0) * 100).toFixed(1)
+    const bookmaker = candidate.bestOffer.bookmaker
+    const fairProb = ((candidate.fairProb || 0) * 100).toFixed(1)
+    const marketProb = ((candidate.marketProb || 0) * 100).toFixed(1)
+    const bookCount = candidate.altOffers?.length + 1 || 1
+    const tournamentName = candidate.tourEvent?.eventName || 'this tournament'
+    
     if (candidate.isFallback) {
-      return `${candidate.selection} is priced at ${odds}. This is a fallback pick (not +EV) due to limited positive-EV options.`
+      return `${playerName} is available at ${odds} odds via ${bookmaker}. ` +
+        `This is a fallback selection due to limited positive-EV options in the ${candidate.tier} tier. ` +
+        `Model probability: ${fairProb}% vs market implied: ${marketProb}%.`
     }
-    return `${candidate.selection} is priced at ${odds} with an estimated ${edge}% edge based on DataGolf + market probabilities.`
+    
+    const parts = []
+    
+    // Opening with edge opportunity
+    parts.push(`${playerName} presents a ${edge}% edge opportunity at ${odds} decimal odds (${bookmaker}).`)
+    
+    // Probability comparison
+    parts.push(`Our model assigns a ${fairProb}% win probability versus ${marketProb}% market implied across ${bookCount} books.`)
+    
+    // Tournament context
+    if (candidate.tourEvent?.tour) {
+      parts.push(`This ${candidate.tourEvent.tour} event at ${tournamentName} offers favorable conditions.`)
+    }
+    
+    // Value assessment
+    if (candidate.ev > 0.05) {
+      parts.push(`Strong expected value of +${((candidate.ev || 0) * 100).toFixed(1)}%.`)
+    } else if (candidate.ev > 0) {
+      parts.push(`Positive expected value of +${((candidate.ev || 0) * 100).toFixed(1)}%.`)
+    }
+    
+    return parts.join(' ')
   }
 
   generateAnalysisBullets(candidate) {
-    return [
-      `Fair probability: ${(candidate.fairProb * 100).toFixed(1)}%`,
-      `Market probability: ${(candidate.marketProb * 100).toFixed(1)}%`,
-      `Implied probability: ${(candidate.impliedProb * 100).toFixed(1)}%`,
-      `Edge: ${(candidate.edge * 100).toFixed(1)}%`,
-      `EV: ${(candidate.ev * 100).toFixed(1)}%`,
-      `Best odds: ${candidate.bestOffer.oddsDecimal.toFixed(2)} (${candidate.bestOffer.bookmaker})`
-    ]
+    const bullets = []
+    const bookCount = candidate.altOffers?.length + 1 || 1
+    
+    // Core probability metrics
+    bullets.push(`Model probability: ${((candidate.fairProb || 0) * 100).toFixed(1)}%`)
+    bullets.push(`Market implied: ${((candidate.marketProb || 0) * 100).toFixed(1)}%`)
+    bullets.push(`Edge: ${((candidate.edge || 0) * 100).toFixed(1)}%`)
+    bullets.push(`Expected Value: ${((candidate.ev || 0) * 100).toFixed(1)}%`)
+    
+    // Odds info
+    bullets.push(`Best odds: ${candidate.bestOffer.oddsDecimal.toFixed(2)} (${candidate.bestOffer.bookmaker})`)
+    bullets.push(`Books analyzed: ${bookCount}`)
+    
+    // Market info
+    if (candidate.marketKey) {
+      bullets.push(`Market: ${candidate.marketKey}`)
+    }
+    
+    // Tier info
+    bullets.push(`Tier: ${candidate.tier}`)
+    
+    return bullets
   }
 
   parseOddsOffers(rows = []) {

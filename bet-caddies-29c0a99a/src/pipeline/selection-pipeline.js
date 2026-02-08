@@ -548,7 +548,7 @@ async function generateRecommendations(events, oddsSnapshot, issueTracker) {
   const simSeed = process.env.SIM_SEED ? Number(process.env.SIM_SEED) : null
 
   const minEvThreshold = Number(process.env.MIN_EV_THRESHOLD || 0)
-  const maxPicksPerTier = Number(process.env.MAX_PICKS_PER_TIER || 8)
+  const maxPicksPerTier = Number(process.env.MAX_PICKS_PER_TIER || 5)
   const minPicksPerTier = Number(process.env.MIN_PICKS_PER_TIER || 2)
   const allowFallback = String(process.env.ALLOW_FALLBACK || 'true').toLowerCase() === 'true'
 

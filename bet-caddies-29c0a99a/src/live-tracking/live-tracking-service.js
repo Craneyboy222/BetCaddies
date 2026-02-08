@@ -5,7 +5,7 @@ import { DataIssueTracker } from '../observability/data-issue-tracker.js'
 import { logger } from '../observability/logger.js'
 import { prisma } from '../db/client.js'
 
-const DEFAULT_TTL_MS = Number(process.env.LIVE_TRACKING_CACHE_TTL_MS || 60000)
+const DEFAULT_TTL_MS = Number(process.env.LIVE_TRACKING_CACHE_TTL_MS || 300000)
 const DEFAULT_CONCURRENCY = Number(process.env.LIVE_TRACKING_MAX_CONCURRENCY || 3)
 
 const DEFAULT_TOURS = ['PGA', 'DPWT', 'KFT', 'LIV']
@@ -87,19 +87,137 @@ const resolvePlayerName = (row) => {
 
 const extractScoringFields = (row) => {
   if (!row || typeof row !== 'object') return null
-  const position = row.position ?? row.pos ?? row.rank ?? row.place ?? row.leaderboard_position ?? null
-  const totalToPar = row.total_to_par ?? row.to_par ?? row.score ?? row.total_score ?? row.total ?? null
-  const todayToPar = row.today_to_par ?? row.round_score ?? row.today ?? row.round ?? null
+  const rawPosition = row.current_pos ?? row.position ?? row.pos ?? row.rank ?? row.place ?? row.leaderboard_position ?? null
+  const totalToPar = row.current_score ?? row.total_to_par ?? row.to_par ?? row.score ?? row.total_score ?? row.total ?? null
+  const todayToPar = row.today ?? row.today_to_par ?? row.round_score ?? row.round ?? null
   const thru = row.thru ?? row.through ?? row.hole ?? row.current_hole ?? row.thru_hole ?? null
+  
+  // Extract round-by-round scores (R1, R2, R3, R4)
+  const r1 = row.R1 ?? row.r1 ?? row.round_1 ?? row.round1 ?? null
+  const r2 = row.R2 ?? row.r2 ?? row.round_2 ?? row.round2 ?? null
+  const r3 = row.R3 ?? row.r3 ?? row.round_3 ?? row.round3 ?? null
+  const r4 = row.R4 ?? row.r4 ?? row.round_4 ?? row.round4 ?? null
+  const currentRound = row.round ?? null
+  
+  // Parse position - check for special statuses like MC (missed cut), WD (withdrawn), DQ (disqualified)
+  let position = rawPosition
+  let status = null
+  if (typeof rawPosition === 'string') {
+    const normalized = rawPosition.toUpperCase().trim()
+    if (normalized === 'MC' || normalized === 'CUT' || normalized === 'MISSED CUT') {
+      status = 'MC'
+      position = null
+    } else if (normalized === 'WD' || normalized === 'W/D' || normalized === 'WITHDRAWN') {
+      status = 'WD'
+      position = null
+    } else if (normalized === 'DQ' || normalized === 'DISQUALIFIED') {
+      status = 'DQ'
+      position = null
+    } else if (/^T?\d+$/.test(normalized)) {
+      // Handle tied positions like "T10" or plain numbers "10"
+      position = parseInt(normalized.replace('T', ''), 10)
+    } else {
+      // Try to parse as number
+      const parsed = parseInt(rawPosition, 10)
+      if (!isNaN(parsed)) position = parsed
+    }
+  }
 
-  if (position == null && totalToPar == null && todayToPar == null && thru == null) return null
+  if (position == null && totalToPar == null && todayToPar == null && thru == null && status == null) return null
 
   return {
     position,
+    status,
     totalToPar,
     todayToPar,
-    thru
+    thru,
+    r1,
+    r2,
+    r3,
+    r4,
+    currentRound
   }
+}
+
+/**
+ * Determine the outcome of a bet based on market type and scoring data.
+ * Returns: 'won', 'lost', 'pending', or null (insufficient data)
+ */
+export const determineBetOutcome = (market, scoring, eventStatus) => {
+  if (!market) return null
+  
+  const marketKey = market.toLowerCase()
+  const position = scoring?.position
+  const status = scoring?.status
+  const hasR3 = scoring?.r3 != null
+  const hasR4 = scoring?.r4 != null
+  
+  // For miss cut market
+  if (marketKey === 'mc') {
+    // Player missed cut (MC status) = bet WON
+    if (status === 'MC') return 'won'
+    // Player withdrew/disqualified before cut = bet lost (most books void or settle as loss)
+    if (status === 'WD' || status === 'DQ') return 'lost'
+    // If player made the weekend (has R3/R4 scores or still in position), bet is lost
+    if (hasR3 || hasR4) return 'lost'
+    if (typeof position === 'number' && position > 0) {
+      // Player is still playing weekend rounds - they made the cut
+      return 'lost'
+    }
+    // Event completed but we don't have clear status - check if end of tournament
+    if (eventStatus === 'completed') {
+      // If event is completed and no MC status, assume they made the cut
+      return 'lost'
+    }
+    return 'pending'
+  }
+  
+  // For make cut market (opposite of mc)
+  if (marketKey === 'make_cut') {
+    if (status === 'MC') return 'lost'
+    if (status === 'WD' || status === 'DQ') return 'lost'
+    if (hasR3 || hasR4) return 'won'
+    if (typeof position === 'number' && position > 0) {
+      return 'won' // On weekend = made cut
+    }
+    if (eventStatus === 'completed') {
+      return 'won'
+    }
+    return 'pending'
+  }
+  
+  // For win market
+  if (marketKey === 'win') {
+    if (status === 'MC' || status === 'WD' || status === 'DQ') return 'lost'
+    if (eventStatus === 'completed') {
+      // Only position 1 wins
+      if (position === 1) return 'won'
+      if (typeof position === 'number') return 'lost'
+    }
+    return 'pending'
+  }
+  
+  // For top N markets (top_5, top_10, top_20)
+  const topNMatch = marketKey.match(/^top_?(\d+)$/)
+  if (topNMatch) {
+    const n = parseInt(topNMatch[1], 10)
+    if (status === 'MC' || status === 'WD' || status === 'DQ') return 'lost'
+    if (eventStatus === 'completed') {
+      if (typeof position === 'number') {
+        return position <= n ? 'won' : 'lost'
+      }
+    }
+    return 'pending'
+  }
+  
+  // For FRL (first round leader)
+  if (marketKey === 'frl') {
+    // Would need R1 leaderboard data - mark as pending for now
+    return 'pending'
+  }
+  
+  // Unknown market type
+  return null
 }
 
 export const computeOddsMovement = (baseline, current) => {
@@ -163,84 +281,108 @@ export const createLiveTrackingService = ({
     return { issues, logIssue }
   }
 
-  const discoverActiveEventsByTour = async (tours = DEFAULT_TOURS) => {
-    const cacheKey = getCacheKey('active-events', tours.join(','))
+  const discoverActiveEventsByTour = async (tours = DEFAULT_TOURS, includeUpcoming = true) => {
+    const cacheKey = getCacheKey('active-events', tours.join(','), includeUpcoming ? 'with-upcoming' : 'live-only')
     const cached = getCached(cacheKey)
     if (cached) return cached
 
     const { issues, logIssue } = await buildIssueLogger()
     const results = []
+    const now = new Date()
 
-    for (const tour of tours) {
+    // First, find all events with bet recommendations (both live and upcoming)
+    const eventsWithPicks = await prisma.tourEvent.findMany({
+      where: {
+        tour: { in: tours },
+        betRecommendations: {
+          some: {
+            run: { status: 'completed' }
+          }
+        },
+        // Include events that haven't ended yet (upcoming + in progress)
+        endDate: { gte: now }
+      },
+      include: {
+        _count: {
+          select: { betRecommendations: true }
+        }
+      },
+      orderBy: { startDate: 'asc' }
+    })
+
+    for (const tourEvent of eventsWithPicks) {
+      const tour = tourEvent.tour
       const tourCode = dataGolfClient.resolveTourCode(tour, 'preds')
-      if (!tourCode) {
-        await logIssue(tour, 'warning', 'TOUR_NOT_SUPPORTED', 'Tour not supported for live tracking', { tour })
-        continue
+      
+      // Check if tournament is in play (started but not ended)
+      const isInPlay = tourEvent.startDate <= now && tourEvent.endDate >= now
+      const isUpcoming = tourEvent.startDate > now
+      
+      let liveDataAvailable = false
+      
+      if (isInPlay && tourCode) {
+        // Try to fetch live data to confirm tournament is actually in play
+        try {
+          const payload = await dataGolfClient.getInPlayPreds(tourCode)
+          const rows = normalizeDataGolfArray(payload)
+          liveDataAvailable = rows.length > 0
+        } catch (error) {
+          // Live data not available yet (tournament may not have started play)
+          await logIssue(tour, 'info', 'EVENT_NOT_IN_PLAY', 'Live feed not available yet', { 
+            tour, 
+            eventName: tourEvent.eventName,
+            message: error?.message 
+          })
+        }
       }
 
-      let payload
-      try {
-        payload = await dataGolfClient.getInPlayPreds(tourCode)
-      } catch (error) {
-        await logIssue(tour, 'error', 'EVENT_NOT_IN_PLAY', 'Failed to fetch in-play feed', { tour, message: error?.message })
-        continue
+      // Calculate days until start for upcoming events
+      let daysUntilStart = null
+      if (isUpcoming) {
+        const diffMs = tourEvent.startDate.getTime() - now.getTime()
+        daysUntilStart = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
       }
 
-      const rows = normalizeDataGolfArray(payload)
-      const eventId = resolveEventId(payload, rows)
-      const eventName = resolveEventName(payload)
-
-      if (!eventId) {
-        await logIssue(tour, 'warning', 'LIVE_FEED_SHAPE_UNKNOWN', 'In-play feed missing event_id', {
-          tour,
-          keys: payload ? Object.keys(payload) : []
-        })
+      // Determine event status
+      let status = 'upcoming'
+      if (liveDataAvailable) {
+        status = 'live'
+      } else if (isInPlay) {
+        status = 'in_progress_no_data' // Tournament dates say in progress but no live feed yet
       }
 
-      if (!rows.length) {
-        await logIssue(tour, 'info', 'EVENT_NOT_IN_PLAY', 'No in-play rows returned', { tour })
-        continue
-      }
-
-      let tourEvent = null
-      if (eventId) {
-        tourEvent = await prisma.tourEvent.findFirst({
-          where: { tour, dgEventId: String(eventId) },
-          orderBy: { startDate: 'desc' }
-        })
-      }
-
-      if (!tourEvent) {
-        tourEvent = await prisma.tourEvent.findFirst({
-          where: { tour, startDate: { lte: new Date() }, endDate: { gte: new Date() } },
-          orderBy: { startDate: 'desc' }
-        })
-      }
-
-      const resolvedEventId = eventId || tourEvent?.dgEventId || null
-      if (!resolvedEventId) {
-        await logIssue(tour, 'warning', 'LIVE_FEED_SHAPE_UNKNOWN', 'Unable to resolve event_id for live tracking', {
-          tour,
-          eventName: eventName || tourEvent?.eventName || null
-        })
+      // Skip upcoming events if not requested
+      if (!includeUpcoming && status === 'upcoming') {
         continue
       }
 
       const trackedCount = await prisma.betRecommendation.count({
         where: {
-          tourEvent: { dgEventId: String(resolvedEventId), tour },
+          tourEventId: tourEvent.id,
           run: { status: 'completed' }
         }
       })
 
       results.push({
         tour,
-        dgEventId: String(resolvedEventId),
-        eventName: eventName || tourEvent?.eventName || 'Unknown Event',
+        dgEventId: tourEvent.dgEventId || tourEvent.id,
+        eventName: tourEvent.eventName,
+        startDate: tourEvent.startDate.toISOString(),
+        endDate: tourEvent.endDate.toISOString(),
+        status,
+        liveDataAvailable,
+        daysUntilStart,
         lastUpdated: new Date().toISOString(),
         trackedCount
       })
     }
+
+    // Sort: live events first, then by start date
+    results.sort((a, b) => {
+      if (a.status === 'live' && b.status !== 'live') return -1
+      if (b.status === 'live' && a.status !== 'live') return 1
+      return new Date(a.startDate) - new Date(b.startDate)
+    })
 
     const response = { data: results, issues }
     setCached(cacheKey, response, ttlMs)
@@ -248,19 +390,62 @@ export const createLiveTrackingService = ({
   }
 
   const getTrackedPlayersForEvent = async (dgEventId, tour) => {
-    const tourEvent = await prisma.tourEvent.findFirst({
+    // Find the most recent tourEvent with matching tour and dgEventId
+    // Order by createdAt DESC to get the latest pipeline run's event
+    let tourEvent = await prisma.tourEvent.findFirst({
       where: { tour, dgEventId: String(dgEventId) },
-      orderBy: { startDate: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      include: {
+        run: { select: { id: true, status: true, runKey: true } }
+      }
     })
+
+    // Fallback: try finding by tourEvent.id directly
+    if (!tourEvent) {
+      tourEvent = await prisma.tourEvent.findFirst({
+        where: { tour, id: String(dgEventId) },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          run: { select: { id: true, status: true, runKey: true } }
+        }
+      })
+    }
 
     if (!tourEvent) return { tourEvent: null, picks: [] }
 
+    // Only show bets if the run is completed
+    if (tourEvent.run?.status !== 'completed') {
+      logger.info('Live tracking: tourEvent run not completed', { 
+        tour, dgEventId, runStatus: tourEvent.run?.status 
+      })
+      return { tourEvent, picks: [] }
+    }
+
+    // Get only non-archived picks from this specific tour event
     const picks = await prisma.betRecommendation.findMany({
       where: {
         tourEventId: tourEvent.id,
-        run: { status: 'completed' }
+        // Exclude archived bets
+        OR: [
+          { override: null },
+          { override: { status: { not: 'archived' } } }
+        ]
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: [
+        { tier: 'asc' },  // EAGLE, BIRDIE, PAR ordering
+        { confidence1To5: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      include: { override: true }
+    })
+
+    logger.info('Live tracking: found picks for event', {
+      tour,
+      dgEventId,
+      tourEventId: tourEvent.id,
+      runKey: tourEvent.run?.runKey,
+      pickCount: picks.length,
+      markets: [...new Set(picks.map(p => p.marketKey))]
     })
 
     return { tourEvent, picks }
@@ -319,6 +504,59 @@ export const createLiveTrackingService = ({
         eventName: 'Unknown Event',
         updatedAt: new Date().toISOString(),
         rows: [],
+        dataIssues: issues
+      }
+      setCached(cacheKey, response, ttlMs)
+      return response
+    }
+
+    // Determine tournament status
+    const now = new Date()
+    const isUpcoming = tourEvent.startDate > now
+    const isCompleted = tourEvent.endDate < now
+    const isInProgress = !isUpcoming && !isCompleted
+
+    // Calculate days until start for upcoming events
+    let daysUntilStart = null
+    if (isUpcoming) {
+      const diffMs = tourEvent.startDate.getTime() - now.getTime()
+      daysUntilStart = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+    }
+
+    // For upcoming events, return picks without live data
+    if (isUpcoming) {
+      const rows = picks.map((pick) => ({
+        dgPlayerId: pick.dgPlayerId || null,
+        playerName: pick.selection,
+        market: pick.marketKey,
+        position: null,
+        totalToPar: null,
+        todayToPar: null,
+        thru: null,
+        baselineOddsDecimal: Number.isFinite(pick.bestOdds) ? pick.bestOdds : null,
+        baselineBook: pick.bestBookmaker || null,
+        baselineCapturedAt: pick.createdAt?.toISOString?.() || pick.createdAt || null,
+        currentOddsDecimal: null,
+        currentBook: null,
+        currentFetchedAt: null,
+        oddsMovement: null,
+        tier: pick.tier,
+        edge: pick.edge,
+        ev: pick.ev,
+        confidence: pick.confidence1To5,
+        dataIssues: []
+      }))
+
+      const response = {
+        dgEventId: String(dgEventId),
+        tour,
+        eventName: tourEvent.eventName,
+        startDate: tourEvent.startDate.toISOString(),
+        endDate: tourEvent.endDate.toISOString(),
+        status: 'upcoming',
+        daysUntilStart,
+        updatedAt: new Date().toISOString(),
+        rows,
         dataIssues: issues
       }
       setCached(cacheKey, response, ttlMs)
@@ -491,14 +729,26 @@ export const createLiveTrackingService = ({
       const movement = computeOddsMovement(resolvedBaselineOdds, currentOdds)
       const crossBook = Boolean(resolvedBaselineBook && currentBook && resolvedBaselineBook !== currentBook)
 
+      // Determine if we have enough info to determine the event status for outcome calculation
+      // We'll calculate this properly after all rows are processed
+      const preliminaryEventStatus = isCompleted ? 'completed' : 'live'
+      const betOutcome = determineBetOutcome(pick.marketKey, scoring, preliminaryEventStatus)
+
       rows.push({
         dgPlayerId: dgPlayerId || null,
         playerName: pick.selection,
         market: pick.marketKey,
         position: scoring?.position ?? null,
+        playerStatus: scoring?.status ?? null,
         totalToPar: scoring?.totalToPar ?? null,
         todayToPar: scoring?.todayToPar ?? null,
         thru: scoring?.thru ?? null,
+        // Round-by-round scores
+        r1: scoring?.r1 ?? null,
+        r2: scoring?.r2 ?? null,
+        r3: scoring?.r3 ?? null,
+        r4: scoring?.r4 ?? null,
+        currentRound: scoring?.currentRound ?? null,
         baselineOddsDecimal: Number.isFinite(resolvedBaselineOdds) ? resolvedBaselineOdds : null,
         baselineBook: resolvedBaselineBook,
         baselineCapturedAt,
@@ -513,14 +763,27 @@ export const createLiveTrackingService = ({
             crossBook
           }
           : null,
+        tier: pick.tier,
+        edge: pick.edge,
+        ev: pick.ev,
+        confidence: pick.confidence1To5,
+        betOutcome,
         dataIssues: []
       })
     }
+
+    // Determine if we got any live data
+    const hasLiveScoring = rows.some(r => r.position != null || r.totalToPar != null || r.playerStatus != null)
+    const status = hasLiveScoring ? 'live' : (isCompleted ? 'completed' : 'in_progress_no_data')
 
     const response = {
       dgEventId: String(dgEventId),
       tour,
       eventName: tourEvent.eventName,
+      startDate: tourEvent.startDate.toISOString(),
+      endDate: tourEvent.endDate.toISOString(),
+      status,
+      daysUntilStart: null,
       updatedAt: new Date().toISOString(),
       rows,
       dataIssues: issues

@@ -1,17 +1,20 @@
-import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { useState, useMemo } from 'react';
+import { api } from '@/api/client';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
-import { format, subWeeks } from 'date-fns';
+import { format } from 'date-fns';
 import { 
   BarChart3, 
-  TrendingUp, 
-  TrendingDown, 
   Target, 
   Zap, 
   Trophy,
   Calendar,
-  ChevronDown
+  Award,
+  Clock,
+  TrendingUp,
+  TrendingDown,
+  CheckCircle,
+  XCircle
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -27,75 +30,72 @@ import EmptyState from '@/components/ui/EmptyState';
 const categoryIcons = {
   par: Target,
   birdie: Zap,
-  eagle: Trophy
+  eagle: Trophy,
+  longshots: Award
 };
 
 const categoryColors = {
   par: 'text-emerald-400',
   birdie: 'text-amber-400',
-  eagle: 'text-violet-400'
+  eagle: 'text-violet-400',
+  longshots: 'text-rose-400'
+};
+
+const categoryBgColors = {
+  par: 'bg-emerald-500/20 border-emerald-500/30',
+  birdie: 'bg-amber-500/20 border-amber-500/30',
+  eagle: 'bg-violet-500/20 border-violet-500/30',
+  longshots: 'bg-rose-500/20 border-rose-500/30'
+};
+
+const OutcomeBadge = ({ outcome }) => {
+  if (outcome === 'won') {
+    return (
+      <Badge className="bg-emerald-500/30 text-emerald-300 border border-emerald-500/50 font-bold px-3 py-1">
+        <CheckCircle className="w-4 h-4 mr-1" />
+        WON
+      </Badge>
+    );
+  }
+  if (outcome === 'lost') {
+    return (
+      <Badge className="bg-red-500/20 text-red-400 border border-red-500/50 px-2 py-0.5 text-xs">
+        <XCircle className="w-3 h-3 mr-1" />
+        Lost
+      </Badge>
+    );
+  }
+  return (
+    <Badge className="bg-slate-500/20 text-slate-400 border border-slate-500/50 px-2 py-0.5 text-xs">
+      Pending
+    </Badge>
+  );
 };
 
 export default function Results() {
   const [selectedWeek, setSelectedWeek] = useState('all');
 
-  const { data: settledBets = [], isLoading } = useQuery({
-    queryKey: ['settledBets'],
-    queryFn: () => base44.entities.GolfBet.filter(
-      { status: { $in: ['settled_won', 'settled_lost', 'settled_void', 'settled_push'] } },
-      '-settled_at',
-      500
-    )
+  // Fetch historical picks from completed tournaments
+  const { data: resultsData, isLoading, error } = useQuery({
+    queryKey: ['historicalPicks', selectedWeek],
+    queryFn: () => api.getSettledResults(selectedWeek),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
   });
 
-  // Get unique weeks
-  const weeks = [...new Set(settledBets.map(b => b.run_id))].filter(Boolean);
+  const picks = resultsData?.data || [];
+  const stats = resultsData?.stats || { total: 0, totalPicks: 0, wins: 0, losses: 0, winRate: 0 };
+  const categoryStats = resultsData?.categoryStats || [];
+  const tourStats = resultsData?.tourStats || [];
+  const availableWeeks = resultsData?.availableWeeks || [];
 
-  // Filter by week
-  const filteredBets = selectedWeek === 'all' 
-    ? settledBets 
-    : settledBets.filter(b => b.run_id === selectedWeek);
-
-  // Calculate stats
-  const stats = {
-    total: filteredBets.length,
-    won: filteredBets.filter(b => b.status === 'settled_won').length,
-    lost: filteredBets.filter(b => b.status === 'settled_lost').length,
-    void: filteredBets.filter(b => b.status === 'settled_void' || b.status === 'settled_push').length
-  };
-
-  stats.hitRate = stats.total > 0 ? ((stats.won / (stats.won + stats.lost)) * 100).toFixed(1) : 0;
-
-  // Category breakdown
-  const categoryStats = ['par', 'birdie', 'eagle'].map(cat => {
-    const catBets = filteredBets.filter(b => b.category === cat);
-    const won = catBets.filter(b => b.status === 'settled_won').length;
-    const lost = catBets.filter(b => b.status === 'settled_lost').length;
-    const total = won + lost;
-    return {
-      category: cat,
-      total: catBets.length,
-      won,
-      lost,
-      hitRate: total > 0 ? ((won / total) * 100).toFixed(1) : 0
-    };
-  });
-
-  // Tour breakdown
-  const tours = ['PGA', 'LPGA', 'LIV'];
-  const tourStats = tours.map(tour => {
-    const tourBets = filteredBets.filter(b => b.tour === tour);
-    const won = tourBets.filter(b => b.status === 'settled_won').length;
-    const lost = tourBets.filter(b => b.status === 'settled_lost').length;
-    const total = won + lost;
-    return {
-      tour,
-      total: tourBets.length,
-      won,
-      lost,
-      hitRate: total > 0 ? ((won / total) * 100).toFixed(1) : 0
-    };
-  }).filter(t => t.total > 0);
+  // Separate and sort picks - wins first (by odds), then losses (by odds)
+  const { winningPicks, losingPicks, pendingPicks } = useMemo(() => {
+    const wins = picks.filter(p => p.outcome === 'won').sort((a, b) => (b.odds_decimal_best || 0) - (a.odds_decimal_best || 0));
+    const losses = picks.filter(p => p.outcome === 'lost').sort((a, b) => (b.odds_decimal_best || 0) - (a.odds_decimal_best || 0));
+    const pending = picks.filter(p => !p.outcome || p.outcome === 'pending');
+    return { winningPicks: wins, losingPicks: losses, pendingPicks: pending };
+  }, [picks]);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
@@ -107,11 +107,11 @@ export default function Results() {
       >
         <div className="flex items-center gap-3 mb-3">
           <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-teal-500/30 to-emerald-500/20 border border-teal-500/30 flex items-center justify-center">
-            <BarChart3 className="w-6 h-6 text-teal-400" />
+            <Trophy className="w-6 h-6 text-teal-400" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold text-white">Results</h1>
-            <p className="text-slate-400">Historical performance and transparency</p>
+            <h1 className="text-3xl font-bold text-white">Our Picks</h1>
+            <p className="text-slate-400">Historical selections from completed tournaments</p>
           </div>
         </div>
       </motion.div>
@@ -125,9 +125,9 @@ export default function Results() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Time</SelectItem>
-            {weeks.map(week => (
+            {availableWeeks.map(week => (
               <SelectItem key={week} value={week}>
-                {week.replace('weekly_', 'Week of ')}
+                {week.replace('weekly_', 'Week of ').replace(/_/g, ' ')}
               </SelectItem>
             ))}
           </SelectContent>
@@ -135,78 +135,91 @@ export default function Results() {
       </div>
 
       {isLoading ? (
-        <LoadingSpinner text="Loading results..." />
-      ) : filteredBets.length === 0 ? (
+        <LoadingSpinner text="Loading picks..." />
+      ) : error ? (
         <EmptyState
           icon={BarChart3}
-          title="No Results Yet"
-          description="Results will appear here after bets are settled."
+          title="Error Loading Picks"
+          description="Could not fetch historical picks. Please try again later."
+        />
+      ) : picks.length === 0 ? (
+        <EmptyState
+          icon={Clock}
+          title="No Historical Picks Yet"
+          description="Picks from completed tournaments will appear here. Check back after your first tournament ends!"
         />
       ) : (
         <>
-          {/* Overall Stats */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-10">
-            <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
-              <div className="text-3xl font-bold text-white">{stats.total}</div>
-              <div className="text-sm text-slate-400 mt-1">Total Settled</div>
+          {/* Win/Loss Summary - Hero Section */}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="mb-8 p-6 bg-gradient-to-r from-emerald-900/40 via-slate-800/50 to-rose-900/20 rounded-2xl border border-emerald-500/30"
+          >
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+              <div className="text-center">
+                <div className="text-5xl font-bold text-emerald-400">{stats.wins || 0}</div>
+                <div className="text-emerald-300 font-medium mt-1 flex items-center justify-center gap-1">
+                  <Trophy className="w-4 h-4" />
+                  Winners
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-5xl font-bold text-red-400">{stats.losses || 0}</div>
+                <div className="text-red-300 font-medium mt-1 flex items-center justify-center gap-1">
+                  <XCircle className="w-4 h-4" />
+                  Losses
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-5xl font-bold text-white">{stats.total || 0}</div>
+                <div className="text-slate-400 font-medium mt-1">Total Picks</div>
+              </div>
+              <div className="text-center">
+                <div className="text-5xl font-bold text-amber-400">
+                  {stats.winRate || 0}%
+                </div>
+                <div className="text-amber-300 font-medium mt-1 flex items-center justify-center gap-1">
+                  <TrendingUp className="w-4 h-4" />
+                  Win Rate
+                </div>
+              </div>
             </div>
-            <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
-              <div className="text-3xl font-bold text-emerald-400">{stats.won}</div>
-              <div className="text-sm text-slate-400 mt-1">Winners</div>
-            </div>
-            <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
-              <div className="text-3xl font-bold text-red-400">{stats.lost}</div>
-              <div className="text-sm text-slate-400 mt-1">Losers</div>
-            </div>
-            <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
-              <div className="text-3xl font-bold text-amber-400">{stats.void}</div>
-              <div className="text-sm text-slate-400 mt-1">Void/Push</div>
-            </div>
-            <div className="bg-gradient-to-br from-emerald-500/20 to-teal-500/10 rounded-xl border border-emerald-500/30 p-5">
-              <div className="text-3xl font-bold text-emerald-400">{stats.hitRate}%</div>
-              <div className="text-sm text-slate-400 mt-1">Hit Rate</div>
-            </div>
-          </div>
+          </motion.div>
 
-          {/* Category Breakdown */}
-          <div className="mb-10">
-            <h2 className="text-xl font-bold text-white mb-4">By Category</h2>
-            <div className="grid md:grid-cols-3 gap-4">
-              {categoryStats.map((cat, idx) => {
-                const Icon = categoryIcons[cat.category];
-                return (
-                  <motion.div
-                    key={cat.category}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: idx * 0.1 }}
-                    className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5"
-                  >
-                    <div className="flex items-center gap-3 mb-4">
-                      <Icon className={`w-5 h-5 ${categoryColors[cat.category]}`} />
-                      <span className="text-lg font-semibold text-white capitalize">{cat.category} Bets</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3 text-center">
-                      <div>
-                        <div className="text-xl font-bold text-emerald-400">{cat.won}</div>
-                        <div className="text-xs text-slate-500">Won</div>
+          {/* Category Breakdown with Win Stats */}
+          {categoryStats.filter(c => c.total > 0).length > 0 && (
+            <div className="mb-10">
+              <h2 className="text-xl font-bold text-white mb-4">By Category</h2>
+              <div className="grid md:grid-cols-4 gap-4">
+                {categoryStats.filter(c => c.total > 0).map((cat, idx) => {
+                  const Icon = categoryIcons[cat.category] || Target;
+                  const winRate = cat.total > 0 ? ((cat.wins || 0) / cat.total * 100).toFixed(0) : 0;
+                  return (
+                    <motion.div
+                      key={cat.category}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: idx * 0.1 }}
+                      className={`rounded-xl border p-5 ${categoryBgColors[cat.category] || 'bg-slate-800/30 border-slate-700/50'}`}
+                    >
+                      <div className="flex items-center gap-3 mb-2">
+                        <Icon className={`w-5 h-5 ${categoryColors[cat.category] || 'text-slate-400'}`} />
+                        <span className="text-lg font-semibold text-white capitalize">{cat.category}</span>
                       </div>
-                      <div>
-                        <div className="text-xl font-bold text-red-400">{cat.lost}</div>
-                        <div className="text-xs text-slate-500">Lost</div>
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-2xl font-bold text-emerald-400">{cat.wins || 0}</span>
+                        <span className="text-slate-400">/ {cat.total}</span>
+                        <span className="text-sm text-slate-500">({winRate}%)</span>
                       </div>
-                      <div>
-                        <div className="text-xl font-bold text-white">{cat.hitRate}%</div>
-                        <div className="text-xs text-slate-500">Hit Rate</div>
-                      </div>
-                    </div>
-                  </motion.div>
-                );
-              })}
+                    </motion.div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Tour Breakdown */}
+          {/* Tour Breakdown with Wins */}
           {tourStats.length > 0 && (
             <div className="mb-10">
               <h2 className="text-xl font-bold text-white mb-4">By Tour</h2>
@@ -216,23 +229,17 @@ export default function Results() {
                     <tr className="border-b border-slate-700/50">
                       <th className="text-left px-5 py-3 text-sm font-medium text-slate-400">Tour</th>
                       <th className="text-center px-5 py-3 text-sm font-medium text-slate-400">Total</th>
-                      <th className="text-center px-5 py-3 text-sm font-medium text-slate-400">Won</th>
-                      <th className="text-center px-5 py-3 text-sm font-medium text-slate-400">Lost</th>
-                      <th className="text-center px-5 py-3 text-sm font-medium text-slate-400">Hit Rate</th>
+                      <th className="text-center px-5 py-3 text-sm font-medium text-emerald-400">Wins</th>
+                      <th className="text-center px-5 py-3 text-sm font-medium text-red-400">Losses</th>
                     </tr>
                   </thead>
                   <tbody>
                     {tourStats.map((tour, idx) => (
                       <tr key={tour.tour} className={idx !== tourStats.length - 1 ? 'border-b border-slate-700/30' : ''}>
                         <td className="px-5 py-4 font-medium text-white">{tour.tour}</td>
-                        <td className="px-5 py-4 text-center text-slate-300">{tour.total}</td>
-                        <td className="px-5 py-4 text-center text-emerald-400">{tour.won}</td>
-                        <td className="px-5 py-4 text-center text-red-400">{tour.lost}</td>
-                        <td className="px-5 py-4 text-center">
-                          <span className={`font-semibold ${parseFloat(tour.hitRate) >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                            {tour.hitRate}%
-                          </span>
-                        </td>
+                        <td className="px-5 py-4 text-center text-slate-300 font-semibold">{tour.total}</td>
+                        <td className="px-5 py-4 text-center text-emerald-400 font-semibold">{tour.wins || 0}</td>
+                        <td className="px-5 py-4 text-center text-red-400 font-semibold">{tour.losses || 0}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -241,59 +248,122 @@ export default function Results() {
             </div>
           )}
 
-          {/* Recent Settled */}
-          <div>
-            <h2 className="text-xl font-bold text-white mb-4">Recent Results</h2>
-            <div className="space-y-3">
-              {filteredBets.slice(0, 20).map((bet, idx) => (
-                <motion.div
-                  key={bet.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: idx * 0.02 }}
-                  className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4 flex items-center justify-between"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                      bet.status === 'settled_won' 
-                        ? 'bg-emerald-500/20' 
-                        : bet.status === 'settled_lost'
-                        ? 'bg-red-500/20'
-                        : 'bg-amber-500/20'
-                    }`}>
-                      {bet.status === 'settled_won' ? (
-                        <TrendingUp className="w-5 h-5 text-emerald-400" />
-                      ) : bet.status === 'settled_lost' ? (
-                        <TrendingDown className="w-5 h-5 text-red-400" />
-                      ) : (
-                        <ChevronDown className="w-5 h-5 text-amber-400" />
-                      )}
-                    </div>
-                    <div>
-                      <div className="font-semibold text-white">{bet.selection_name}</div>
-                      <div className="text-sm text-slate-400">
-                        {bet.bet_title} • {bet.tournament_name}
+          {/* WINNING PICKS - Prominent Display */}
+          {winningPicks.length > 0 && (
+            <div className="mb-10">
+              <div className="flex items-center gap-3 mb-4">
+                <Trophy className="w-7 h-7 text-emerald-400" />
+                <h2 className="text-2xl font-bold text-emerald-400">Winners ({winningPicks.length})</h2>
+              </div>
+              
+              <div className="space-y-4">
+                {winningPicks.map((bet, idx) => (
+                    <motion.div
+                      key={bet.id}
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: Math.min(idx * 0.05, 0.5) }}
+                      className="bg-gradient-to-r from-emerald-900/40 to-slate-800/50 rounded-xl border-2 border-emerald-500/50 p-5 flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-5">
+                        <div className="w-14 h-14 rounded-xl bg-emerald-500/30 flex items-center justify-center">
+                          <Trophy className="w-7 h-7 text-emerald-400" />
+                        </div>
+                        <div>
+                          <div className="font-bold text-white text-xl">{bet.selection_name}</div>
+                          <div className="text-sm text-emerald-300 font-medium">
+                            {bet.market_key?.toUpperCase() || bet.bet_title}
+                            {bet.final_position && <span className="ml-2">• Finished #{bet.final_position}</span>}
+                            {bet.player_status && <span className="ml-2">• {bet.player_status}</span>}
+                          </div>
+                          <div className="text-xs text-slate-400 mt-1">
+                            {bet.tournament_name}
+                            {bet.tournament_end_date && (
+                              <span> • {format(new Date(bet.tournament_end_date), 'MMM d, yyyy')}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <Badge variant="outline" className="bg-slate-700/50 text-slate-300 border-slate-600">
+                          {bet.tour}
+                        </Badge>
+                        <div className="text-right">
+                          <div className="font-bold text-emerald-400 text-2xl">@ {bet.odds_display_best}</div>
+                          <OutcomeBadge outcome="won" />
+                        </div>
+                      </div>
+                    </motion.div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* LOSING PICKS - Smaller, Less Prominent */}
+          {losingPicks.length > 0 && (
+            <div className="mb-10">
+              <div className="flex items-center gap-2 mb-3">
+                <TrendingDown className="w-5 h-5 text-slate-500" />
+                <h2 className="text-lg font-medium text-slate-500">Losses ({losingPicks.length})</h2>
+              </div>
+              
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
+                {losingPicks.map((bet, idx) => (
+                  <motion.div
+                    key={bet.id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: Math.min(idx * 0.01, 0.3) }}
+                    className="bg-slate-800/20 rounded-lg border border-slate-700/30 p-3 flex items-center justify-between"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-slate-400 text-sm truncate">{bet.selection_name}</div>
+                      <div className="text-xs text-slate-500 truncate">
+                        {bet.market_key?.toUpperCase()} • {bet.tournament_name?.split(' ').slice(0, 2).join(' ')}
                       </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Badge variant="outline" className="bg-slate-700/50 text-slate-300 border-slate-600">
-                      {bet.tour}
-                    </Badge>
-                    <Badge variant="outline" className={`capitalize ${categoryColors[bet.category]} bg-transparent border-current/30`}>
-                      {bet.category}
-                    </Badge>
-                    <div className="text-right">
-                      <div className="font-bold text-white">{bet.odds_display_best}</div>
-                      {bet.result_position && (
-                        <div className="text-xs text-slate-500">Finished: {bet.result_position}</div>
-                      )}
+                    <div className="flex items-center gap-2 ml-2">
+                      <span className="text-slate-500 text-sm">@ {bet.odds_display_best}</span>
+                      <OutcomeBadge outcome="lost" />
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* PENDING PICKS - if any */}
+          {pendingPicks.length > 0 && (
+            <div className="mb-10">
+              <div className="flex items-center gap-2 mb-3">
+                <Clock className="w-5 h-5 text-slate-400" />
+                <h2 className="text-lg font-medium text-slate-400">Pending Settlement ({pendingPicks.length})</h2>
+              </div>
+              
+              <div className="text-sm text-slate-500 mb-3">
+                Awaiting final results data to determine outcomes.
+              </div>
+              
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
+                {pendingPicks.slice(0, 12).map((bet) => (
+                  <div
+                    key={bet.id}
+                    className="bg-slate-800/20 rounded-lg border border-slate-700/30 p-3"
+                  >
+                    <div className="font-medium text-slate-400 text-sm truncate">{bet.selection_name}</div>
+                    <div className="text-xs text-slate-500">
+                      {bet.market_key?.toUpperCase()} @ {bet.odds_display_best}
                     </div>
                   </div>
-                </motion.div>
-              ))}
+                ))}
+                {pendingPicks.length > 12 && (
+                  <div className="text-slate-500 text-sm flex items-center justify-center">
+                    +{pendingPicks.length - 12} more
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
     </div>

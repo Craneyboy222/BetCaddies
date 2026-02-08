@@ -145,6 +145,12 @@ export class BetCaddiesApi {
     return response.data || response
   }
 
+  async getSettledResults(week = 'all') {
+    const qs = week && week !== 'all' ? `?week=${encodeURIComponent(week)}` : ''
+    const response = await this.client.get(`/api/results${qs}`)
+    return response
+  }
+
   async getTournaments() {
     const response = await this.client.get('/api/tournaments')
     return response.data || response
@@ -285,6 +291,10 @@ export class BetCaddiesApi {
       delete: async (id) => {
         const response = await this.client.delete(`/api/entities/golf-bets/${id}`)
         return response.data || response
+      },
+      archiveOldBets: async () => {
+        const response = await this.client.post('/api/admin/archive-old-bets')
+        return response
       }
     },
 
@@ -507,6 +517,12 @@ export class BetCaddiesApi {
       calculateScores: async (id) => {
         const response = await this.client.post(`/api/entities/hio-challenges/${id}/calculate-scores`, {})
         return response.data || response
+      },
+      generateWeekly: async (prizeDescription) => {
+        const response = await this.client.post('/api/entities/hio-challenges/generate-weekly', {
+          prize_description: prizeDescription
+        })
+        return response.data || response
       }
     },
 
@@ -594,8 +610,8 @@ export class BetCaddiesApi {
             bestBookmaker: 'William Hill',
             bestOdds: 7.0,
             bet_title: 'Under par finish',
-              tour: 'LPGA',
-              tournament_name: 'LPGA Championship',
+              tour: 'DPWT',
+              tournament_name: 'DP World Tour Championship',
             analysis_paragraph: 'Rory McIlroy has excellent course history...',
             provider_best_slug: 'william-hill',
             odds_display_best: '7.0',
@@ -613,8 +629,8 @@ export class BetCaddiesApi {
             ],
             affiliate_link: 'https://example.com/william-hill',
             tourEvent: {
-                tour: 'LPGA',
-                eventName: 'LPGA Championship'
+                tour: 'DPWT',
+                eventName: 'DP World Tour Championship'
             }
           },
           {
@@ -678,10 +694,10 @@ export class BetCaddiesApi {
           },
           {
             id: '2',
-            tour: 'LPGA',
-            eventName: 'LPGA Championship',
+            tour: 'DPWT',
+            eventName: 'DP World Tour Championship',
             startDate: '2024-04-18',
-            location: 'Orlando, FL'
+            location: 'Dubai, UAE'
           },
           {
             id: '3',

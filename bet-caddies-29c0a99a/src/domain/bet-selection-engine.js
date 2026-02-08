@@ -9,11 +9,12 @@ export class BetSelectionEngine {
     }
 
     // Portfolio constraints
-    this.maxBetsPerPlayerPerTier = 2
+    this.maxBetsPerPlayerPerTier = 1  // Reduced since we're limiting to 5 per tier
+    this.betsPerTier = 5  // Maximum picks per tier (best of the best)
     this.minPerTourByTier = {
       // Only enforce minimums when those tours have candidates.
-      PAR: { PGA: 2, LPGA: 2 },
-      BIRDIE: { PGA: 2, LPGA: 2 },
+      PAR: { PGA: 1, DPWT: 1 },
+      BIRDIE: { PGA: 1, DPWT: 1 },
       EAGLE: {}
     }
   }
@@ -169,10 +170,10 @@ export class BetSelectionEngine {
       EAGLE: candidates.filter(c => c.bestOdds >= this.tierConstraints.EAGLE.minOdds)
     }
 
-    // Select exactly 10 from each tier
+    // Select exactly 5 from each tier (best of the best)
     for (const tier of ['PAR', 'BIRDIE', 'EAGLE']) {
       const tierCandidates = tieredCandidates[tier] || []
-      portfolio[tier] = this.selectFromTier(tierCandidates, 10, tier)
+      portfolio[tier] = this.selectFromTier(tierCandidates, this.betsPerTier, tier)
     }
 
     return portfolio
@@ -266,13 +267,25 @@ export class BetSelectionEngine {
   }
 
   calculateConfidence(edge) {
-    // Simple confidence calculation based on edge
+    // Improved confidence calculation with realistic edge thresholds
+    // Most golf betting edges are in the 1-5% range
     if (edge <= 0) return 1
-    if (edge > 0.1) return 5
-    if (edge > 0.07) return 4
-    if (edge > 0.05) return 3
-    if (edge > 0.03) return 2
-    return 1
+    if (edge > 0.06) return 5  // 6%+ edge = exceptional
+    if (edge > 0.04) return 4  // 4-6% edge = very good
+    if (edge > 0.025) return 3 // 2.5-4% edge = good
+    if (edge > 0.01) return 2  // 1-2.5% edge = moderate
+    return 1                   // <1% edge = low confidence
+  }
+
+  /**
+   * Calculate a 0-100 confidence score based on edge
+   * This provides more granular confidence than the 1-5 rating
+   */
+  calculateConfidenceScore(edge) {
+    if (edge <= 0) return 20
+    // Scale: 0% = 30, 3% = 55, 6% = 80, 10%+ = 95
+    const score = 30 + Math.min(65, Math.round(edge * 1000))
+    return Math.min(95, score)
   }
 
   generateAnalysisParagraph(candidate) {

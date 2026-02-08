@@ -83,8 +83,11 @@ export default function LongShots() {
             <Sparkles className="w-6 h-6 text-rose-400" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold text-white">The Long Shots</h1>
-            <p className="text-slate-400">60/1 odds and over • Extreme longshot selections</p>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold text-white">The Long Shots</h1>
+              <span className="px-2 py-0.5 text-xs font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-full">Top 5 Picks</span>
+            </div>
+            <p className="text-slate-400">60/1 odds and over • Our best extreme longshot selections</p>
           </div>
         </div>
       </motion.div>
@@ -144,7 +147,7 @@ export default function LongShots() {
       {/* Count */}
       {!isLoading && filteredBets.length > 0 && (
         <div className="mt-8 text-center text-slate-500 text-sm">
-          Showing {filteredBets.length} of {bets.length} Long Shots
+          Showing our top {filteredBets.length} Long Shots
         </div>
       )}
     </div>

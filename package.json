@@ -1,0 +1,13 @@
+{
+  "name": "betcaddies-root",
+  "private": true,
+  "scripts": {
+    "postinstall": "cd bet-caddies-29c0a99a && npm ci && npx prisma generate",
+    "build": "cd bet-caddies-29c0a99a && npm run build",
+    "server": "cd bet-caddies-29c0a99a && npm run server",
+    "start": "cd bet-caddies-29c0a99a && npm run server"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

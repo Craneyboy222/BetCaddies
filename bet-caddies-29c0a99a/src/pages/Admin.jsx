@@ -25,7 +25,8 @@ import {
   CreditCard,
   Trophy,
   LayoutTemplate,
-  Image
+  Image,
+  Archive
 } from 'lucide-react';
 import SubscriptionCRM from '@/components/admin/SubscriptionCRM';
 import HIOChallengeAdmin from '@/components/admin/HIOChallengeAdmin';
@@ -206,6 +207,24 @@ export default function Admin() {
   const deleteBetMutation = useMutation({
     mutationFn: (id) => api.entities.GolfBet.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['allBets'] })
+  });
+
+  const archiveOldBetsMutation = useMutation({
+    mutationFn: () => api.entities.GolfBet.archiveOldBets(),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['allBets'] });
+      toast({
+        title: 'Old Bets Archived',
+        description: data.message || `Archived ${data.archivedCount} bets from ${data.oldRunCount} old runs`
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: 'Archive Failed',
+        description: error.message || 'Failed to archive old bets',
+        variant: 'destructive'
+      });
+    }
   });
 
   const updateProviderMutation = useMutation({
@@ -1548,6 +1567,16 @@ export default function Admin() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-bold text-white">Manage Bets ({bets.length})</h2>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => archiveOldBetsMutation.mutate()}
+                disabled={archiveOldBetsMutation.isPending}
+                className="bg-amber-500/20 text-amber-400 border-amber-500/30 hover:bg-amber-500/30"
+              >
+                <Archive className="w-4 h-4 mr-2" />
+                {archiveOldBetsMutation.isPending ? 'Archiving...' : 'Archive Old Bets'}
+              </Button>
             </div>
 
             {betsLoading ? (
@@ -2541,7 +2570,7 @@ function UserEditForm({ user, onSave, onCancel, isSaving }) {
             })
           }
           className="bg-slate-800 border-slate-700"
-          placeholder="PGA, LIV, LPGA"
+          placeholder="PGA, LIV, DPWT"
         />
       </div>
 

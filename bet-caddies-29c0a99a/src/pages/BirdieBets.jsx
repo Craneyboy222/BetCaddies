@@ -82,8 +82,11 @@ export default function BirdieBets() {
             <Zap className="w-6 h-6 text-amber-400" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold text-white">Birdie Bets</h1>
-            <p className="text-slate-400">6/1 to 10/1 odds • Medium risk selections</p>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold text-white">Birdie Bets</h1>
+              <span className="px-2 py-0.5 text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full">Top 5 Picks</span>
+            </div>
+            <p className="text-slate-400">6/1 to 10/1 odds • Our best medium risk selections</p>
           </div>
         </div>
       </motion.div>
@@ -140,7 +143,7 @@ export default function BirdieBets() {
 
       {!isLoading && filteredBets.length > 0 && (
         <div className="mt-8 text-center text-slate-500 text-sm">
-          Showing {filteredBets.length} of {bets.length} Birdie Bets
+          Showing our top {filteredBets.length} Birdie Bets
         </div>
       )}
     </div>

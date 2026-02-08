@@ -29,7 +29,7 @@ import LoadingSpinner from '@/components/ui/LoadingSpinner';
 
 const tours = [
   { id: 'PGA', name: 'PGA Tour' },
-  { id: 'LPGA', name: 'LPGA Tour' },
+  { id: 'DPWT', name: 'DP World Tour' },
   { id: 'LIV', name: 'LIV Golf' }
 ];
 
