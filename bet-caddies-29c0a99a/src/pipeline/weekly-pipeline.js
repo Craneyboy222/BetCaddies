@@ -110,6 +110,9 @@ export class WeeklyPipeline {
 
       logStep('pipeline', `Starting weekly pipeline run: ${runKey}`)
 
+      // Auto-archive bets from old runs before starting a new run
+      await this.archiveOldBets()
+
       const existingRun = await prisma.run.findUnique({
         where: { runKey }
       })
@@ -243,6 +246,56 @@ export class WeeklyPipeline {
       await prisma.runArtifact.deleteMany({
         where: { runId: run.id }
       })
+    }
+  }
+
+  async archiveOldBets() {
+    try {
+      const now = new Date()
+      
+      // Find all runs whose weekEnd is in the past
+      const oldRuns = await prisma.run.findMany({
+        where: {
+          weekEnd: { lt: now }
+        },
+        select: { id: true, runKey: true }
+      })
+
+      if (oldRuns.length === 0) {
+        logStep('pipeline', 'No old runs to archive')
+        return { archivedCount: 0 }
+      }
+
+      const oldRunIds = oldRuns.map(r => r.id)
+
+      // Find all bet recommendations from old runs that are not already archived
+      const betsToArchive = await prisma.betRecommendation.findMany({
+        where: {
+          runId: { in: oldRunIds },
+          OR: [
+            { override: null },
+            { override: { status: { not: 'archived' } } }
+          ]
+        },
+        select: { id: true }
+      })
+
+      let archivedCount = 0
+      for (const bet of betsToArchive) {
+        await prisma.betOverride.upsert({
+          where: { betRecommendationId: bet.id },
+          create: { betRecommendationId: bet.id, status: 'archived', pinned: false, pinOrder: null, tierOverride: null },
+          update: { status: 'archived', pinned: false, pinOrder: null, tierOverride: null }
+        })
+        archivedCount++
+      }
+
+      logStep('pipeline', `Auto-archived ${archivedCount} bets from ${oldRuns.length} old runs`)
+      return { archivedCount, oldRunCount: oldRuns.length }
+    } catch (error) {
+      logError('pipeline', error, { context: 'archiveOldBets' })
+      // Don't fail the pipeline if archiving fails
+      return { archivedCount: 0, error: error?.message }
     }
   }
 

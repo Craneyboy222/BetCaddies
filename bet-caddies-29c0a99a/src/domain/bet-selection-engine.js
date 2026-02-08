@@ -13,8 +13,8 @@ export class BetSelectionEngine {
     this.betsPerTier = 5  // Maximum picks per tier (best of the best)
     this.minPerTourByTier = {
       // Only enforce minimums when those tours have candidates.
-      PAR: { PGA: 1, LPGA: 1 },
-      BIRDIE: { PGA: 1, LPGA: 1 },
+      PAR: { PGA: 1, DPWT: 1 },
+      BIRDIE: { PGA: 1, DPWT: 1 },
       EAGLE: {}
     }
   }

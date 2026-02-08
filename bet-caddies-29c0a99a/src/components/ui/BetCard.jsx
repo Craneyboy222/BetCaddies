@@ -6,8 +6,11 @@ import { Badge } from '@/components/ui/badge';
 
 const tourColors = {
   PGA: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-  LPGA: 'bg-pink-500/20 text-pink-400 border-pink-500/30',
-  LIV: 'bg-orange-500/20 text-orange-400 border-orange-500/30'
+  DPWT: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
+  DP_WORLD: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
+  KFT: 'bg-teal-500/20 text-teal-400 border-teal-500/30',
+  LIV: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+  LPGA: 'bg-pink-500/20 text-pink-400 border-pink-500/30'
 };
 
 const categoryColors = {

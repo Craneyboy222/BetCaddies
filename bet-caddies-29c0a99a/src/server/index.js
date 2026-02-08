@@ -1988,6 +1988,60 @@ app.delete('/api/entities/golf-bets/:id', authRequired, adminOnly, async (req, r
   }
 })
 
+// Archive all bets from runs whose weekEnd has passed
+app.post('/api/admin/archive-old-bets', authRequired, adminOnly, async (req, res) => {
+  try {
+    const now = new Date()
+    
+    // Find all runs whose weekEnd is in the past
+    const oldRuns = await prisma.run.findMany({
+      where: {
+        weekEnd: { lt: now }
+      },
+      select: { id: true, runKey: true }
+    })
+
+    if (oldRuns.length === 0) {
+      return res.json({ success: true, archivedCount: 0, message: 'No old runs found' })
+    }
+
+    const oldRunIds = oldRuns.map(r => r.id)
+
+    // Find all bet recommendations from old runs that are not already archived
+    const betsToArchive = await prisma.betRecommendation.findMany({
+      where: {
+        runId: { in: oldRunIds },
+        OR: [
+          { override: null },
+          { override: { status: { not: 'archived' } } }
+        ]
+      },
+      select: { id: true }
+    })
+
+    let archivedCount = 0
+    for (const bet of betsToArchive) {
+      await prisma.betOverride.upsert({
+        where: { betRecommendationId: bet.id },
+        create: { betRecommendationId: bet.id, status: 'archived', pinned: false, pinOrder: null, tierOverride: null },
+        update: { status: 'archived', pinned: false, pinOrder: null, tierOverride: null }
+      })
+      archivedCount++
+    }
+
+    logger.info(`Archived ${archivedCount} bets from ${oldRuns.length} old runs`)
+    res.json({ 
+      success: true, 
+      archivedCount, 
+      oldRunCount: oldRuns.length,
+      message: `Archived ${archivedCount} bets from ${oldRuns.length} old runs` 
+    })
+  } catch (error) {
+    logger.error('Error archiving old bets:', error)
+    res.status(500).json({ error: 'Failed to archive old bets' })
+  }
+})
+
 app.get('/api/entities/tour-events', authRequired, adminOnly, async (req, res) => {
   try {
     const events = await prisma.tourEvent.findMany({
