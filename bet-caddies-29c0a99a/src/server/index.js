@@ -977,8 +977,11 @@ app.get('/api/results', async (req, res) => {
   try {
     const { week, limit = 500 } = req.query
     const now = new Date()
+    const startOfToday = new Date(now)
+    startOfToday.setHours(0, 0, 0, 0)
 
-    // Find all bet recommendations from completed tournaments (endDate < now)
+    // Find all bet recommendations from tournaments that have started
+    // We'll use live tracking detection to determine which are actually complete
     // Include archived bets - Results page should show all historical bets
     const bets = await prisma.betRecommendation.findMany({
       where: {
@@ -986,8 +989,8 @@ app.get('/api/results', async (req, res) => {
           status: 'completed'
         },
         tourEvent: {
-          endDate: {
-            lt: now // Tournament has ended
+          startDate: {
+            lte: now // Tournament has started
           }
         }
       },
