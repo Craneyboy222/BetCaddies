@@ -1429,6 +1429,55 @@ app.post('/api/admin/live-tracking/refresh', authRequired, adminOnly, async (req
   }
 })
 
+// Admin: consolidate duplicate tour events for a dgEventId
+// Keeps the tourEvent with the most bets, deletes others
+app.post('/api/admin/consolidate-tour-events', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { dgEventId, tour } = req.body
+    if (!dgEventId || !tour) {
+      return res.status(400).json({ error: 'dgEventId and tour are required' })
+    }
+
+    // Find all tourEvents for this dgEventId and tour
+    const tourEvents = await prisma.tourEvent.findMany({
+      where: { dgEventId: String(dgEventId), tour },
+      orderBy: { createdAt: 'desc' }
+    })
+
+    if (tourEvents.length <= 1) {
+      return res.json({ message: 'No duplicates to consolidate', count: tourEvents.length })
+    }
+
+    // Count bets for each
+    const eventCounts = await Promise.all(tourEvents.map(async (te) => {
+      const count = await prisma.betRecommendation.count({ where: { tourEventId: te.id } })
+      return { id: te.id, bets: count, createdAt: te.createdAt }
+    }))
+
+    // Keep the one with the most bets
+    eventCounts.sort((a, b) => b.bets - a.bets)
+    const keep = eventCounts[0]
+    const toDelete = eventCounts.slice(1)
+
+    // Delete duplicates (cascade will remove their bets too)
+    for (const td of toDelete) {
+      await prisma.tourEvent.delete({ where: { id: td.id } })
+    }
+
+    // Clear cache
+    liveTrackingService.clearCache()
+
+    res.json({
+      message: 'Consolidated tour events',
+      kept: { id: keep.id, bets: keep.bets },
+      deleted: toDelete.map(d => ({ id: d.id, bets: d.bets }))
+    })
+  } catch (error) {
+    logger.error('Error consolidating tour events', { error: error.message })
+    res.status(500).json({ error: 'Failed to consolidate tour events' })
+  }
+})
+
 app.post(
   '/api/membership-subscriptions/checkout',
   authRequired,
