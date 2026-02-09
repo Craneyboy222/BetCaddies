@@ -5,8 +5,8 @@ import { DataIssueTracker } from '../observability/data-issue-tracker.js'
 import { logger } from '../observability/logger.js'
 import { prisma } from '../db/client.js'
 
-// Debug version - used to verify deployment. Updated: 2026-02-08T17:30:00Z
-const LIVE_TRACKING_VERSION = 'v2.1.0-fix-all-picks'
+// Debug version - used to verify deployment. Updated: 2026-02-09T10:00:00Z
+const LIVE_TRACKING_VERSION = 'v2.2.0-fix-duplicate-tourEvent'
 
 const DEFAULT_TTL_MS = Number(process.env.LIVE_TRACKING_CACHE_TTL_MS || 300000)
 const DEFAULT_CONCURRENCY = Number(process.env.LIVE_TRACKING_MAX_CONCURRENCY || 3)
