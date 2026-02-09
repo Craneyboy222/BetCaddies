@@ -981,7 +981,7 @@ app.get('/api/results', async (req, res) => {
     startOfToday.setHours(0, 0, 0, 0)
 
     // Find all bet recommendations from tournaments that have started
-    // Exclude archived bets - old bets are archived when new pipeline runs
+    // Include ALL bets (even archived) for historical results record
     const bets = await prisma.betRecommendation.findMany({
       where: {
         run: {
@@ -991,12 +991,7 @@ app.get('/api/results', async (req, res) => {
           startDate: {
             lte: now // Tournament has started
           }
-        },
-        // Exclude archived bets
-        OR: [
-          { override: null },
-          { override: { status: { not: 'archived' } } }
-        ]
+        }
       },
       orderBy: [
         { confidence1To5: 'desc' },

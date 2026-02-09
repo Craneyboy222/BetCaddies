@@ -215,7 +215,12 @@ export const determineBetOutcome = (market, scoring, eventStatus) => {
   
   // For FRL (first round leader)
   if (marketKey === 'frl') {
-    // Would need R1 leaderboard data - mark as pending for now
+    if (status === 'MC' || status === 'WD' || status === 'DQ') return 'lost'
+    if (eventStatus === 'completed') {
+      // FRL = finished 1st after round 1. Position 1 after R1 wins.
+      if (position === 1) return 'won'
+      if (typeof position === 'number') return 'lost'
+    }
     return 'pending'
   }
   
@@ -393,26 +398,46 @@ export const createLiveTrackingService = ({
   }
 
   const getTrackedPlayersForEvent = async (dgEventId, tour) => {
-    // Find the most recent tourEvent with matching tour and dgEventId
-    // Order by createdAt DESC to get the latest pipeline run's event
-    let tourEvent = await prisma.tourEvent.findFirst({
+    // Find ALL tourEvents matching this dgEventId+tour (there may be duplicates)
+    const candidates = await prisma.tourEvent.findMany({
       where: { tour, dgEventId: String(dgEventId) },
       orderBy: { createdAt: 'desc' },
       include: {
-        run: { select: { id: true, status: true, runKey: true } }
+        run: { select: { id: true, status: true, runKey: true } },
+        _count: { select: { betRecommendations: true } }
       }
     })
 
     // Fallback: try finding by tourEvent.id directly
-    if (!tourEvent) {
-      tourEvent = await prisma.tourEvent.findFirst({
+    if (!candidates.length) {
+      const fallback = await prisma.tourEvent.findFirst({
         where: { tour, id: String(dgEventId) },
         orderBy: { createdAt: 'desc' },
         include: {
-          run: { select: { id: true, status: true, runKey: true } }
+          run: { select: { id: true, status: true, runKey: true } },
+          _count: { select: { betRecommendations: true } }
         }
       })
+      if (fallback) candidates.push(fallback)
     }
+
+    if (!candidates.length) return { tourEvent: null, picks: [] }
+
+    // Pick the tourEvent that actually has bets (prefer completed run with most bets)
+    let tourEvent = candidates[0] // default to newest
+    for (const c of candidates) {
+      if (c._count.betRecommendations > (tourEvent._count?.betRecommendations || 0)) {
+        tourEvent = c
+      }
+    }
+
+    logger.info('Live tracking: resolved tourEvent', {
+      tour, dgEventId,
+      candidates: candidates.length,
+      selectedId: tourEvent.id,
+      selectedBetCount: tourEvent._count?.betRecommendations,
+      runKey: tourEvent.run?.runKey
+    })
 
     if (!tourEvent) return { tourEvent: null, picks: [] }
 
