@@ -2255,10 +2255,22 @@ app.post('/api/admin/archive-old-bets', authRequired, adminOnly, async (req, res
   try {
     const now = new Date()
     
-    // Find all runs whose weekEnd is in the past
+    // Find the most recent completed run - preserve it
+    const latestRun = await prisma.run.findFirst({
+      where: { status: 'completed' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, runKey: true }
+    })
+
+    if (!latestRun) {
+      return res.json({ success: true, archivedCount: 0, message: 'No completed runs found' })
+    }
+    
+    // Find all OLD runs whose weekEnd is in the past (excluding latest)
     const oldRuns = await prisma.run.findMany({
       where: {
-        weekEnd: { lt: now }
+        weekEnd: { lt: now },
+        id: { not: latestRun.id }
       },
       select: { id: true, runKey: true }
     })
@@ -4226,13 +4238,28 @@ async function autoArchiveOldBets() {
   try {
     const now = new Date()
     
-    // Find all runs whose weekEnd is in the past
-    const oldRuns = await prisma.run.findMany({
-      where: { weekEnd: { lt: now } },
+    // Find the most recent completed run - we never archive this one
+    const latestRun = await prisma.run.findFirst({
+      where: { status: 'completed' },
+      orderBy: { createdAt: 'desc' },
       select: { id: true, runKey: true }
     })
 
-    if (oldRuns.length === 0) return
+    if (!latestRun) return
+
+    // Find all OTHER runs whose weekEnd is in the past (not the latest one)
+    const oldRuns = await prisma.run.findMany({
+      where: { 
+        weekEnd: { lt: now },
+        id: { not: latestRun.id }
+      },
+      select: { id: true, runKey: true }
+    })
+
+    if (oldRuns.length === 0) {
+      logger.info('Auto-archive: no old runs to archive (latest run preserved)')
+      return
+    }
 
     const oldRunIds = oldRuns.map(r => r.id)
 
@@ -4260,7 +4287,28 @@ async function autoArchiveOldBets() {
       archivedCount++
     }
 
+    // Also un-archive any bets from the latest run that were mistakenly archived
+    const latestRunBets = await prisma.betRecommendation.findMany({
+      where: {
+        runId: latestRun.id,
+        override: { status: 'archived' }
+      },
+      select: { id: true }
+    })
+
+    let unarchivedCount = 0
+    for (const bet of latestRunBets) {
+      await prisma.betOverride.update({
+        where: { betRecommendationId: bet.id },
+        data: { status: null }
+      })
+      unarchivedCount++
+    }
+
     logger.info(`Auto-archived ${archivedCount} bets from ${oldRuns.length} old runs: ${oldRuns.map(r => r.runKey).join(', ')}`)
+    if (unarchivedCount > 0) {
+      logger.info(`Un-archived ${unarchivedCount} bets from latest run: ${latestRun.runKey}`)
+    }
   } catch (error) {
     logger.error('Auto-archive failed:', { error: error.message })
   }
