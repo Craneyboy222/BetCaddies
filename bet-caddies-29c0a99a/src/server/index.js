@@ -981,8 +981,7 @@ app.get('/api/results', async (req, res) => {
     startOfToday.setHours(0, 0, 0, 0)
 
     // Find all bet recommendations from tournaments that have started
-    // We'll use live tracking detection to determine which are actually complete
-    // Include archived bets - Results page should show all historical bets
+    // Exclude archived bets - old bets are archived when new pipeline runs
     const bets = await prisma.betRecommendation.findMany({
       where: {
         run: {
@@ -992,7 +991,12 @@ app.get('/api/results', async (req, res) => {
           startDate: {
             lte: now // Tournament has started
           }
-        }
+        },
+        // Exclude archived bets
+        OR: [
+          { override: null },
+          { override: { status: { not: 'archived' } } }
+        ]
       },
       orderBy: [
         { confidence1To5: 'desc' },
@@ -1041,6 +1045,14 @@ app.get('/api/results', async (req, res) => {
       orderBy: { fetchedAt: 'desc' }
     })
     
+    // Also get the latest leaderboard snapshot from ANY round as ultimate fallback
+    const latestLeaderboards = await prisma.leaderboardSnapshot.findMany({
+      where: {
+        tourEventId: { in: tourEventIds }
+      },
+      orderBy: { fetchedAt: 'desc' }
+    })
+    
     // Create lookup maps
     const finalLeaderboardMap = new Map()
     for (const lb of leaderboards) {
@@ -1053,6 +1065,14 @@ app.get('/api/results', async (req, res) => {
     for (const lb of cutLeaderboards) {
       if (!cutLeaderboardMap.has(lb.tourEventId)) {
         cutLeaderboardMap.set(lb.tourEventId, lb.leaderboardJson)
+      }
+    }
+    
+    // Latest leaderboard from any round as fallback
+    const latestLeaderboardMap = new Map()
+    for (const lb of latestLeaderboards) {
+      if (!latestLeaderboardMap.has(lb.tourEventId)) {
+        latestLeaderboardMap.set(lb.tourEventId, lb.leaderboardJson)
       }
     }
     
@@ -1070,25 +1090,46 @@ app.get('/api/results', async (req, res) => {
         if (trackingData?.rows?.length) {
           const playerMap = new Map()
           for (const row of trackingData.rows) {
-            const key = row.playerName?.toLowerCase()
-            if (key) {
-              playerMap.set(key, {
+            const nameKey = row.playerName?.toLowerCase()
+            const market = row.market || ''
+            
+            // Store by player+market composite key to handle players with bets in multiple markets
+            if (nameKey) {
+              playerMap.set(`${nameKey}::${market}`, {
                 position: row.position,
                 status: row.playerStatus,
                 r3: row.r3,
                 r4: row.r4,
                 betOutcome: row.betOutcome // Pre-calculated by live tracking
               })
+              // Also store a name-only entry (without betOutcome) for position/scoring fallback
+              if (!playerMap.has(nameKey)) {
+                playerMap.set(nameKey, {
+                  position: row.position,
+                  status: row.playerStatus,
+                  r3: row.r3,
+                  r4: row.r4
+                  // Intentionally no betOutcome - will be recalculated per-market
+                })
+              }
             }
-            // Also map by dgPlayerId if available
+            // Also map by dgPlayerId+market if available
             if (row.dgPlayerId) {
-              playerMap.set(`id:${row.dgPlayerId}`, {
+              playerMap.set(`id:${row.dgPlayerId}::${market}`, {
                 position: row.position,
                 status: row.playerStatus,
                 r3: row.r3,
                 r4: row.r4,
                 betOutcome: row.betOutcome
               })
+              if (!playerMap.has(`id:${row.dgPlayerId}`)) {
+                playerMap.set(`id:${row.dgPlayerId}`, {
+                  position: row.position,
+                  status: row.playerStatus,
+                  r3: row.r3,
+                  r4: row.r4
+                })
+              }
             }
           }
           liveTrackingMap.set(tourEventId, playerMap)
@@ -1175,27 +1216,41 @@ app.get('/api/results', async (req, res) => {
       // Look up player in leaderboard
       const finalLb = finalLeaderboardMap.get(bet.tourEventId)
       const cutLb = cutLeaderboardMap.get(bet.tourEventId)
+      const latestLb = latestLeaderboardMap.get(bet.tourEventId)
       
-      // Try final leaderboard first, then cut leaderboard
+      // Try final leaderboard first, then cut leaderboard, then latest available
       let playerEntry = findPlayerInLeaderboard(finalLb, bet.dgPlayerId, bet.selection)
       if (!playerEntry) {
         playerEntry = findPlayerInLeaderboard(cutLb, bet.dgPlayerId, bet.selection)
       }
+      if (!playerEntry) {
+        playerEntry = findPlayerInLeaderboard(latestLb, bet.dgPlayerId, bet.selection)
+      }
+      
+      // Determine if event is completed based on endDate
+      const eventIsCompleted = bet.tourEvent?.endDate && new Date(bet.tourEvent.endDate) < now
+      const eventStatus = eventIsCompleted ? 'completed' : 'live'
       
       let scoring = parsePlayerScoring(playerEntry)
-      let outcome = determineBetOutcome(bet.marketKey, scoring, 'completed')
+      let outcome = determineBetOutcome(bet.marketKey, scoring, eventStatus)
       
       // Prefer live tracking data when available - it's more current than stored snapshots
       if (liveTrackingMap.has(bet.tourEventId)) {
         const livePlayerMap = liveTrackingMap.get(bet.tourEventId)
-        // Try by dgPlayerId first, then by name
-        let liveEntry = bet.dgPlayerId ? livePlayerMap.get(`id:${bet.dgPlayerId}`) : null
+        const betMarket = bet.marketKey || ''
+        
+        // Try by dgPlayerId+market first (most precise), then name+market, then fallback to position-only entries
+        let liveEntry = bet.dgPlayerId 
+          ? (livePlayerMap.get(`id:${bet.dgPlayerId}::${betMarket}`) || livePlayerMap.get(`id:${bet.dgPlayerId}`))
+          : null
         if (!liveEntry && bet.selection) {
-          liveEntry = livePlayerMap.get(bet.selection.toLowerCase())
+          const nameKey = bet.selection.toLowerCase()
+          liveEntry = livePlayerMap.get(`${nameKey}::${betMarket}`) || livePlayerMap.get(nameKey)
         }
         if (liveEntry) {
           scoring = liveEntry
-          // Use the pre-calculated betOutcome from live tracking if available
+          // Use the pre-calculated betOutcome from live tracking if it's a market-specific entry
+          // Otherwise recalculate from scoring data to avoid cross-market contamination
           outcome = liveEntry.betOutcome || determineBetOutcome(bet.marketKey, scoring, 'completed')
         }
       }
@@ -4166,15 +4221,66 @@ process.on('unhandledRejection', (reason, promise) => {
   // Don't exit the process, just log the error
 })
 
+// Auto-archive old bets on startup and periodically
+async function autoArchiveOldBets() {
+  try {
+    const now = new Date()
+    
+    // Find all runs whose weekEnd is in the past
+    const oldRuns = await prisma.run.findMany({
+      where: { weekEnd: { lt: now } },
+      select: { id: true, runKey: true }
+    })
+
+    if (oldRuns.length === 0) return
+
+    const oldRunIds = oldRuns.map(r => r.id)
+
+    // Find all bet recommendations from old runs that are not already archived
+    const betsToArchive = await prisma.betRecommendation.findMany({
+      where: {
+        runId: { in: oldRunIds },
+        OR: [
+          { override: null },
+          { override: { status: { not: 'archived' } } }
+        ]
+      },
+      select: { id: true }
+    })
+
+    if (betsToArchive.length === 0) return
+
+    let archivedCount = 0
+    for (const bet of betsToArchive) {
+      await prisma.betOverride.upsert({
+        where: { betRecommendationId: bet.id },
+        create: { betRecommendationId: bet.id, status: 'archived', pinned: false, pinOrder: null, tierOverride: null },
+        update: { status: 'archived', pinned: false, pinOrder: null, tierOverride: null }
+      })
+      archivedCount++
+    }
+
+    logger.info(`Auto-archived ${archivedCount} bets from ${oldRuns.length} old runs: ${oldRuns.map(r => r.runKey).join(', ')}`)
+  } catch (error) {
+    logger.error('Auto-archive failed:', { error: error.message })
+  }
+}
+
 // Start server with robust error handling
 const HOST = process.env.HOST || '0.0.0.0';
 try {
   await seedCmsPages()
+  
+  // Auto-archive old bets on startup
+  await autoArchiveOldBets()
+  
   app.listen(PORT, HOST, () => {
     logger.info(`BetCaddies API server running on http://${HOST}:${PORT}`);
     console.log(`BetCaddies API server running on http://${HOST}:${PORT}`);
     console.log('cwd:', process.cwd());
-    // For Railway: You may remove "dist exists" checks if not needed
+    
+    // Re-run auto-archive every 6 hours
+    setInterval(() => autoArchiveOldBets(), 6 * 60 * 60 * 1000)
   });
 } catch (error) {
   logger.error('Failed to start server', { error: error.message });
