@@ -1535,6 +1535,37 @@ app.get('/api/live-tracking/event/:dgEventId', async (req, res) => {
   }
 })
 
+// Debug: inspect tourEvent candidates for a dgEventId
+app.get('/api/debug/tour-events/:dgEventId', async (req, res) => {
+  try {
+    const { dgEventId } = req.params
+    const { tour } = req.query
+    const candidates = await prisma.tourEvent.findMany({
+      where: { dgEventId: String(dgEventId), ...(tour ? { tour } : {}) },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        run: { select: { id: true, status: true, runKey: true } },
+        _count: { select: { betRecommendations: true } }
+      }
+    })
+    res.json({
+      total: candidates.length,
+      candidates: candidates.map(c => ({
+        id: c.id,
+        tour: c.tour,
+        eventName: c.eventName,
+        dgEventId: c.dgEventId,
+        runKey: c.run?.runKey,
+        runStatus: c.run?.status,
+        createdAt: c.createdAt,
+        betCount: c._count?.betRecommendations
+      }))
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // Admin: clear live tracking cache
 app.post('/api/admin/live-tracking/refresh', authRequired, adminOnly, async (req, res) => {
   try {
