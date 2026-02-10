@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
 import { api } from '@/api/client';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Target, SlidersHorizontal } from 'lucide-react';
 import BetCard from '@/components/ui/BetCard';
@@ -20,8 +19,6 @@ export default function ParBets() {
   const [selectedTour, setSelectedTour] = useState('all');
   const [sortBy, setSortBy] = useState('confidence');
   const [user, setUser] = useState(null);
-  const queryClient = useQueryClient();
-
   useEffect(() => {
     const loadUser = async () => {
       try {
@@ -37,24 +34,10 @@ export default function ParBets() {
     queryFn: () => api.getBetsByTier('par')
   });
 
-  const { data: providers = [] } = useQuery({
-    queryKey: ['providers'],
-    queryFn: () => base44.entities.BettingProvider.filter({ enabled: true })
-  });
+  const providers = [];
+  const userBets = [];
 
-  const { data: userBets = [] } = useQuery({
-    queryKey: ['userBets'],
-    queryFn: () => user ? base44.entities.UserBet.filter({ created_by: user.email }) : [],
-    enabled: !!user
-  });
-
-  const addBetMutation = useMutation({
-    mutationFn: (bet) => base44.entities.UserBet.create({
-      golf_bet_id: bet.id,
-      status: 'added'
-    }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['userBets'] })
-  });
+  const addBetMutation = { mutate: () => {} };
 
   let filteredBets = bets.filter(bet => 
     selectedTour === 'all' || bet.tour === selectedTour

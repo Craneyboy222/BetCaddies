@@ -321,7 +321,7 @@ export default function Layout({ children, currentPageName }) {
       </AnimatePresence>
 
       {/* Main Content */}
-      <main className="relative pt-20 min-h-screen">
+      <main className="relative pt-[136px] min-h-screen">
         {children}
       </main>
 

@@ -160,54 +160,29 @@ export const DataGolfClient = {
       round
     }, { endpointName: 'historical-raw-data/holes' })
   },
-  /**
-   * DISABLED - Historical Odds Event List
-   * 
-   * STRICTLY FORBIDDEN per DataGolf API Agreement:
-   * > "Never access historical odds endpoints (historical-odds/*)"
-   * > "Only use live odds from /betting-tools/outrights and /betting-tools/matchups"
-   * 
-   * @deprecated DO NOT USE - This endpoint is forbidden
-   * @throws {Error} Always throws - endpoint disabled
-   */
   async getHistoricalOddsEventList(tour) {
-    logger.error('FORBIDDEN: getHistoricalOddsEventList called', { tour })
-    throw new Error(
-      'FORBIDDEN: Historical odds endpoints are disabled per DataGolf API agreement. ' +
-      'Use live odds from getOutrightsOdds() or getMatchupsOdds() instead.'
-    )
+    return request('/historical-odds/event-list', { tour }, { endpointName: 'historical-odds/event-list' })
   },
-
-  /**
-   * DISABLED - Historical Outrights
-   * 
-   * STRICTLY FORBIDDEN per DataGolf API Agreement.
-   * 
-   * @deprecated DO NOT USE - This endpoint is forbidden
-   * @throws {Error} Always throws - endpoint disabled
-   */
   async getHistoricalOutrights(tour, eventId, year, market, book) {
-    logger.error('FORBIDDEN: getHistoricalOutrights called', { tour, eventId, year, market, book })
-    throw new Error(
-      'FORBIDDEN: Historical odds endpoints are disabled per DataGolf API agreement. ' +
-      'Use live odds from getOutrightsOdds() instead.'
-    )
+    return request('/historical-odds/outrights', {
+      tour, event_id: eventId, year, market, book, odds_format: 'decimal'
+    }, { endpointName: 'historical-odds/outrights' })
   },
-
-  /**
-   * DISABLED - Historical Matchups
-   * 
-   * STRICTLY FORBIDDEN per DataGolf API Agreement.
-   * 
-   * @deprecated DO NOT USE - This endpoint is forbidden
-   * @throws {Error} Always throws - endpoint disabled
-   */
   async getHistoricalMatchups(tour, eventId, year, book) {
-    logger.error('FORBIDDEN: getHistoricalMatchups called', { tour, eventId, year, book })
-    throw new Error(
-      'FORBIDDEN: Historical odds endpoints are disabled per DataGolf API agreement. ' +
-      'Use live odds from getMatchupsOdds() instead.'
-    )
+    return request('/historical-odds/matchups', {
+      tour, event_id: eventId, year, book, odds_format: 'decimal'
+    }, { endpointName: 'historical-odds/matchups' })
+  },
+  async getHistoricalEventList(tour) {
+    return request('/historical-event-data/event-list', { tour }, { endpointName: 'historical-event-data/event-list' })
+  },
+  async getHistoricalEvents(tour, eventId, year) {
+    return request('/historical-event-data/events', {
+      tour, event_id: eventId, year
+    }, { endpointName: 'historical-event-data/events' })
+  },
+  async getFantasyProjectionDefaults(tour) {
+    return request('/preds/fantasy-projection-defaults', { tour }, { endpointName: 'preds/fantasy-projection-defaults' })
   }
 }
 
