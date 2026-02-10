@@ -16,6 +16,8 @@ import multer from 'multer'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
 import { liveTrackingService, determineBetOutcome } from '../live-tracking/live-tracking-service.js'
+import { DataGolfClient, normalizeDataGolfArray } from '../sources/datagolf/client.js'
+import { tourMap } from '../sources/datagolf/tourMap.js'
 import { createPlayerStatsService } from '../services/player-stats.js'
 
 // Initialize player stats service for real form/course fit data
@@ -1071,67 +1073,70 @@ app.get('/api/results', async (req, res) => {
       }
     }
     
-    // Fetch live tracking data for ALL events to get current scoring
-    // This provides real-time outcomes even when leaderboard snapshots are stale or missing
-    const liveTrackingMap = new Map() // tourEventId -> Map<selectionName, { position, status, r3, r4, betOutcome }>
+    // Fetch final standings directly from DataGolf API for each tour
+    // This is the authoritative source for final positions after tournaments complete
+    const dgStandingsMap = new Map() // dg_id (string) -> { position, status, r1, r2, r3, r4 }
     
-    // Fetch live tracking data for all events
-    for (const tourEventId of tourEventIds) {
-      const te = tourEventMap.get(tourEventId)
-      if (!te?.dgEventId) continue
+    // Determine unique tours that need standings data
+    const toursNeeded = [...new Set(tourEvents.map(te => te.tour).filter(Boolean))]
+    
+    for (const tour of toursNeeded) {
+      const dgTourCode = tourMap[tour]?.preds
+      if (!dgTourCode) continue
       
       try {
-        const trackingData = await liveTrackingService.getEventTracking({ dgEventId: te.dgEventId, tour: te.tour })
-        if (trackingData?.rows?.length) {
-          const playerMap = new Map()
-          for (const row of trackingData.rows) {
-            const nameKey = row.playerName?.toLowerCase()
-            const market = row.market || ''
-            
-            // Store by player+market composite key to handle players with bets in multiple markets
-            if (nameKey) {
-              playerMap.set(`${nameKey}::${market}`, {
-                position: row.position,
-                status: row.playerStatus,
-                r3: row.r3,
-                r4: row.r4,
-                betOutcome: row.betOutcome // Pre-calculated by live tracking
-              })
-              // Also store a name-only entry (without betOutcome) for position/scoring fallback
-              if (!playerMap.has(nameKey)) {
-                playerMap.set(nameKey, {
-                  position: row.position,
-                  status: row.playerStatus,
-                  r3: row.r3,
-                  r4: row.r4
-                  // Intentionally no betOutcome - will be recalculated per-market
-                })
-              }
+        const data = await DataGolfClient.getInPlayPreds(dgTourCode)
+        const rows = normalizeDataGolfArray(data)
+        for (const row of rows) {
+          if (!row.dg_id) continue
+          const rawPos = row.current_pos ?? row.position ?? null
+          let position = null
+          let status = null
+          
+          if (typeof rawPos === 'string') {
+            const norm = rawPos.toUpperCase().trim()
+            if (norm === 'MC' || norm === 'CUT' || norm === 'MISSED CUT') {
+              status = 'MC'
+            } else if (norm === 'WD' || norm === 'W/D') {
+              status = 'WD'
+            } else if (norm === 'DQ') {
+              status = 'DQ'
+            } else {
+              position = parseInt(norm.replace('T', ''), 10)
+              if (isNaN(position)) position = null
             }
-            // Also map by dgPlayerId+market if available
-            if (row.dgPlayerId) {
-              playerMap.set(`id:${row.dgPlayerId}::${market}`, {
-                position: row.position,
-                status: row.playerStatus,
-                r3: row.r3,
-                r4: row.r4,
-                betOutcome: row.betOutcome
-              })
-              if (!playerMap.has(`id:${row.dgPlayerId}`)) {
-                playerMap.set(`id:${row.dgPlayerId}`, {
-                  position: row.position,
-                  status: row.playerStatus,
-                  r3: row.r3,
-                  r4: row.r4
-                })
-              }
-            }
+          } else if (typeof rawPos === 'number') {
+            position = rawPos
           }
-          liveTrackingMap.set(tourEventId, playerMap)
+          
+          // Also check make_cut field (0 = missed cut)
+          if (row.make_cut === 0 && !status) {
+            status = 'MC'
+          }
+          
+          dgStandingsMap.set(`${tour}:${String(row.dg_id)}`, {
+            position,
+            status,
+            r1: row.R1 ?? row.r1 ?? null,
+            r2: row.R2 ?? row.r2 ?? null,
+            r3: row.R3 ?? row.r3 ?? null,
+            r4: row.R4 ?? row.r4 ?? null
+          })
+          // Also index by name for fallback
+          if (row.player_name) {
+            dgStandingsMap.set(`${tour}:name:${row.player_name.toLowerCase()}`, {
+              position,
+              status,
+              r1: row.R1 ?? row.r1 ?? null,
+              r2: row.R2 ?? row.r2 ?? null,
+              r3: row.R3 ?? row.r3 ?? null,
+              r4: row.R4 ?? row.r4 ?? null
+            })
+          }
         }
+        logger.info(`Results: fetched ${rows.length} standings rows for ${tour}`)
       } catch (e) {
-        // Ignore errors - fallback won't be available
-        console.error(`Failed to fetch live tracking for ${tourEventId}:`, e.message)
+        logger.warn(`Results: failed to fetch DataGolf standings for ${tour}: ${e.message}`)
       }
     }
     
@@ -1229,24 +1234,19 @@ app.get('/api/results', async (req, res) => {
       let scoring = parsePlayerScoring(playerEntry)
       let outcome = determineBetOutcome(bet.marketKey, scoring, eventStatus)
       
-      // Prefer live tracking data when available - it's more current than stored snapshots
-      if (liveTrackingMap.has(bet.tourEventId)) {
-        const livePlayerMap = liveTrackingMap.get(bet.tourEventId)
-        const betMarket = bet.marketKey || ''
-        
-        // Try by dgPlayerId+market first (most precise), then name+market, then fallback to position-only entries
-        let liveEntry = bet.dgPlayerId 
-          ? (livePlayerMap.get(`id:${bet.dgPlayerId}::${betMarket}`) || livePlayerMap.get(`id:${bet.dgPlayerId}`))
-          : null
-        if (!liveEntry && bet.selection) {
-          const nameKey = bet.selection.toLowerCase()
-          liveEntry = livePlayerMap.get(`${nameKey}::${betMarket}`) || livePlayerMap.get(nameKey)
+      // Use DataGolf final standings as authoritative scoring source
+      const betTour = bet.tourEvent?.tour
+      if (betTour) {
+        let dgEntry = null
+        if (bet.dgPlayerId) {
+          dgEntry = dgStandingsMap.get(`${betTour}:${String(bet.dgPlayerId)}`)
         }
-        if (liveEntry) {
-          scoring = liveEntry
-          // Use the pre-calculated betOutcome from live tracking if it's a market-specific entry
-          // Otherwise recalculate from scoring data to avoid cross-market contamination
-          outcome = liveEntry.betOutcome || determineBetOutcome(bet.marketKey, scoring, 'completed')
+        if (!dgEntry && bet.selection) {
+          dgEntry = dgStandingsMap.get(`${betTour}:name:${bet.selection.toLowerCase()}`)
+        }
+        if (dgEntry) {
+          scoring = dgEntry
+          outcome = determineBetOutcome(bet.marketKey, scoring, eventStatus)
         }
       }
       
@@ -1532,37 +1532,6 @@ app.get('/api/live-tracking/event/:dgEventId', async (req, res) => {
   } catch (error) {
     logger.error('Error fetching live tracking event', { error: error.message })
     res.status(500).json({ error: 'Failed to load live tracking event' })
-  }
-})
-
-// Debug: inspect tourEvent candidates for a dgEventId
-app.get('/api/debug/tour-events/:dgEventId', async (req, res) => {
-  try {
-    const { dgEventId } = req.params
-    const { tour } = req.query
-    const candidates = await prisma.tourEvent.findMany({
-      where: { dgEventId: String(dgEventId), ...(tour ? { tour } : {}) },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        run: { select: { id: true, status: true, runKey: true } },
-        _count: { select: { betRecommendations: true } }
-      }
-    })
-    res.json({
-      total: candidates.length,
-      candidates: candidates.map(c => ({
-        id: c.id,
-        tour: c.tour,
-        eventName: c.eventName,
-        dgEventId: c.dgEventId,
-        runKey: c.run?.runKey,
-        runStatus: c.run?.status,
-        createdAt: c.createdAt,
-        betCount: c._count?.betRecommendations
-      }))
-    })
-  } catch (error) {
-    res.status(500).json({ error: error.message })
   }
 })
 
