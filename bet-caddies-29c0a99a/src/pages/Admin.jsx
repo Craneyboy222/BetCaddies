@@ -18,15 +18,18 @@ import {
   ArrowUp,
   ArrowDown,
   ChevronDown,
+  ChevronRight,
   BarChart3,
   Building2,
   Clock,
   Eye,
+  EyeOff,
   CreditCard,
   Trophy,
   LayoutTemplate,
   Image,
-  Archive
+  Archive,
+  Star
 } from 'lucide-react';
 import SubscriptionCRM from '@/components/admin/SubscriptionCRM';
 import HIOChallengeAdmin from '@/components/admin/HIOChallengeAdmin';
@@ -80,6 +83,8 @@ export default function Admin() {
   const [editingPage, setEditingPage] = useState(null);
   const [pageDraft, setPageDraft] = useState(null);
   const [creatingPage, setCreatingPage] = useState(false);
+  const [collapsedTiers, setCollapsedTiers] = useState({});
+  const [betShowArchived, setBetShowArchived] = useState(false);
   const [mediaUploading, setMediaUploading] = useState(false);
   const [mediaError, setMediaError] = useState(null);
 
@@ -222,6 +227,20 @@ export default function Admin() {
       toast({
         title: 'Archive Failed',
         description: error.message || 'Failed to archive old bets',
+        variant: 'destructive'
+      });
+    }
+  });
+
+  const toggleFeaturedMutation = useMutation({
+    mutationFn: ({ id, featured }) => api.entities.GolfBet.toggleFeatured(id, featured),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allBets'] });
+    },
+    onError: (error) => {
+      toast({
+        title: 'Toggle Failed',
+        description: error.message || 'Failed to update featured status',
         variant: 'destructive'
       });
     }
@@ -1565,86 +1584,231 @@ export default function Admin() {
         {/* Bets Tab */}
         <TabsContent value="bets">
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <h2 className="text-xl font-bold text-white">Manage Bets ({bets.length})</h2>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => archiveOldBetsMutation.mutate()}
-                disabled={archiveOldBetsMutation.isPending}
-                className="bg-amber-500/20 text-amber-400 border-amber-500/30 hover:bg-amber-500/30"
-              >
-                <Archive className="w-4 h-4 mr-2" />
-                {archiveOldBetsMutation.isPending ? 'Archiving...' : 'Archive Old Bets'}
-              </Button>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
+                  <Switch
+                    checked={betShowArchived}
+                    onCheckedChange={setBetShowArchived}
+                  />
+                  Show Archived
+                </label>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => archiveOldBetsMutation.mutate()}
+                  disabled={archiveOldBetsMutation.isPending}
+                  className="bg-amber-500/20 text-amber-400 border-amber-500/30 hover:bg-amber-500/30"
+                >
+                  <Archive className="w-4 h-4 mr-2" />
+                  {archiveOldBetsMutation.isPending ? 'Archiving...' : 'Archive Old Bets'}
+                </Button>
+              </div>
             </div>
+
+            {/* Summary stats */}
+            {!betsLoading && (() => {
+              const featuredCount = bets.filter(b => b.featured).length;
+              const archivedCount = bets.filter(b => !b.featured).length;
+              return (
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="bg-slate-800/30 rounded-lg border border-slate-700/50 p-3 text-center">
+                    <div className="text-2xl font-bold text-white">{bets.length}</div>
+                    <div className="text-xs text-slate-400">Total</div>
+                  </div>
+                  <div className="bg-emerald-500/10 rounded-lg border border-emerald-500/30 p-3 text-center">
+                    <div className="text-2xl font-bold text-emerald-400">{featuredCount}</div>
+                    <div className="text-xs text-emerald-400/70">Featured</div>
+                  </div>
+                  <div className="bg-slate-500/10 rounded-lg border border-slate-500/30 p-3 text-center">
+                    <div className="text-2xl font-bold text-slate-400">{archivedCount}</div>
+                    <div className="text-xs text-slate-400/70">Archived</div>
+                  </div>
+                  <div className="bg-amber-500/10 rounded-lg border border-amber-500/30 p-3 text-center">
+                    <div className="text-2xl font-bold text-amber-400">{bets.filter(b => b.pinned).length}</div>
+                    <div className="text-xs text-amber-400/70">Pinned</div>
+                  </div>
+                  <div className="bg-blue-500/10 rounded-lg border border-blue-500/30 p-3 text-center">
+                    <div className="text-2xl font-bold text-blue-400">
+                      {[...new Set(bets.filter(b => b.featured).map(b => b.tour).filter(Boolean))].length}
+                    </div>
+                    <div className="text-xs text-blue-400/70">Tours Active</div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {betsLoading ? (
               <LoadingSpinner />
-            ) : (
-              <div className="space-y-3">
-                {bets.map(bet => (
-                  <div
-                    key={bet.id}
-                    className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-2">
-                          <Badge variant="outline" className={
-                            bet.status === 'active' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
-                            'bg-slate-500/20 text-slate-400 border-slate-500/30'
-                          }>
-                            {bet.status}
-                          </Badge>
-                          {bet.pinned && (
-                            <Badge variant="outline" className="bg-amber-500/20 text-amber-400 border-amber-500/30">
-                              Pinned
-                            </Badge>
-                          )}
-                          {bet.tier_override && (
-                            <Badge variant="outline" className="bg-violet-500/20 text-violet-400 border-violet-500/30">
-                              Tier: {String(bet.tier_override).toUpperCase()}
-                            </Badge>
-                          )}
-                          <Badge variant="outline" className="bg-slate-700/50 text-slate-300 border-slate-600">
-                            {bet.tour}
-                          </Badge>
-                          <Badge variant="outline" className="bg-slate-700/50 text-slate-300 border-slate-600 capitalize">
-                            {bet.category}
-                          </Badge>
-                        </div>
-                        <div className="font-semibold text-white">{bet.selection_name}</div>
-                        <div className="text-sm text-slate-400">
-                          {bet.bet_title} • {bet.tournament_name}
-                        </div>
-                        <div className="text-sm text-slate-500 mt-1">
-                          Confidence: {bet.confidence_rating}/5 • Odds: {bet.odds_display_best}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setEditingBet(bet)}
-                          className="text-slate-400 hover:text-white"
+            ) : (() => {
+              const TIER_CONFIG = [
+                { key: 'par', label: 'PAR', description: 'Conservative picks', color: 'emerald', icon: '🟢' },
+                { key: 'birdie', label: 'BIRDIE', description: 'Moderate value', color: 'blue', icon: '🔵' },
+                { key: 'eagle', label: 'EAGLE', description: 'High value picks', color: 'violet', icon: '🟣' },
+                { key: 'long_shots', label: 'LONGSHOTS', description: 'High risk / high reward', color: 'amber', icon: '🟡' },
+                { key: 'uncategorized', label: 'UNCATEGORIZED', description: 'No tier assigned', color: 'slate', icon: '⚪' }
+              ];
+
+              const colorMap = {
+                emerald: { border: 'border-emerald-500/30', bg: 'bg-emerald-500/10', text: 'text-emerald-400', headerBg: 'bg-emerald-500/20' },
+                blue: { border: 'border-blue-500/30', bg: 'bg-blue-500/10', text: 'text-blue-400', headerBg: 'bg-blue-500/20' },
+                violet: { border: 'border-violet-500/30', bg: 'bg-violet-500/10', text: 'text-violet-400', headerBg: 'bg-violet-500/20' },
+                amber: { border: 'border-amber-500/30', bg: 'bg-amber-500/10', text: 'text-amber-400', headerBg: 'bg-amber-500/20' },
+                slate: { border: 'border-slate-600/50', bg: 'bg-slate-700/10', text: 'text-slate-400', headerBg: 'bg-slate-700/30' }
+              };
+
+              const filteredBets = betShowArchived ? bets : bets.filter(b => b.featured);
+
+              const groupedBets = TIER_CONFIG.reduce((acc, tier) => {
+                const tierBets = filteredBets.filter(b => {
+                  const betTier = (b.category || '').toLowerCase().replace(/[\s-]/g, '_');
+                  if (tier.key === 'uncategorized') {
+                    return !betTier || !['par', 'birdie', 'eagle', 'long_shots', 'longshots'].includes(betTier);
+                  }
+                  return betTier === tier.key || (tier.key === 'long_shots' && betTier === 'longshots');
+                });
+                acc[tier.key] = tierBets;
+                return acc;
+              }, {});
+
+              return (
+                <div className="space-y-4">
+                  {TIER_CONFIG.map(tier => {
+                    const tierBets = groupedBets[tier.key] || [];
+                    if (tierBets.length === 0) return null;
+                    const isCollapsed = collapsedTiers[tier.key];
+                    const colors = colorMap[tier.color];
+                    const featuredInTier = tierBets.filter(b => b.featured).length;
+
+                    return (
+                      <div key={tier.key} className={`rounded-xl border ${colors.border} overflow-hidden`}>
+                        {/* Tier header */}
+                        <button
+                          onClick={() => setCollapsedTiers(prev => ({ ...prev, [tier.key]: !prev[tier.key] }))}
+                          className={`w-full flex items-center justify-between px-4 py-3 ${colors.headerBg} hover:opacity-90 transition-opacity`}
                         >
-                          <Edit2 className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => deleteBetMutation.mutate(bet.id)}
-                          className="text-slate-400 hover:text-red-400"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
+                          <div className="flex items-center gap-3">
+                            <span className="text-lg">{tier.icon}</span>
+                            <div className="text-left">
+                              <span className={`font-bold ${colors.text}`}>{tier.label}</span>
+                              <span className="text-xs text-slate-400 ml-2">{tier.description}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <Badge variant="outline" className={`${colors.bg} ${colors.text} ${colors.border}`}>
+                              {tierBets.length} bets
+                            </Badge>
+                            <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
+                              <Star className="w-3 h-3 mr-1" />
+                              {featuredInTier} featured
+                            </Badge>
+                            {isCollapsed ? (
+                              <ChevronRight className={`w-5 h-5 ${colors.text}`} />
+                            ) : (
+                              <ChevronDown className={`w-5 h-5 ${colors.text}`} />
+                            )}
+                          </div>
+                        </button>
+
+                        {/* Tier bets */}
+                        {!isCollapsed && (
+                          <div className="divide-y divide-slate-700/30">
+                            {tierBets.map(bet => (
+                              <div
+                                key={bet.id}
+                                className={`px-4 py-3 flex items-center gap-4 ${
+                                  !bet.featured ? 'opacity-50 bg-slate-900/30' : 'bg-slate-800/20'
+                                } hover:bg-slate-700/20 transition-colors`}
+                              >
+                                {/* Featured toggle */}
+                                <button
+                                  onClick={() => toggleFeaturedMutation.mutate({ id: bet.id, featured: !bet.featured })}
+                                  disabled={toggleFeaturedMutation.isPending}
+                                  title={bet.featured ? 'Remove from frontend' : 'Add to frontend'}
+                                  className={`flex-shrink-0 p-1.5 rounded-lg transition-colors ${
+                                    bet.featured 
+                                      ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30' 
+                                      : 'bg-slate-700/30 text-slate-500 hover:bg-slate-700/50 hover:text-slate-300'
+                                  }`}
+                                >
+                                  {bet.featured ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                                </button>
+
+                                {/* Bet info */}
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-0.5">
+                                    <span className="font-semibold text-white text-sm truncate">{bet.selection_name}</span>
+                                    {bet.pinned && (
+                                      <Badge variant="outline" className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-[10px] px-1.5 py-0">
+                                        Pinned
+                                      </Badge>
+                                    )}
+                                    {bet.featured && (
+                                      <Badge variant="outline" className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-[10px] px-1.5 py-0">
+                                        <Star className="w-2.5 h-2.5 mr-0.5" />
+                                        Featured
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-slate-400 truncate">
+                                    {bet.bet_title} • {bet.tournament_name}
+                                  </div>
+                                </div>
+
+                                {/* Tour badge */}
+                                {bet.tour && (
+                                  <Badge variant="outline" className="bg-slate-700/40 text-slate-300 border-slate-600 text-[10px] flex-shrink-0">
+                                    {bet.tour}
+                                  </Badge>
+                                )}
+
+                                {/* Market type */}
+                                {bet.market_key && (
+                                  <span className="text-[10px] text-slate-500 flex-shrink-0 font-mono">
+                                    {bet.market_key}
+                                  </span>
+                                )}
+
+                                {/* Confidence */}
+                                <div className="flex-shrink-0 text-xs text-slate-400 w-8 text-center" title="Confidence">
+                                  {bet.confidence_rating}/5
+                                </div>
+
+                                {/* Odds */}
+                                <div className="flex-shrink-0 text-xs text-white font-mono w-12 text-right">
+                                  {bet.odds_display_best || '—'}
+                                </div>
+
+                                {/* Actions */}
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => setEditingBet(bet)}
+                                    className="text-slate-400 hover:text-white h-7 w-7"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => deleteBetMutation.mutate(bet.id)}
+                                    className="text-slate-400 hover:text-red-400 h-7 w-7"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         </TabsContent>
 

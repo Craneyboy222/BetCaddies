@@ -2149,10 +2149,14 @@ app.get('/api/entities/golf-bets', authRequired, adminOnly, async (req, res) => 
       pinned: bet.override?.pinned === true,
       pin_order: Number.isFinite(bet.override?.pinOrder) ? bet.override.pinOrder : null,
       category: (bet.override?.tierOverride || bet.tier)?.toLowerCase(),
+      tier_raw: bet.tier || null,
+      market_key: bet.marketKey || null,
+      featured: bet.override?.status !== 'archived',
       tour: bet.tourEvent?.tour || null,
       tournament_name: bet.tourEvent?.eventName || null,
       odds_display_best: bet.bestOdds?.toString() || '',
       odds_decimal_best: bet.bestOdds,
+      edge: bet.edge || null,
       created_date: bet.createdAt?.toISOString?.() || bet.createdAt
     }))
     res.json({ data: formatted })
