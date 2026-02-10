@@ -29,6 +29,7 @@ export const normalizeName = (name) => {
   if (!name) return ''
   return String(name).trim().toLowerCase()
     .replace(/[^\x00-\x7F]/g, ch => DIACRITICS[ch] || '')
+    .replace(/[.'"\-,]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
