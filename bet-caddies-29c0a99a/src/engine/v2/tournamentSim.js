@@ -31,7 +31,8 @@ export const simulateTournament = ({
   rounds = 4,
   simCount = 10000,
   seed = null,
-  cutRules = defaultCutRules
+  cutRules = defaultCutRules,
+  exportScores = false
 } = {}) => {
   const normalizedSimCount = Number.isFinite(simCount) && simCount > 0 ? Math.floor(simCount) : 1
   const normalizedPlayers = players.map((player, index) => {
@@ -75,6 +76,9 @@ export const simulateTournament = ({
     })
   }
 
+  // Per-sim final scores for matchup/three-ball markets
+  const simScores = exportScores ? [] : null
+
   for (let sim = 0; sim < normalizedSimCount; sim += 1) {
     const roundScores = new Map()
     const totals = new Map()
@@ -117,6 +121,12 @@ export const simulateTournament = ({
           }
         }
       }
+    }
+
+    if (exportScores) {
+      const snapshot = {}
+      for (const [key, total] of totals) snapshot[key] = total
+      simScores.push(snapshot)
     }
 
     const rankedFinal = Array.from(totals.entries()).sort((a, b) => a[1] - b[1])
@@ -168,5 +178,5 @@ export const simulateTournament = ({
     })
   }
 
-  return { probabilities, simCount: normalizedSimCount }
+  return { probabilities, simCount: normalizedSimCount, ...(simScores ? { simScores } : {}) }
 }

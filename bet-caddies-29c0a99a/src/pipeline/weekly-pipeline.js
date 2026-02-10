@@ -16,6 +16,7 @@ import { ProbabilityEngineV2 } from '../engine/v2/probability-engine.js'
 import { buildPlayerParams } from '../engine/v2/player-params.js'
 import { simulateTournament } from '../engine/v2/tournamentSim.js'
 import { applyCalibration } from '../engine/v2/calibration/index.js'
+import { buildCourseProfile } from '../engine/v2/course-profile.js'
 import {
   clampProbability,
   impliedProbability,
@@ -46,8 +47,11 @@ export class WeeklyPipeline {
     this.playerNormalizer = new PlayerNormalizer()
     this.probabilityEngine = new ProbabilityEngineV2()
     this.tours = ['PGA', 'DPWT', 'KFT', 'LIV']
-    const maxDgInfluence = Number(process.env.DG_MAX_INFLUENCE || 0.35)
-    this.marketWeights = { sim: 1 - maxDgInfluence, dg: maxDgInfluence, mkt: 0 }
+    this.marketWeights = {
+      sim: Number(process.env.BLEND_WEIGHT_SIM || 0.70),
+      dg: Number(process.env.BLEND_WEIGHT_DG || 0.20),
+      mkt: Number(process.env.BLEND_WEIGHT_MKT || 0.10)
+    }
     this.simCount = Number(process.env.SIM_COUNT || 10000)
     this.simSeed = process.env.SIM_SEED ? Number(process.env.SIM_SEED) : null
     this.runMode = process.env.RUN_MODE || 'CURRENT_WEEK'
@@ -1179,7 +1183,20 @@ export class WeeklyPipeline {
         }
       }
 
-      const playerParams = buildPlayerParams({ players: eventPlayers, skillRatings, tour: event.tour })
+      // Load historical rounds for course profile
+      let historicalRounds = []
+      const eventMeta = this.getEventMeta(event)
+      if (eventMeta?.eventId && tourCode) {
+        try {
+          const rawRounds = await DataGolfClient.getHistoricalRawRounds(tourCode, eventMeta.eventId)
+          historicalRounds = normalizeDataGolfArray(rawRounds)
+        } catch (error) {
+          safeLogDataGolfError('historical-raw-rounds-for-profile', error, { tour: event.tour })
+        }
+      }
+      const courseProfile = buildCourseProfile({ event, historicalRounds })
+
+      const playerParams = buildPlayerParams({ players: eventPlayers, skillRatings, tour: event.tour, courseProfile })
       const simResults = simulateTournament({
         players: playerParams,
         tour: event.tour,
@@ -1385,9 +1402,8 @@ export class WeeklyPipeline {
             continue
           }
 
-          // Fair prices derive from INTERNAL simulation only.
-          // DataGolf predictions may only influence priors/calibration/confidence, not fair price itself.
-          const blended = this.blendProbabilities({ sim: simProb, dg: null, mkt: null })
+          const mktProbForBlend = normalizedImplied.get(selectionKey) || null
+          const blended = this.blendProbabilities({ sim: simProb, dg: dgProb, mkt: mktProbForBlend })
           const fairProb = validateProbability(
             Number.isFinite(blended)
               ? applyCalibration(blended, market.marketKey, event.tour)
