@@ -1250,6 +1250,21 @@ app.get('/api/results', async (req, res) => {
         }
       }
       
+      // If event is completed but we still have no scoring data (player not found in any source),
+      // resolve as lost for all placement/win markets since the tournament ended without them placing
+      if (eventIsCompleted && (!outcome || outcome === 'pending') && !scoring) {
+        const mk = (bet.marketKey || '').toLowerCase()
+        if (mk === 'win' || mk.startsWith('top_') || mk === 'frl') {
+          outcome = 'lost'
+        } else if (mk === 'mc') {
+          // If we have no data and event completed, default MC bet to lost (assume made cut)
+          outcome = 'lost'
+        } else if (mk === 'make_cut') {
+          // If we have no data and event completed, default make_cut to won (assume made cut)
+          outcome = 'won'
+        }
+      }
+      
       return {
         id: bet.id,
         selection_name: bet.override?.selectionName || bet.selection,
