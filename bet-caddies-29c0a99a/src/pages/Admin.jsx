@@ -246,6 +246,20 @@ export default function Admin() {
     }
   });
 
+  const toggleListedMutation = useMutation({
+    mutationFn: ({ id, listed }) => api.entities.GolfBet.toggleListed(id, listed),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allBets'] });
+    },
+    onError: (error) => {
+      toast({
+        title: 'Toggle Failed',
+        description: error.message || 'Failed to update listed status',
+        variant: 'destructive'
+      });
+    }
+  });
+
   const updateProviderMutation = useMutation({
     mutationFn: ({ id, data }) => api.entities.BettingProvider.update(id, data),
     onSuccess: () => {
@@ -1592,7 +1606,7 @@ export default function Admin() {
                     checked={betShowArchived}
                     onCheckedChange={setBetShowArchived}
                   />
-                  Show Archived
+                  Show Unlisted
                 </label>
                 <Button
                   variant="outline"
@@ -1609,8 +1623,9 @@ export default function Admin() {
 
             {/* Summary stats */}
             {!betsLoading && (() => {
+              const listedCount = bets.filter(b => b.listed).length;
               const featuredCount = bets.filter(b => b.featured).length;
-              const archivedCount = bets.filter(b => !b.featured).length;
+              const unlistedCount = bets.filter(b => !b.listed).length;
               return (
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                   <div className="bg-slate-800/30 rounded-lg border border-slate-700/50 p-3 text-center">
@@ -1618,20 +1633,20 @@ export default function Admin() {
                     <div className="text-xs text-slate-400">Total</div>
                   </div>
                   <div className="bg-emerald-500/10 rounded-lg border border-emerald-500/30 p-3 text-center">
-                    <div className="text-2xl font-bold text-emerald-400">{featuredCount}</div>
-                    <div className="text-xs text-emerald-400/70">Featured</div>
-                  </div>
-                  <div className="bg-slate-500/10 rounded-lg border border-slate-500/30 p-3 text-center">
-                    <div className="text-2xl font-bold text-slate-400">{archivedCount}</div>
-                    <div className="text-xs text-slate-400/70">Archived</div>
+                    <div className="text-2xl font-bold text-emerald-400">{listedCount}</div>
+                    <div className="text-xs text-emerald-400/70">Listed (Tier Pages)</div>
                   </div>
                   <div className="bg-amber-500/10 rounded-lg border border-amber-500/30 p-3 text-center">
-                    <div className="text-2xl font-bold text-amber-400">{bets.filter(b => b.pinned).length}</div>
-                    <div className="text-xs text-amber-400/70">Pinned</div>
+                    <div className="text-2xl font-bold text-amber-400">{featuredCount}</div>
+                    <div className="text-xs text-amber-400/70">Featured (Homepage)</div>
+                  </div>
+                  <div className="bg-slate-500/10 rounded-lg border border-slate-500/30 p-3 text-center">
+                    <div className="text-2xl font-bold text-slate-400">{unlistedCount}</div>
+                    <div className="text-xs text-slate-400/70">Unlisted</div>
                   </div>
                   <div className="bg-blue-500/10 rounded-lg border border-blue-500/30 p-3 text-center">
                     <div className="text-2xl font-bold text-blue-400">
-                      {[...new Set(bets.filter(b => b.featured).map(b => b.tour).filter(Boolean))].length}
+                      {[...new Set(bets.filter(b => b.listed).map(b => b.tour).filter(Boolean))].length}
                     </div>
                     <div className="text-xs text-blue-400/70">Tours Active</div>
                   </div>
@@ -1658,7 +1673,7 @@ export default function Admin() {
                 slate: { border: 'border-slate-600/50', bg: 'bg-slate-700/10', text: 'text-slate-400', headerBg: 'bg-slate-700/30' }
               };
 
-              const filteredBets = betShowArchived ? bets : bets.filter(b => b.featured);
+              const filteredBets = betShowArchived ? bets : bets.filter(b => b.listed);
 
               const groupedBets = TIER_CONFIG.reduce((acc, tier) => {
                 const tierBets = filteredBets.filter(b => {
@@ -1680,6 +1695,7 @@ export default function Admin() {
                     const isCollapsed = collapsedTiers[tier.key];
                     const colors = colorMap[tier.color];
                     const featuredInTier = tierBets.filter(b => b.featured).length;
+                    const listedInTier = tierBets.filter(b => b.listed).length;
 
                     return (
                       <div key={tier.key} className={`rounded-xl border ${colors.border} overflow-hidden`}>
@@ -1700,6 +1716,10 @@ export default function Admin() {
                               {tierBets.length} bets
                             </Badge>
                             <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
+                              <Eye className="w-3 h-3 mr-1" />
+                              {listedInTier} listed
+                            </Badge>
+                            <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/30">
                               <Star className="w-3 h-3 mr-1" />
                               {featuredInTier} featured
                             </Badge>
@@ -1718,34 +1738,49 @@ export default function Admin() {
                               <div
                                 key={bet.id}
                                 className={`px-4 py-3 flex items-center gap-4 ${
-                                  !bet.featured ? 'opacity-50 bg-slate-900/30' : 'bg-slate-800/20'
+                                  !bet.listed ? 'opacity-50 bg-slate-900/30' : 'bg-slate-800/20'
                                 } hover:bg-slate-700/20 transition-colors`}
                               >
-                                {/* Featured toggle */}
+                                {/* Listed toggle (shown on tier pages + results) */}
                                 <button
-                                  onClick={() => toggleFeaturedMutation.mutate({ id: bet.id, featured: !bet.featured })}
-                                  disabled={toggleFeaturedMutation.isPending}
-                                  title={bet.featured ? 'Remove from frontend' : 'Add to frontend'}
+                                  onClick={() => toggleListedMutation.mutate({ id: bet.id, listed: !bet.listed })}
+                                  disabled={toggleListedMutation.isPending}
+                                  title={bet.listed ? 'Remove from tier page' : 'Add to tier page'}
                                   className={`flex-shrink-0 p-1.5 rounded-lg transition-colors ${
-                                    bet.featured 
+                                    bet.listed 
                                       ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30' 
                                       : 'bg-slate-700/30 text-slate-500 hover:bg-slate-700/50 hover:text-slate-300'
                                   }`}
                                 >
-                                  {bet.featured ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                                  {bet.listed ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                                </button>
+
+                                {/* Featured toggle (shown on homepage) */}
+                                <button
+                                  onClick={() => toggleFeaturedMutation.mutate({ id: bet.id, featured: !bet.featured })}
+                                  disabled={toggleFeaturedMutation.isPending}
+                                  title={bet.featured ? 'Remove from homepage' : 'Add to homepage'}
+                                  className={`flex-shrink-0 p-1.5 rounded-lg transition-colors ${
+                                    bet.featured 
+                                      ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30' 
+                                      : 'bg-slate-700/30 text-slate-500 hover:bg-slate-700/50 hover:text-slate-300'
+                                  }`}
+                                >
+                                  <Star className={`w-4 h-4 ${bet.featured ? 'fill-amber-400' : ''}`} />
                                 </button>
 
                                 {/* Bet info */}
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-2 mb-0.5">
                                     <span className="font-semibold text-white text-sm truncate">{bet.selection_name}</span>
-                                    {bet.pinned && (
-                                      <Badge variant="outline" className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-[10px] px-1.5 py-0">
-                                        Pinned
+                                    {bet.listed && (
+                                      <Badge variant="outline" className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-[10px] px-1.5 py-0">
+                                        <Eye className="w-2.5 h-2.5 mr-0.5" />
+                                        Listed
                                       </Badge>
                                     )}
                                     {bet.featured && (
-                                      <Badge variant="outline" className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-[10px] px-1.5 py-0">
+                                      <Badge variant="outline" className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-[10px] px-1.5 py-0">
                                         <Star className="w-2.5 h-2.5 mr-0.5" />
                                         Featured
                                       </Badge>

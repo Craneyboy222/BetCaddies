@@ -292,9 +292,15 @@ export class BetCaddiesApi {
         const response = await this.client.delete(`/api/entities/golf-bets/${id}`)
         return response.data || response
       },
+      toggleListed: async (id, listed) => {
+        const response = await this.client.put(`/api/entities/golf-bets/${id}`, {
+          status: listed ? 'active' : 'archived'
+        })
+        return response.data || response
+      },
       toggleFeatured: async (id, featured) => {
         const response = await this.client.put(`/api/entities/golf-bets/${id}`, {
-          status: featured ? 'active' : 'archived'
+          pinned: featured
         })
         return response.data || response
       },

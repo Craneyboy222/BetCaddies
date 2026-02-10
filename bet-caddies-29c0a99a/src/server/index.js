@@ -784,13 +784,10 @@ app.get('/api/bets/latest', async (req, res) => {
       }
     })
 
+    // Featured = pinned bets shown on homepage
     const visible = bets
-      .filter(bet => bet.override?.status !== 'archived')
+      .filter(bet => bet.override?.status !== 'archived' && bet.override?.pinned === true)
       .sort((a, b) => {
-        const aPinned = a.override?.pinned === true
-        const bPinned = b.override?.pinned === true
-        if (aPinned !== bPinned) return aPinned ? -1 : 1
-
         const aOrder = Number.isFinite(a.override?.pinOrder) ? a.override.pinOrder : Number.POSITIVE_INFINITY
         const bOrder = Number.isFinite(b.override?.pinOrder) ? b.override.pinOrder : Number.POSITIVE_INFINITY
         if (aOrder !== bOrder) return aOrder - bOrder
@@ -985,7 +982,7 @@ app.get('/api/results', async (req, res) => {
     // Only show results from Feb 2 2026 onwards (current system launch)
     const resultsStartDate = new Date('2026-02-02T00:00:00.000Z')
 
-    const bets = await prisma.betRecommendation.findMany({
+    const allBets = await prisma.betRecommendation.findMany({
       where: {
         run: {
           status: 'completed'
@@ -1018,6 +1015,63 @@ app.get('/api/results', async (req, res) => {
         override: true
       }
     })
+
+    // Only include LISTED bets (not archived), then select top 5 per tier
+    // This mirrors the same selection logic as /api/bets/tier/:tier
+    const listedBets = allBets.filter(bet => bet.override?.status !== 'archived')
+    
+    const RESULTS_TIERS = ['PAR', 'BIRDIE', 'EAGLE', 'LONG_SHOTS']
+    const TOP_PER_TIER = 5
+    const selectedBetIds = new Set()
+    
+    for (const tierKey of RESULTS_TIERS) {
+      const tierBets = listedBets
+        .filter(bet => (bet.override?.tierOverride || bet.tier) === tierKey)
+        .sort((a, b) => {
+          // Pinned items first
+          const aPinned = a.override?.pinned === true
+          const bPinned = b.override?.pinned === true
+          if (aPinned !== bPinned) return aPinned ? -1 : 1
+          // Then by confidence
+          const confA = a.override?.confidenceRating ?? a.confidence1To5 ?? 0
+          const confB = b.override?.confidenceRating ?? b.confidence1To5 ?? 0
+          if (confB !== confA) return confB - confA
+          // Then by edge
+          const edgeA = a.edge ?? 0
+          const edgeB = b.edge ?? 0
+          if (edgeB !== edgeA) return edgeB - edgeA
+          // Then by odds
+          const oddsA = a.bestOdds ?? 0
+          const oddsB = b.bestOdds ?? 0
+          if (oddsB !== oddsA) return oddsB - oddsA
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        })
+      
+      // Select top 5 with market variety (max 2 per market type)
+      const picked = []
+      const marketCounts = new Map()
+      for (const bet of tierBets) {
+        if (picked.length >= TOP_PER_TIER) break
+        const mk = bet.marketKey || 'unknown'
+        const count = marketCounts.get(mk) || 0
+        if (count < 2) {
+          picked.push(bet)
+          marketCounts.set(mk, count + 1)
+        }
+      }
+      // Fill remaining if needed
+      if (picked.length < TOP_PER_TIER) {
+        const pickedIds = new Set(picked.map(b => b.id))
+        for (const bet of tierBets) {
+          if (picked.length >= TOP_PER_TIER) break
+          if (!pickedIds.has(bet.id)) picked.push(bet)
+        }
+      }
+      for (const bet of picked) selectedBetIds.add(bet.id)
+    }
+    
+    // Only use the selected top 5 per tier for results
+    const bets = allBets.filter(b => selectedBetIds.has(b.id))
 
     // Get unique tourEventIds for leaderboard lookup
     const tourEventIds = [...new Set(bets.map(b => b.tourEventId))]
@@ -2151,7 +2205,8 @@ app.get('/api/entities/golf-bets', authRequired, adminOnly, async (req, res) => 
       category: (bet.override?.tierOverride || bet.tier)?.toLowerCase(),
       tier_raw: bet.tier || null,
       market_key: bet.marketKey || null,
-      featured: bet.override?.status !== 'archived',
+      listed: bet.override?.status !== 'archived',
+      featured: bet.override?.pinned === true,
       tour: bet.tourEvent?.tour || null,
       tournament_name: bet.tourEvent?.eventName || null,
       odds_display_best: bet.bestOdds?.toString() || '',
