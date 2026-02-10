@@ -981,6 +981,16 @@ app.get('/api/results', async (req, res) => {
 
     // Only show results from Feb 2 2026 onwards (current system launch)
     const resultsStartDate = new Date('2026-02-02T00:00:00.000Z')
+    
+    // Calculate THIS WEEK's date range (same as tier endpoint)
+    const dayOfWeek = now.getDay()
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+    const startOfWeek = new Date(now)
+    startOfWeek.setDate(now.getDate() + diffToMonday)
+    startOfWeek.setHours(0, 0, 0, 0)
+    const endOfWeek = new Date(startOfWeek)
+    endOfWeek.setDate(startOfWeek.getDate() + 6)
+    endOfWeek.setHours(23, 59, 59, 999)
 
     const allBets = await prisma.betRecommendation.findMany({
       where: {
@@ -988,8 +998,9 @@ app.get('/api/results', async (req, res) => {
           status: 'completed'
         },
         tourEvent: {
-          startDate: {
-            lte: now // Tournament has started
+          endDate: {
+            gte: startOfWeek,
+            lte: endOfWeek
           }
         },
         createdAt: {
