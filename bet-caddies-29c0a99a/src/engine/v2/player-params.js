@@ -1,12 +1,5 @@
 import { clampProbability } from './odds/odds-utils.js'
-
-// Must match cleanPlayerName() in player-normalizer.js to ensure consistent keys
-// across simulation outputs and odds lookups
-const normalizeName = (name) => String(name || '')
-  .trim()
-  .replace(/\s+/g, ' ')       // Normalize multiple spaces to single space
-  .replace(/[^\w\s-]/g, '')   // Remove special chars except hyphens (e.g., Højgaard → Hjgaard)
-  .toLowerCase()
+import { normalizeName } from '../../domain/player-normalizer.js'
 
 // Cross-tour normalization factors (keeps distributions comparable across tours)
 const tourRatingScale = {

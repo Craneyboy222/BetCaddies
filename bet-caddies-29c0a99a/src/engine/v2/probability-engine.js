@@ -1,6 +1,5 @@
 import { clampProbability, normalizeImpliedOddsToProbability } from './odds/odds-utils.js'
-
-const normalizeName = (name) => String(name || '').trim().toLowerCase()
+import { normalizeName } from '../../domain/player-normalizer.js'
 
 const buildMapFromPreds = (preds = []) => {
   const map = new Map()
