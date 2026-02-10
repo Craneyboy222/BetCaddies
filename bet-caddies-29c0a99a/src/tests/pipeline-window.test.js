@@ -16,10 +16,13 @@ describe('WeeklyPipeline scheduling', () => {
     expect(window.weekEnd.toISOString().slice(0, 10)).toBe(sunday.toISOString().slice(0, 10))
   })
 
-  it('caps DataGolf influence weight', () => {
-    process.env.DG_MAX_INFLUENCE = '0.2'
+  it('uses configured blend weights (sim/dg/mkt)', () => {
+    process.env.BLEND_WEIGHT_SIM = '0.70'
+    process.env.BLEND_WEIGHT_DG = '0.20'
+    process.env.BLEND_WEIGHT_MKT = '0.10'
     const pipeline = new WeeklyPipeline()
-    expect(pipeline.marketWeights.dg).toBeCloseTo(0.2)
-    expect(pipeline.marketWeights.sim).toBeCloseTo(0.8)
+    expect(pipeline.marketWeights.sim).toBeCloseTo(0.70)
+    expect(pipeline.marketWeights.dg).toBeCloseTo(0.20)
+    expect(pipeline.marketWeights.mkt).toBeCloseTo(0.10)
   })
 })

@@ -145,7 +145,7 @@ if (!JWT_SECRET) {
 
 const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
-  : true
+  : ['https://betcaddiesapp-production.up.railway.app']
 
 // Middleware
 const r2PublicBase = resolveR2PublicBase()
@@ -1434,11 +1434,6 @@ app.get('/api/tournaments', async (req, res) => {
     logger.error('Failed to fetch tournaments', { error: error.message })
     res.status(500).json({ error: 'Failed to fetch tournaments' })
   }
-})
-
-// Health endpoints
-app.get('/health', (req, res) => {
-  res.json({ ok: true })
 })
 
 app.get('/api/health/db', authRequired, adminOnly, async (req, res) => {
@@ -4278,19 +4273,19 @@ app.get('*', (req, res) => {
 })
 
 // Graceful shutdown handling
-const gracefulShutdown = (signal) => {
+const gracefulShutdown = async (signal) => {
   logger.info(`${signal} received. Shutting down gracefully...`)
-  
+
   // Close database connections
   if (prisma.$disconnect) {
     try {
-      prisma.$disconnect()
+      await prisma.$disconnect()
       logger.info('Database connections closed')
     } catch (err) {
       logger.error('Error disconnecting from database', { error: err.message })
     }
   }
-  
+
   process.exit(0)
 }
 

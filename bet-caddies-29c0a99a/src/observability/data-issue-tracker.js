@@ -52,13 +52,13 @@ export class DataIssueTracker {
   }
 
   async getTopIssues(limit = 10) {
-    return await prisma.dataIssue.findMany({
+    const SEVERITY_ORDER = { error: 3, warning: 2, info: 1 }
+    const issues = await prisma.dataIssue.findMany({
       where: { runId: this.runId },
-      orderBy: [
-        { severity: 'desc' }, // errors first, then warnings, then info
-        { createdAt: 'desc' }
-      ],
-      take: limit
+      orderBy: { createdAt: 'desc' }
     })
+    return issues
+      .sort((a, b) => (SEVERITY_ORDER[b.severity] || 0) - (SEVERITY_ORDER[a.severity] || 0))
+      .slice(0, limit)
   }
 }

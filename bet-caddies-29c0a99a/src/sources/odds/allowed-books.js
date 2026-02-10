@@ -5,7 +5,18 @@ export const DEFAULT_ALLOWED_BOOKS = Object.freeze([
   'betfair',
   'williamhill',
   'skybet',
-  'unibet'
+  'unibet',
+  'paddypower',
+  'betway',
+  'ladbrokes',
+  'coral',
+  'betfred',
+  'boylesports',
+  'fanduel',
+  'draftkings',
+  'betmgm',
+  'caesars',
+  'pointsbet'
 ])
 
 export const getAllowedBooks = () => {
