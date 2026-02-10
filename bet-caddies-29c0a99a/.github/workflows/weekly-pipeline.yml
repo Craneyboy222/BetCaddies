@@ -23,22 +23,20 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
+    - name: Generate Prisma client
+      run: npx prisma generate
+
     - name: Lint
       run: npm run lint
-      continue-on-error: true
 
     - name: Test
       run: npm test -- --run
-      continue-on-error: true
 
     - name: Build
       run: npm run build
 
-    - name: Generate Prisma client
-      run: npx prisma generate
-
     - name: Run database migrations
-      run: npx prisma db push
+      run: npx prisma migrate deploy
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
@@ -46,7 +44,7 @@ jobs:
       run: npm run pipeline:weekly
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        DATAGOLF_API_KEY: ${{ secrets.DATAGOLF_API_KEY }}
         LOG_LEVEL: info
 
     - name: Upload pipeline logs

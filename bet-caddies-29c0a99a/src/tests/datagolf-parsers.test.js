@@ -31,7 +31,7 @@ describe('parseOutrightsOffers', () => {
 
     expect(parsed.offers.length).toBeGreaterThan(0)
     expect(Array.from(books)).toEqual(expect.arrayContaining(['bet365', 'betfair', 'skybet', 'unibet']))
-    expect(books.has('draftkings')).toBe(false)
+    expect(books.has('draftkings')).toBe(true)
     expect(books.has('pinnacle')).toBe(false)
   })
 })

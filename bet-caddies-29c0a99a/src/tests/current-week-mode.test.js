@@ -105,6 +105,7 @@ describe('CURRENT_WEEK run mode', () => {
     const pipeline = new WeeklyPipeline()
     pipeline.runMode = 'CURRENT_WEEK'
     pipeline.excludeInPlay = true
+    pipeline.inPlayGraceHours = 0
 
     const run = {
       id: 'run-1',

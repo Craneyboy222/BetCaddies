@@ -32,8 +32,11 @@ describe('PlayerNormalizer', () => {
       expect(normalizer.cleanPlayerName('Jon Rahm Jr.')).toBe('jon rahm jr')
     })
 
-    it('should remove special characters', () => {
-      expect(normalizer.cleanPlayerName('José María Olazábal')).toBe('jos mara olazbal')
+    it('should transliterate diacritics to ASCII equivalents', () => {
+      expect(normalizer.cleanPlayerName('José María Olazábal')).toBe('jose maria olazabal')
+      expect(normalizer.cleanPlayerName('Ludvig Åberg')).toBe('ludvig aberg')
+      expect(normalizer.cleanPlayerName('Nicolai Højgaard')).toBe('nicolai hojgaard')
+      expect(normalizer.cleanPlayerName('Séamus Power')).toBe('seamus power')
     })
   })
 

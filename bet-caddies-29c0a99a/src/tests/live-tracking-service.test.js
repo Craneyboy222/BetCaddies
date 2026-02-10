@@ -11,8 +11,21 @@ const buildMockPrisma = ({ tourEvent, picks }) => {
       findFirst: async ({ where }) => {
         if (where?.dgEventId && String(where.dgEventId) !== String(tourEvent.dgEventId)) return null
         if (where?.tour && where.tour !== tourEvent.tour) return null
-        return tourEvent
-      }
+        return {
+          ...tourEvent,
+          startDate: new Date('2026-01-01T00:00:00Z'),
+          endDate: new Date('2099-12-31T23:59:59Z'),
+          run: { id: 'run-1', status: 'completed', runKey: 'test' },
+          _count: { betRecommendations: picks.length }
+        }
+      },
+      findMany: async () => [{
+        ...tourEvent,
+        startDate: new Date('2026-01-01T00:00:00Z'),
+        endDate: new Date('2099-12-31T23:59:59Z'),
+        run: { id: 'run-1', status: 'completed', runKey: 'test' },
+        _count: { betRecommendations: picks.length }
+      }]
     },
     betRecommendation: {
       count: async () => picks.length,

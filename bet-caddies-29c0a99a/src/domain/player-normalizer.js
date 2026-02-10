@@ -1,6 +1,39 @@
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
 
+/**
+ * Transliterate common diacritics to ASCII equivalents.
+ * Used by normalizeName() to ensure consistent player name keys
+ * across all modules (simulation, probability engine, odds matching).
+ */
+const DIACRITICS = {
+  'ø':'o','ö':'o','ó':'o','ô':'o','õ':'o',
+  'å':'a','ä':'a','á':'a','à':'a','â':'a','ã':'a',
+  'é':'e','è':'e','ê':'e','ë':'e',
+  'í':'i','ì':'i','î':'i','ï':'i',
+  'ú':'u','ù':'u','û':'u','ü':'u',
+  'ñ':'n','ý':'y','ÿ':'y','ç':'c','ð':'d',
+  'þ':'th','ß':'ss','æ':'ae','œ':'oe'
+}
+
+/**
+ * Canonical name normalization. Every module that compares player names
+ * MUST use this function to guarantee consistent keys.
+ *
+ *   normalizeName('Ludvig Åberg')     → 'ludvig aberg'
+ *   normalizeName('Nicolai Højgaard') → 'nicolai hojgaard'
+ *   normalizeName('Séamus Power')     → 'seamus power'
+ *   normalizeName(null)               → ''
+ */
+export const normalizeName = (name) => {
+  if (!name) return ''
+  return String(name).trim().toLowerCase()
+    .replace(/[^\x00-\x7F]/g, ch => DIACRITICS[ch] || '')
+    .replace(/[.'"\-,]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export class PlayerNormalizer {
   constructor() {
     this.cache = new Map()
@@ -88,11 +121,7 @@ export class PlayerNormalizer {
   }
 
   cleanPlayerName(name) {
-    return name
-      .trim()
-      .replace(/\s+/g, ' ') // Normalize spaces
-      .replace(/[^\w\s-]/g, '') // Remove special chars except hyphens
-      .toLowerCase()
+    return normalizeName(name)
   }
 
   async matchPlayerToOdds(playerName, oddsSelections) {

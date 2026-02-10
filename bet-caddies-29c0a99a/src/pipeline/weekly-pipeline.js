@@ -16,6 +16,8 @@ import { ProbabilityEngineV2 } from '../engine/v2/probability-engine.js'
 import { buildPlayerParams } from '../engine/v2/player-params.js'
 import { simulateTournament } from '../engine/v2/tournamentSim.js'
 import { applyCalibration } from '../engine/v2/calibration/index.js'
+import { buildCourseProfile } from '../engine/v2/course-profile.js'
+import { matchupProbability, threeBallProbability } from '../engine/v2/marketWrappers.js'
 import {
   clampProbability,
   impliedProbability,
@@ -46,8 +48,11 @@ export class WeeklyPipeline {
     this.playerNormalizer = new PlayerNormalizer()
     this.probabilityEngine = new ProbabilityEngineV2()
     this.tours = ['PGA', 'DPWT', 'KFT', 'LIV']
-    const maxDgInfluence = Number(process.env.DG_MAX_INFLUENCE || 0.35)
-    this.marketWeights = { sim: 1 - maxDgInfluence, dg: maxDgInfluence, mkt: 0 }
+    this.marketWeights = {
+      sim: Number(process.env.BLEND_WEIGHT_SIM || 0.70),
+      dg: Number(process.env.BLEND_WEIGHT_DG || 0.20),
+      mkt: Number(process.env.BLEND_WEIGHT_MKT || 0.10)
+    }
     this.simCount = Number(process.env.SIM_COUNT || 10000)
     this.simSeed = process.env.SIM_SEED ? Number(process.env.SIM_SEED) : null
     this.runMode = process.env.RUN_MODE || 'CURRENT_WEEK'
@@ -1126,6 +1131,10 @@ export class WeeklyPipeline {
       const tourCode = DataGolfClient.resolveTourCode(event.tour, 'preds')
       let preTournament = []
       let skillRatings = []
+      let decompositions = []
+      let approachSkill = []
+      let dgRankings = []
+      let playerList = []
       let usedMarketFallback = false
       const useInPlayPreds = event.inPlay && !this.excludeInPlay
 
@@ -1151,12 +1160,59 @@ export class WeeklyPipeline {
         } catch (error) {
           safeLogDataGolfError('skill-ratings', error)
         }
+
+        // Phase 2: Fetch additional DataGolf data for enhanced modelling
+        try {
+          const payload = await DataGolfClient.getPlayerDecompositions(tourCode)
+          if (payload) decompositions = normalizeDataGolfArray(payload)
+        } catch (error) {
+          safeLogDataGolfError('player-decompositions', error, { tour: event.tour })
+        }
+
+        try {
+          const payload = await DataGolfClient.getApproachSkill('l24')
+          approachSkill = normalizeDataGolfArray(payload)
+        } catch (error) {
+          safeLogDataGolfError('approach-skill', error)
+        }
+
+        try {
+          const payload = await DataGolfClient.getDgRankings()
+          dgRankings = normalizeDataGolfArray(payload)
+        } catch (error) {
+          safeLogDataGolfError('dg-rankings', error)
+        }
+
+        try {
+          const payload = await DataGolfClient.getPlayerList()
+          playerList = normalizeDataGolfArray(payload)
+        } catch (error) {
+          safeLogDataGolfError('player-list', error)
+        }
       }
 
       // DataGolf predictions (raw ingestion) — OPTIONAL priors/calibration/confidence only.
-      // FORBIDDEN: using DataGolf predictions to define fair prices or replace simulation outputs.
       const probabilityModel = this.probabilityEngine.build({ preTournamentPreds: preTournament, skillRatings })
       const predsIndex = this.buildPredsIndex(preTournament)
+
+      // Phase 2.3: Build DG rankings index for confidence scoring
+      const dgRankingsIndex = new Map()
+      for (const row of dgRankings) {
+        const name = this.playerNormalizer.cleanPlayerName(row.player_name || row.player || row.name)
+        const rank = Number(row.datagolf_rank || row.dg_rank || row.rank)
+        if (name && Number.isFinite(rank)) dgRankingsIndex.set(name, rank)
+      }
+
+      // Phase 2.7: Build player list index for cross-reference name resolution
+      const playerListIndex = new Map()
+      for (const row of playerList) {
+        const dgId = row.dg_id || row.player_id
+        const name = row.player_name || row.player || row.name
+        if (dgId && name) {
+          playerListIndex.set(String(dgId), this.playerNormalizer.cleanPlayerName(name))
+          playerListIndex.set(this.playerNormalizer.cleanPlayerName(name), String(dgId))
+        }
+      }
       let eventPlayers = fieldEntries
         .filter((entry) => entry.tourEventId === event.id && entry.status === 'active')
         .map((entry) => ({ name: entry.player?.canonicalName || entry.playerId }))
@@ -1179,15 +1235,47 @@ export class WeeklyPipeline {
         }
       }
 
-      const playerParams = buildPlayerParams({ players: eventPlayers, skillRatings, tour: event.tour })
+      // Load historical rounds for course profile
+      let historicalRounds = []
+      const eventMeta = this.getEventMeta(event)
+      if (eventMeta?.eventId && tourCode) {
+        try {
+          const rawRounds = await DataGolfClient.getHistoricalRawRounds(tourCode, eventMeta.eventId)
+          historicalRounds = normalizeDataGolfArray(rawRounds)
+        } catch (error) {
+          safeLogDataGolfError('historical-raw-rounds-for-profile', error, { tour: event.tour })
+        }
+      }
+      const courseProfile = buildCourseProfile({ event, historicalRounds })
+
+      const playerParams = buildPlayerParams({
+        players: eventPlayers,
+        skillRatings,
+        tour: event.tour,
+        courseProfile,
+        decompositions,
+        approachSkill
+      })
+      // Phase 3.3: Compute field strength from DG rankings (ratio of top-50 players present)
+      const top50Count = playerParams.filter(p => dgRankingsIndex.has(p.key) && dgRankingsIndex.get(p.key) <= 50).length
+      const fieldStrengthScale = top50Count > 0 ? Math.min(1.0, top50Count / 25) : null
+
+      // Phase 4.1: Enable score export when matchup/three-ball markets are present
+      const hasMatchupMarkets = eventOdds.markets.some(m =>
+        m.marketKey?.includes('matchup') || m.marketKey?.includes('3ball') || m.marketKey?.includes('three_ball')
+      )
+
       const simResults = simulateTournament({
         players: playerParams,
         tour: event.tour,
         rounds: event.tour === 'LIV' ? 3 : 4,
         simCount: this.simCount,
         seed: this.simSeed,
-        cutRules: this.cutRules
+        cutRules: this.cutRules,
+        fieldStrengthScale,
+        exportScores: hasMatchupMarkets
       })
+      const simScoresForMatchups = simResults.simScores || null
       const simProbabilities = simResults.probabilities
       const modelAvailable = simProbabilities && simProbabilities.size > 0
       const recommendationMode = event.inPlay && !this.excludeInPlay ? 'IN_PLAY' : 'PRE_TOURNAMENT'
@@ -1327,6 +1415,9 @@ export class WeeklyPipeline {
                 simProb: null,
                 dgProb
               },
+              playerRanking: {
+                dgRank: dgRankingsIndex.get(selectionKey) || null
+              },
               context: {
                 eventName: event.eventName,
                 marketKey: market.marketKey,
@@ -1385,9 +1476,8 @@ export class WeeklyPipeline {
             continue
           }
 
-          // Fair prices derive from INTERNAL simulation only.
-          // DataGolf predictions may only influence priors/calibration/confidence, not fair price itself.
-          const blended = this.blendProbabilities({ sim: simProb, dg: null, mkt: null })
+          const mktProbForBlend = normalizedImplied.get(selectionKey) || null
+          const blended = this.blendProbabilities({ sim: simProb, dg: dgProb, mkt: mktProbForBlend })
           const fairProb = validateProbability(
             Number.isFinite(blended)
               ? applyCalibration(blended, market.marketKey, event.tour)
@@ -1440,6 +1530,9 @@ export class WeeklyPipeline {
               simProb,
               dgProb,
               disagreement: dgDisagreement
+            },
+            playerRanking: {
+              dgRank: dgRankingsIndex.get(selectionKey) || null
             },
             context: {
               eventName: event.eventName,
@@ -1905,7 +1998,7 @@ export class WeeklyPipeline {
     return 1                   // <1% edge = low confidence
   }
 
-  buildModelConfidence({ dataSufficiency, simulationStability, marketDepth, externalAgreement, context }) {
+  buildModelConfidence({ dataSufficiency, simulationStability, marketDepth, externalAgreement, playerRanking, context }) {
     // Confidence measures reliability of the probability distribution, not EV or edge.
     // DataGolf inputs here are used ONLY for disagreement/confidence metrics.
     // It must never be used to block bet generation or change selection logic.
@@ -1920,7 +2013,13 @@ export class WeeklyPipeline {
       ? clampScore(1 - Math.min(1, Math.abs(externalAgreement.simProb - externalAgreement.dgProb) / 0.1))
       : null
 
-    const components = [dataScore, stabilityScore, depthScore, agreementScore].filter(Number.isFinite)
+    // Phase 2.3: DG rankings provide data-density signal
+    // Ranked players have more historical data → higher confidence in model accuracy
+    const rankingScore = playerRanking?.dgRank
+      ? clampScore(1 - (playerRanking.dgRank - 1) / 300)
+      : null
+
+    const components = [dataScore, stabilityScore, depthScore, agreementScore, rankingScore].filter(Number.isFinite)
     const overall = components.length > 0
       ? components.reduce((sum, value) => sum + value, 0) / components.length
       : null
@@ -1947,6 +2046,10 @@ export class WeeklyPipeline {
         simProb: externalAgreement.simProb,
         dgProb: externalAgreement.dgProb,
         disagreement: externalAgreement.disagreement
+      },
+      playerRanking: {
+        score: rankingScore,
+        dgRank: playerRanking?.dgRank || null
       },
       context
     }

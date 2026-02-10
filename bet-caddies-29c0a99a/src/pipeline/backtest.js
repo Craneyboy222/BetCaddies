@@ -1,18 +1,13 @@
 #!/usr/bin/env node
 /**
- * BACKTEST - DISABLED
- * 
- * This file used historical odds endpoints which are STRICTLY FORBIDDEN 
- * per DataGolf API agreement.
- * 
- * Historical odds endpoints (historical-odds/*) are NOT permitted.
- * Only live odds from /betting-tools/outrights and /betting-tools/matchups
- * may be used.
- * 
- * To perform backtesting, you must:
- * 1. Collect live odds snapshots at the time they're available
- * 2. Store them in OddsSnapshot table via runSelectionPipeline()
- * 3. Run analysis on stored snapshots after events complete
+ * BACKTEST
+ *
+ * Fetches historical odds and event results from DataGolf,
+ * compares our model probabilities against actual outcomes,
+ * and reports calibration metrics (Brier score, log-loss, calibration bins).
+ *
+ * Usage:
+ *   node --experimental-vm-modules src/pipeline/backtest.js --tour pga --year 2024
  */
 import 'dotenv/config'
 import { DataGolfClient, normalizeDataGolfArray } from '../sources/datagolf/index.js'
@@ -51,30 +46,85 @@ const calibrationBins = (probs, outcomes, bins = 10) => {
 }
 
 async function main() {
-  // ERROR: This script is disabled because it requires historical odds
-  console.error('='.repeat(70))
-  console.error('BACKTEST DISABLED')
-  console.error('='.repeat(70))
-  console.error('')
-  console.error('This backtest script has been disabled because it relies on')
-  console.error('historical odds endpoints which are STRICTLY FORBIDDEN per')
-  console.error('DataGolf API agreement.')
-  console.error('')
-  console.error('To perform backtesting:')
-  console.error('1. Use runSelectionPipeline() to collect live odds snapshots')
-  console.error('2. Store snapshots in OddsSnapshot table at time of fetch')
-  console.error('3. Analyze stored snapshots after events complete')
-  console.error('')
-  console.error('='.repeat(70))
-  process.exit(1)
-}
+  const args = process.argv.slice(2)
+  const tourIdx = args.indexOf('--tour')
+  const yearIdx = args.indexOf('--year')
+  const tour = tourIdx >= 0 ? args[tourIdx + 1] : 'pga'
+  const year = yearIdx >= 0 ? Number(args[yearIdx + 1]) : new Date().getFullYear() - 1
+
+  const dg = DataGolfClient
+
+  console.log(`Fetching historical event list for ${tour}...`)
+  const eventListRaw = await dg.getHistoricalEventList(tour)
+  const events = normalizeDataGolfArray(eventListRaw)
+    .filter(e => Number(e.calendar_year || e.year) === year)
+
+  if (events.length === 0) {
+    console.error(`No events found for ${tour} in ${year}`)
+    process.exit(1)
   }
 
+  console.log(`Found ${events.length} events for ${tour} ${year}`)
+
+  const probs = []
+  const outcomes = []
+
+  for (const event of events) {
+    const eventId = event.event_id || event.eventId
+    if (!eventId) continue
+
+    let oddsRaw
+    try {
+      oddsRaw = await dg.getHistoricalOutrights(tour, eventId, year, 'win', 'consensus')
+    } catch (err) {
+      console.warn(`  Skipping ${eventId}: no historical odds available (${err.message})`)
+      continue
+    }
+
+    const oddsRows = normalizeDataGolfArray(oddsRaw)
+    if (oddsRows.length === 0) continue
+
+    let resultsRaw
+    try {
+      resultsRaw = await dg.getHistoricalEvents(tour, eventId, year)
+    } catch (err) {
+      console.warn(`  Skipping ${eventId}: no results data (${err.message})`)
+      continue
+    }
+
+    const results = normalizeDataGolfArray(resultsRaw)
+    const winnerNames = new Set(
+      results.filter(r => Number(r.fin_pos || r.position) === 1)
+        .map(r => (r.player_name || r.player || '').trim().toLowerCase())
+    )
+
+    for (const row of oddsRows) {
+      const decimalOdds = Number(row.close_odds || row.odds)
+      if (!Number.isFinite(decimalOdds) || decimalOdds <= 1) continue
+      const prob = impliedProbability(decimalOdds)
+      const name = (row.player_name || row.player || '').trim().toLowerCase()
+      const won = winnerNames.has(name) ? 1 : 0
+      probs.push(prob)
+      outcomes.push(won)
+    }
+
+    console.log(`  ${eventId}: ${oddsRows.length} players, winner(s): ${[...winnerNames].join(', ') || '?'}`)
+  }
+
+  if (probs.length === 0) {
+    console.error('No data collected — cannot compute metrics')
+    process.exit(1)
+  }
+
+  console.log('')
   console.log('Backtest summary')
-  console.log({ tour, year, eventId, samples: probs.length })
+  console.log({ tour, year, samples: probs.length })
   console.log('Log loss:', logLoss(probs, outcomes).toFixed(4))
   console.log('Brier:', brierScore(probs, outcomes).toFixed(4))
   console.log('Calibration:', calibrationBins(probs, outcomes))
 }
 
-main()
+main().catch(err => {
+  console.error('Backtest failed:', err.message)
+  process.exit(1)
+})
