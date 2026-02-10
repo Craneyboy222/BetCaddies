@@ -982,8 +982,9 @@ app.get('/api/results', async (req, res) => {
     const startOfToday = new Date(now)
     startOfToday.setHours(0, 0, 0, 0)
 
-    // Find all bet recommendations from tournaments that have started
-    // Include ALL bets (even archived) for historical results record
+    // Only show results from Feb 2 2026 onwards (current system launch)
+    const resultsStartDate = new Date('2026-02-02T00:00:00.000Z')
+
     const bets = await prisma.betRecommendation.findMany({
       where: {
         run: {
@@ -993,6 +994,9 @@ app.get('/api/results', async (req, res) => {
           startDate: {
             lte: now // Tournament has started
           }
+        },
+        createdAt: {
+          gte: resultsStartDate
         }
       },
       orderBy: [
