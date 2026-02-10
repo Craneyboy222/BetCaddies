@@ -14,12 +14,22 @@ const buildMapFromPreds = (preds = []) => {
     const impliedTop10Odds = Number(row.top_10 || row.top10 || row.p_top10)
     const impliedTop20Odds = Number(row.top_20 || row.top20 || row.p_top20)
     const impliedMakeCutOdds = Number(row.make_cut || row.p_make_cut)
+    // Phase 2.6: Parse additional fields from DG pre-tournament predictions
+    const impliedTop17Odds = Number(row.top_17 || row.top17)
+    const impliedTop23Odds = Number(row.top_23 || row.top23)
+    const impliedFrlOdds = Number(row.frl || row.first_round_leader)
+    const sampleSize = Number(row.sample_size)
+
     const entry = {
       win: normalizeImpliedOddsToProbability(impliedWinOdds, { label: 'dg_pred_win_odds', context: { player: name } }),
       top5: normalizeImpliedOddsToProbability(impliedTop5Odds, { label: 'dg_pred_top5_odds', context: { player: name } }),
       top10: normalizeImpliedOddsToProbability(impliedTop10Odds, { label: 'dg_pred_top10_odds', context: { player: name } }),
+      top17: normalizeImpliedOddsToProbability(impliedTop17Odds, { label: 'dg_pred_top17_odds', context: { player: name } }),
       top20: normalizeImpliedOddsToProbability(impliedTop20Odds, { label: 'dg_pred_top20_odds', context: { player: name } }),
-      makeCut: normalizeImpliedOddsToProbability(impliedMakeCutOdds, { label: 'dg_pred_makecut_odds', context: { player: name } })
+      top23: normalizeImpliedOddsToProbability(impliedTop23Odds, { label: 'dg_pred_top23_odds', context: { player: name } }),
+      makeCut: normalizeImpliedOddsToProbability(impliedMakeCutOdds, { label: 'dg_pred_makecut_odds', context: { player: name } }),
+      frl: normalizeImpliedOddsToProbability(impliedFrlOdds, { label: 'dg_pred_frl_odds', context: { player: name } }),
+      sampleSize: Number.isFinite(sampleSize) ? sampleSize : null
     }
     map.set(name, entry)
     const dgId = row.dg_id || row.player_id || row.id
