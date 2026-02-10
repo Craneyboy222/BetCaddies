@@ -17,6 +17,7 @@ import { buildPlayerParams } from '../engine/v2/player-params.js'
 import { simulateTournament } from '../engine/v2/tournamentSim.js'
 import { applyCalibration } from '../engine/v2/calibration/index.js'
 import { buildCourseProfile } from '../engine/v2/course-profile.js'
+import { matchupProbability, threeBallProbability } from '../engine/v2/marketWrappers.js'
 import {
   clampProbability,
   impliedProbability,
@@ -1259,6 +1260,11 @@ export class WeeklyPipeline {
       const top50Count = playerParams.filter(p => dgRankingsIndex.has(p.key) && dgRankingsIndex.get(p.key) <= 50).length
       const fieldStrengthScale = top50Count > 0 ? Math.min(1.0, top50Count / 25) : null
 
+      // Phase 4.1: Enable score export when matchup/three-ball markets are present
+      const hasMatchupMarkets = eventOdds.markets.some(m =>
+        m.marketKey?.includes('matchup') || m.marketKey?.includes('3ball') || m.marketKey?.includes('three_ball')
+      )
+
       const simResults = simulateTournament({
         players: playerParams,
         tour: event.tour,
@@ -1266,8 +1272,10 @@ export class WeeklyPipeline {
         simCount: this.simCount,
         seed: this.simSeed,
         cutRules: this.cutRules,
-        fieldStrengthScale
+        fieldStrengthScale,
+        exportScores: hasMatchupMarkets
       })
+      const simScoresForMatchups = simResults.simScores || null
       const simProbabilities = simResults.probabilities
       const modelAvailable = simProbabilities && simProbabilities.size > 0
       const recommendationMode = event.inPlay && !this.excludeInPlay ? 'IN_PLAY' : 'PRE_TOURNAMENT'
