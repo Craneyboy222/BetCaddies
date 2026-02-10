@@ -1255,13 +1255,18 @@ export class WeeklyPipeline {
         decompositions,
         approachSkill
       })
+      // Phase 3.3: Compute field strength from DG rankings (ratio of top-50 players present)
+      const top50Count = playerParams.filter(p => dgRankingsIndex.has(p.key) && dgRankingsIndex.get(p.key) <= 50).length
+      const fieldStrengthScale = top50Count > 0 ? Math.min(1.0, top50Count / 25) : null
+
       const simResults = simulateTournament({
         players: playerParams,
         tour: event.tour,
         rounds: event.tour === 'LIV' ? 3 : 4,
         simCount: this.simCount,
         seed: this.simSeed,
-        cutRules: this.cutRules
+        cutRules: this.cutRules,
+        fieldStrengthScale
       })
       const simProbabilities = simResults.probabilities
       const modelAvailable = simProbabilities && simProbabilities.size > 0

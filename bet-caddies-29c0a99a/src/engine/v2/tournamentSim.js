@@ -32,15 +32,22 @@ export const simulateTournament = ({
   simCount = 10000,
   seed = null,
   cutRules = defaultCutRules,
-  exportScores = false
+  exportScores = false,
+  momentumFactor = 0.12,
+  fieldStrengthScale = null
 } = {}) => {
   const normalizedSimCount = Number.isFinite(simCount) && simCount > 0 ? Math.floor(simCount) : 1
+
+  // Phase 3.3: Dynamic field strength scaling
+  // When field is weaker than baseline (fewer top players), shift all means slightly
+  const fieldAdjust = Number.isFinite(fieldStrengthScale) ? (1.0 - fieldStrengthScale) * 0.5 : 0
+
   const normalizedPlayers = players.map((player, index) => {
     const key = player?.key || `player_${index}`
     const name = player?.name || key
     // Degrade gracefully when inputs are missing: widen distributions
     // and preserve per-player probability mass.
-    const mean = Number.isFinite(player?.mean) ? player.mean : 0
+    const mean = (Number.isFinite(player?.mean) ? player.mean : 0) + fieldAdjust
     const volatility = Number.isFinite(player?.volatility) ? player.volatility : 2.5
     const tail = Number.isFinite(player?.tail) ? player.tail : 6.5
     const uncertainty = Number.isFinite(player?.uncertainty) ? player.uncertainty : 0.35
@@ -93,11 +100,18 @@ export const simulateTournament = ({
       playerShocks.set(player.key, shock)
     }
 
+    // Phase 3.2: Track previous round score for momentum carry-over
+    const prevRoundScore = new Map()
+
     for (let round = 1; round <= rounds; round += 1) {
       const roundShock = normal(rng) * 0.6
       for (const player of normalizedPlayers) {
         const playerShock = playerShocks.get(player.key) || 0
-        const rawScore = player.mean + playerShock + roundShock + normal(rng) * player.volatility
+        // Round-to-round momentum: good/bad previous round carries forward slightly
+        const momentum = round > 1 && momentumFactor > 0
+          ? (prevRoundScore.get(player.key) || 0) * momentumFactor
+          : 0
+        const rawScore = player.mean + playerShock + roundShock + momentum + normal(rng) * player.volatility
         // Tail-risk control: cap extreme per-round outcomes using player tail parameter.
         const tailCap = Math.max(3, (player.tail || 6) * player.volatility)
         const score = Math.max(player.mean - tailCap, Math.min(player.mean + tailCap, rawScore))
@@ -106,6 +120,7 @@ export const simulateTournament = ({
         totals.set(key, prev + score)
         if (!roundScores.has(key)) roundScores.set(key, [])
         roundScores.get(key).push(score)
+        prevRoundScore.set(key, score - player.mean)
         if (round === 1) r1Scores.set(key, score)
       }
 
