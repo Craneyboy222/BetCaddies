@@ -2378,6 +2378,58 @@ app.get('/api/pages/:slug', async (req, res) => {
   }
 })
 
+// User registration
+app.post(
+  '/api/auth/register',
+  authLimiter,
+  validateBody(z.object({
+    email: z.string().email(),
+    password: z.string().min(8),
+    full_name: z.string().optional()
+  })),
+  async (req, res) => {
+    try {
+      const { email, password, full_name } = req.body
+      const bcrypt = await import('bcrypt')
+
+      const existing = await prisma.user.findUnique({ where: { email } })
+      if (existing) {
+        return res.status(409).json({ error: 'An account with this email already exists' })
+      }
+
+      const hashedPassword = await bcrypt.default.hash(password, 10)
+
+      const user = await prisma.user.create({
+        data: {
+          email,
+          password: hashedPassword,
+          fullName: full_name || null,
+          role: 'user'
+        }
+      })
+
+      const token = jwt.sign(
+        { sub: user.id, email: user.email, role: user.role },
+        JWT_SECRET,
+        { expiresIn: '12h' }
+      )
+
+      return res.json({
+        token,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.fullName || user.email,
+          role: user.role
+        }
+      })
+    } catch (error) {
+      logger.error('Registration failed', { error: error.message })
+      return res.status(500).json({ error: 'Failed to register' })
+    }
+  }
+)
+
 app.post(
   '/api/auth/login',
   authLimiter,
@@ -2385,32 +2437,42 @@ app.post(
     email: z.string().email(),
     password: z.string().min(8)
   })),
-  (req, res) => {
+  async (req, res) => {
   try {
     const { email, password } = req.body
 
-    if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
-      return res.status(500).json({ error: 'Admin credentials not configured' })
+    // Check admin login first
+    if (ADMIN_EMAIL && ADMIN_PASSWORD && email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+      const adminUser = { id: 'admin', email: ADMIN_EMAIL, role: 'admin' }
+      const token = signAdminToken(adminUser)
+      return res.json({
+        token,
+        user: { id: adminUser.id, email: adminUser.email, name: 'Admin', role: adminUser.role }
+      })
     }
 
-    if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) {
-      return res.status(401).json({ error: 'Invalid credentials' })
-    }
+    // Check user login
+    const user = await prisma.user.findUnique({ where: { email } })
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' })
+    if (user.disabledAt) return res.status(403).json({ error: 'Account is disabled' })
 
-    const adminUser = {
-      id: 'admin',
-      email: ADMIN_EMAIL,
-      role: 'admin'
-    }
-    const token = signAdminToken(adminUser)
+    const bcrypt = await import('bcrypt')
+    const passwordValid = await bcrypt.default.compare(password, user.password)
+    if (!passwordValid) return res.status(401).json({ error: 'Invalid credentials' })
+
+    const token = jwt.sign(
+      { sub: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '12h' }
+    )
 
     return res.json({
       token,
       user: {
-        id: adminUser.id,
-        email: adminUser.email,
-        name: 'Admin',
-        role: adminUser.role
+        id: user.id,
+        email: user.email,
+        name: user.fullName || user.email,
+        role: user.role
       }
     })
   } catch (error) {
@@ -2418,6 +2480,105 @@ app.post(
     return res.status(500).json({ error: 'Failed to login' })
   }
 })
+
+// Self-service subscription management
+app.post('/api/membership-subscriptions/cancel', authRequired, async (req, res) => {
+  try {
+    const email = req.user?.email
+    if (!email) return res.status(400).json({ error: 'Missing user email' })
+
+    const subscription = await prisma.membershipSubscription.findFirst({
+      where: { userEmail: email, status: { in: ['active', 'trialing'] } },
+      orderBy: { createdDate: 'desc' }
+    })
+
+    if (!subscription) return res.status(404).json({ error: 'No active subscription found' })
+
+    // If Stripe subscription, cancel at period end via Stripe
+    if (subscription.stripeSubscriptionId && subscription.paymentProvider === 'stripe') {
+      const stripeClient = await getStripeClient()
+      if (stripeClient) {
+        await stripeClient.subscriptions.update(subscription.stripeSubscriptionId, {
+          cancel_at_period_end: true
+        })
+      }
+    }
+
+    // Update local record
+    await prisma.membershipSubscription.update({
+      where: { id: subscription.id },
+      data: {
+        cancelAtPeriodEnd: true,
+        cancelledAt: new Date()
+      }
+    })
+
+    res.json({ success: true, message: 'Subscription will cancel at end of billing period' })
+  } catch (error) {
+    logger.error('Error cancelling subscription:', error)
+    res.status(500).json({ error: 'Failed to cancel subscription' })
+  }
+})
+
+app.post(
+  '/api/membership-subscriptions/change-plan',
+  authRequired,
+  validateBody(z.object({
+    package_id: z.string().min(1)
+  })),
+  async (req, res) => {
+    try {
+      const email = req.user?.email
+      if (!email) return res.status(400).json({ error: 'Missing user email' })
+
+      const newPkg = await prisma.membershipPackage.findUnique({ where: { id: req.body.package_id } })
+      if (!newPkg || !newPkg.enabled) return res.status(404).json({ error: 'Package not found' })
+
+      const currentSub = await prisma.membershipSubscription.findFirst({
+        where: { userEmail: email, status: { in: ['active', 'trialing'] } },
+        orderBy: { createdDate: 'desc' }
+      })
+
+      // If no current subscription, redirect to checkout
+      if (!currentSub) {
+        return res.json({ action: 'checkout', package_id: newPkg.id })
+      }
+
+      // If Stripe subscription, update via Stripe
+      if (currentSub.stripeSubscriptionId && currentSub.paymentProvider === 'stripe' && newPkg.stripePriceId) {
+        const stripeClient = await getStripeClient()
+        if (stripeClient) {
+          const stripeSub = await stripeClient.subscriptions.retrieve(currentSub.stripeSubscriptionId)
+          await stripeClient.subscriptions.update(currentSub.stripeSubscriptionId, {
+            items: [{
+              id: stripeSub.items.data[0].id,
+              price: newPkg.stripePriceId
+            }],
+            proration_behavior: 'create_prorations'
+          })
+        }
+      }
+
+      // Update local record
+      await prisma.membershipSubscription.update({
+        where: { id: currentSub.id },
+        data: {
+          packageId: newPkg.id,
+          packageName: newPkg.name,
+          pricePaid: newPkg.price,
+          billingPeriod: newPkg.billingPeriod,
+          cancelAtPeriodEnd: false,
+          cancelledAt: null
+        }
+      })
+
+      res.json({ success: true, message: `Plan changed to ${newPkg.name}` })
+    } catch (error) {
+      logger.error('Error changing plan:', error)
+      res.status(500).json({ error: 'Failed to change plan' })
+    }
+  }
+)
 
 app.get('/api/entities/research-runs', authRequired, adminOnly, async (req, res) => {
   try {

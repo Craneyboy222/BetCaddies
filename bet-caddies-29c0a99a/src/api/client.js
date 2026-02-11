@@ -189,6 +189,16 @@ export class BetCaddiesApi {
     invoices: async () => {
       const response = await this.client.get('/api/membership-subscriptions/invoices')
       return response.data || []
+    },
+    cancel: async () => {
+      const response = await this.client.post('/api/membership-subscriptions/cancel', {})
+      return response
+    },
+    changePlan: async (packageId) => {
+      const response = await this.client.post('/api/membership-subscriptions/change-plan', {
+        package_id: packageId
+      })
+      return response
     }
   }
 
@@ -260,10 +270,21 @@ export class BetCaddiesApi {
     }
   }
 
-  // Admin API methods
+  // Auth & Admin API methods
   auth = {
     me: async () => {
       const response = await this.client.get('/api/auth/me')
+      return response
+    },
+    register: async (email, password, fullName) => {
+      const response = await this.client.post('/api/auth/register', {
+        email,
+        password,
+        full_name: fullName
+      })
+      if (response?.token) {
+        this.setToken(response.token)
+      }
       return response
     },
     login: async (email, password) => {
