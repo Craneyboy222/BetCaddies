@@ -1498,8 +1498,12 @@ export class WeeklyPipeline {
             continue
           }
 
-          const mktProbForBlend = normalizedImplied.get(selectionKey) || null
-          const blended = this.blendProbabilities({ sim: simProb, dg: dgProb, mkt: mktProbForBlend })
+          const isMatchupMarket = MATCHUP_MARKET_KEYS.has(market.marketKey)
+          // For matchup/3-ball markets, use sim probability directly — blending with
+          // market-implied odds is self-defeating (pulls fair prob toward bookmaker odds,
+          // eliminating any edge the head-to-head simulation finds).
+          const mktProbForBlend = isMatchupMarket ? null : (normalizedImplied.get(selectionKey) || null)
+          const blended = isMatchupMarket ? null : this.blendProbabilities({ sim: simProb, dg: dgProb, mkt: mktProbForBlend })
           const fairProb = validateProbability(
             Number.isFinite(blended)
               ? applyCalibration(blended, market.marketKey, event.tour)
