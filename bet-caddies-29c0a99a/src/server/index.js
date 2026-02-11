@@ -693,6 +693,11 @@ async function formatBetWithRealStats(bet, playerStats) {
     odds_decimal: offer.oddsDecimal
   }))
 
+  const isMatchup = ['tournament_matchups', 'round_matchups', '3_balls'].includes(bet.marketKey)
+  const edgePct = bet.edge != null ? (bet.edge * 100) : null
+  const fairProbPct = bet.fairProb != null ? (bet.fairProb * 100) : null
+  const marketProbPct = bet.marketProb != null ? (bet.marketProb * 100) : null
+
   return {
     id: bet.id,
     category: displayTier.toLowerCase().replace(/_/g, ''),
@@ -702,16 +707,21 @@ async function formatBetWithRealStats(bet, playerStats) {
     fallback_type: bet.fallbackType || null,
     tier_status: bet.tierStatus || null,
     mode: bet.mode || 'PRE_TOURNAMENT',
+    market_key: bet.marketKey || null,
+    is_matchup: isMatchup,
     books_used: bet.booksUsed || [],
     selection_name: bet.override?.selectionName || bet.selection,
     confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,
-    confidence_score: confidenceScore,  // New: 0-100 score
+    confidence_score: confidenceScore,
     bestBookmaker: bet.bestBookmaker,
     bestOdds: bet.bestOdds,
     edge: bet.edge ?? null,
+    edge_pct: edgePct,
     ev: bet.ev ?? null,
     fair_prob: bet.fairProb ?? null,
+    fair_prob_pct: fairProbPct,
     market_prob: bet.marketProb ?? null,
+    market_prob_pct: marketProbPct,
     prob_source: bet.probSource ?? null,
     market_prob_source: bet.marketProbSource ?? null,
     bet_title: bet.override?.betTitle || `${bet.selection} ${bet.marketKey || 'market'}`,
@@ -732,14 +742,12 @@ async function formatBetWithRealStats(bet, playerStats) {
     course_fit_adjustment: courseFit.totalFitAdjustment,
     course_history_adjustment: courseFit.courseHistoryAdjustment,
     driving_advantage: courseFit.drivingAdvantage,
-    // Weather (still using override or defaults for now)
     weather_icon: 'sunny',
     weather_label: bet.override?.weatherLabel || 'Clear',
     ai_analysis_paragraph: bet.override?.aiAnalysisParagraph ?? bet.analysisParagraph,
     ai_analysis_bullets: bet.analysisBullets || [],
-    // Alternative odds for comparison
     alternative_odds: alternativeOdds,
-    books_compared: alternativeOdds.length + 1,  // +1 for best bookmaker
+    books_compared: alternativeOdds.length + 1,
     affiliate_link: bet.override?.affiliateLinkOverride || `https://example.com/${bet.bestBookmaker.toLowerCase().replace(/\s+/g, '-')}`,
     tourEvent: {
       tour: bet.tourEvent?.tour || null,
