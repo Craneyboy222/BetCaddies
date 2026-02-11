@@ -1240,7 +1240,7 @@ export class WeeklyPipeline {
       const eventMeta = this.getEventMeta(event)
       if (eventMeta?.eventId && tourCode) {
         try {
-          const rawRounds = await DataGolfClient.getHistoricalRawRounds(tourCode, eventMeta.eventId)
+          const rawRounds = await DataGolfClient.getHistoricalRawRounds(tourCode, eventMeta.eventId, event.startDate?.getFullYear() || new Date().getFullYear())
           historicalRounds = normalizeDataGolfArray(rawRounds)
         } catch (error) {
           safeLogDataGolfError('historical-raw-rounds-for-profile', error, { tour: event.tour })
