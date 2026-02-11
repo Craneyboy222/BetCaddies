@@ -1,12 +1,13 @@
 import { useState, useMemo } from 'react';
 import { api } from '@/api/client';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { format } from 'date-fns';
-import { 
-  BarChart3, 
-  Target, 
-  Zap, 
+import {
+  BarChart3,
+  Target,
+  Zap,
   Trophy,
   Calendar,
   Award,
@@ -14,9 +15,15 @@ import {
   TrendingUp,
   TrendingDown,
   CheckCircle,
-  XCircle
+  XCircle,
+  PoundSterling,
+  Crown,
+  ArrowRight,
+  Check,
+  BookOpen
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -74,8 +81,8 @@ const OutcomeBadge = ({ outcome }) => {
 
 export default function Results() {
   const [selectedWeek, setSelectedWeek] = useState('all');
+  const navigate = useNavigate();
 
-  // Fetch historical picks from completed tournaments
   const { data: resultsData, isLoading, error } = useQuery({
     queryKey: ['historicalPicks', selectedWeek],
     queryFn: () => api.getSettledResults(selectedWeek),
@@ -83,19 +90,41 @@ export default function Results() {
     staleTime: 2 * 60 * 1000,
   });
 
+  const { data: recap } = useQuery({
+    queryKey: ['weeklyRecap'],
+    queryFn: () => api.getWeeklyRecap(),
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const { data: packages = [] } = useQuery({
+    queryKey: ['membershipPackages'],
+    queryFn: () => api.membershipPackages.list(),
+    retry: false
+  });
+
+  const { data: ctaContent } = useQuery({
+    queryKey: ['siteContent', 'results-cta'],
+    queryFn: () => api.siteContent.get('results-cta'),
+    retry: false
+  });
+
   const picks = resultsData?.data || [];
-  const stats = resultsData?.stats || { total: 0, totalPicks: 0, wins: 0, losses: 0, winRate: 0 };
+  const stats = resultsData?.stats || {};
   const categoryStats = resultsData?.categoryStats || [];
   const tourStats = resultsData?.tourStats || [];
   const availableWeeks = resultsData?.availableWeeks || [];
 
-  // Separate and sort picks - wins first (by odds), then losses (by odds)
+  const ctaTitle = ctaContent?.json?.title || 'Get Our Best Picks Every Week';
+  const ctaSubtitle = ctaContent?.json?.subtitle || 'Join BetCaddies and unlock expert golf betting picks, detailed analysis, and weekly insights delivered straight to you.';
+
   const { winningPicks, losingPicks, pendingPicks } = useMemo(() => {
     const wins = picks.filter(p => p.outcome === 'won').sort((a, b) => (b.odds_decimal_best || 0) - (a.odds_decimal_best || 0));
     const losses = picks.filter(p => p.outcome === 'lost').sort((a, b) => (b.odds_decimal_best || 0) - (a.odds_decimal_best || 0));
     const pending = picks.filter(p => !p.outcome || p.outcome === 'pending');
     return { winningPicks: wins, losingPicks: losses, pendingPicks: pending };
   }, [picks]);
+
+  const levelLabels = { free: 'Free', pro: 'Pro', elite: 'Elite' };
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
@@ -150,42 +179,81 @@ export default function Results() {
         />
       ) : (
         <>
-          {/* Win/Loss Summary - Hero Section */}
+          {/* Financial Stats Hero */}
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="mb-8 p-6 bg-gradient-to-r from-emerald-900/40 via-slate-800/50 to-rose-900/20 rounded-2xl border border-emerald-500/30"
+            className="mb-8"
           >
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-              <div className="text-center">
-                <div className="text-5xl font-bold text-emerald-400">{stats.wins || 0}</div>
-                <div className="text-emerald-300 font-medium mt-1 flex items-center justify-center gap-1">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-gradient-to-br from-emerald-900/50 to-emerald-800/20 rounded-2xl border border-emerald-500/30 p-5 text-center">
+                <div className="text-4xl font-bold text-emerald-400">{stats.wins || 0}</div>
+                <div className="text-emerald-300 font-medium mt-1 flex items-center justify-center gap-1 text-sm">
                   <Trophy className="w-4 h-4" />
-                  Winners
+                  Total Winners
                 </div>
               </div>
-              <div className="text-center">
-                <div className="text-5xl font-bold text-red-400">{stats.losses || 0}</div>
-                <div className="text-red-300 font-medium mt-1 flex items-center justify-center gap-1">
-                  <XCircle className="w-4 h-4" />
-                  Losses
+
+              <div className="bg-gradient-to-br from-blue-900/50 to-blue-800/20 rounded-2xl border border-blue-500/30 p-5 text-center">
+                <div className="text-4xl font-bold text-blue-400">{stats.lastWeekWins || 0}</div>
+                <div className="text-blue-300 font-medium mt-1 flex items-center justify-center gap-1 text-sm">
+                  <Calendar className="w-4 h-4" />
+                  Wins Last Week
                 </div>
               </div>
-              <div className="text-center">
-                <div className="text-5xl font-bold text-white">{stats.total || 0}</div>
-                <div className="text-slate-400 font-medium mt-1">Total Picks</div>
-              </div>
-              <div className="text-center">
-                <div className="text-5xl font-bold text-amber-400">
-                  {stats.winRate || 0}%
+
+              <div className="bg-gradient-to-br from-amber-900/50 to-amber-800/20 rounded-2xl border border-amber-500/30 p-5 text-center">
+                <div className="text-4xl font-bold text-amber-400">
+                  {(stats.lastWeekWinnings || 0) >= 0 ? '+' : ''}£{Math.abs(stats.lastWeekWinnings || 0).toFixed(2)}
                 </div>
-                <div className="text-amber-300 font-medium mt-1 flex items-center justify-center gap-1">
+                <div className="text-amber-300 font-medium mt-1 flex items-center justify-center gap-1 text-sm">
+                  <PoundSterling className="w-4 h-4" />
+                  Last Week P&L
+                </div>
+              </div>
+
+              <div className="bg-gradient-to-br from-violet-900/50 to-violet-800/20 rounded-2xl border border-violet-500/30 p-5 text-center">
+                <div className={`text-4xl font-bold ${(stats.runningTotal || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {(stats.runningTotal || 0) >= 0 ? '+' : ''}£{Math.abs(stats.runningTotal || 0).toFixed(2)}
+                </div>
+                <div className="text-violet-300 font-medium mt-1 flex items-center justify-center gap-1 text-sm">
                   <TrendingUp className="w-4 h-4" />
-                  Win Rate
+                  Running Total
                 </div>
               </div>
             </div>
+
+            <p className="text-slate-500 text-xs text-center mt-3">
+              All figures based on a flat £{stats.stake || 10} stake per bet. Win Rate: {stats.winRate || 0}% across {stats.total || 0} picks.
+            </p>
           </motion.div>
+
+          {/* Weekly Recap */}
+          {recap?.recapText && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="mb-10"
+            >
+              <div className="flex items-center gap-2 mb-4">
+                <BookOpen className="w-5 h-5 text-emerald-400" />
+                <h2 className="text-xl font-bold text-white">Weekly Recap</h2>
+                {recap.weekKey && (
+                  <Badge variant="outline" className="text-xs border-slate-600 text-slate-400 ml-2">
+                    {recap.weekKey.replace('weekly_', '').replace(/_/g, ' ')}
+                  </Badge>
+                )}
+              </div>
+              <div className="bg-slate-800/40 border border-slate-700/40 rounded-xl p-6">
+                {recap.recapText.split('\n\n').map((paragraph, idx) => (
+                  <p key={idx} className="text-slate-300 leading-relaxed mb-4 last:mb-0">
+                    {paragraph}
+                  </p>
+                ))}
+              </div>
+            </motion.div>
+          )}
 
           {/* Category Breakdown with Win Stats */}
           {categoryStats.filter(c => c.total > 0).length > 0 && (
@@ -255,7 +323,7 @@ export default function Results() {
                 <Trophy className="w-7 h-7 text-emerald-400" />
                 <h2 className="text-2xl font-bold text-emerald-400">Winners ({winningPicks.length})</h2>
               </div>
-              
+
               <div className="space-y-4">
                 {winningPicks.map((bet, idx) => (
                     <motion.div
@@ -290,6 +358,9 @@ export default function Results() {
                         </Badge>
                         <div className="text-right">
                           <div className="font-bold text-emerald-400 text-2xl">@ {bet.odds_display_best}</div>
+                          <div className="text-emerald-300 text-xs mt-0.5">
+                            +£{((bet.odds_decimal_best || 2) * 10 - 10).toFixed(2)}
+                          </div>
                           <OutcomeBadge outcome="won" />
                         </div>
                       </div>
@@ -306,7 +377,7 @@ export default function Results() {
                 <TrendingDown className="w-5 h-5 text-slate-500" />
                 <h2 className="text-lg font-medium text-slate-500">Losses ({losingPicks.length})</h2>
               </div>
-              
+
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
                 {losingPicks.map((bet, idx) => (
                   <motion.div
@@ -332,18 +403,18 @@ export default function Results() {
             </div>
           )}
 
-          {/* PENDING PICKS - if any */}
+          {/* PENDING PICKS */}
           {pendingPicks.length > 0 && (
             <div className="mb-10">
               <div className="flex items-center gap-2 mb-3">
                 <Clock className="w-5 h-5 text-slate-400" />
                 <h2 className="text-lg font-medium text-slate-400">Pending Settlement ({pendingPicks.length})</h2>
               </div>
-              
+
               <div className="text-sm text-slate-500 mb-3">
                 Awaiting final results data to determine outcomes.
               </div>
-              
+
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
                 {pendingPicks.slice(0, 12).map((bet) => (
                   <div
@@ -366,6 +437,109 @@ export default function Results() {
           )}
         </>
       )}
+
+      {/* CTA Section + Membership Packages */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2 }}
+        className="mt-16"
+      >
+        {/* CTA Header */}
+        <div className="text-center mb-10">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500/30 to-amber-600/20 border border-amber-500/30 mb-4">
+            <Crown className="w-8 h-8 text-amber-400" />
+          </div>
+          <h2 className="text-3xl font-bold text-white mb-3">{ctaTitle}</h2>
+          <p className="text-lg text-slate-400 max-w-2xl mx-auto">{ctaSubtitle}</p>
+        </div>
+
+        {/* Membership Packages Grid */}
+        {packages.length > 0 && (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl mx-auto">
+            {packages.filter(pkg => pkg.enabled !== false).map((pkg, idx) => {
+              const isPopular = pkg.popular || pkg.badges?.some(b => String(b?.text || '').toLowerCase().includes('popular'));
+
+              return (
+                <motion.div
+                  key={pkg.id}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.3 + idx * 0.1 }}
+                  className={`bg-slate-800/50 backdrop-blur-sm rounded-2xl border p-8 relative ${
+                    isPopular
+                      ? 'border-emerald-500/50 shadow-lg shadow-emerald-500/20'
+                      : 'border-slate-700/50'
+                  }`}
+                >
+                  {isPopular && (
+                    <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                      <Badge className="bg-emerald-500 text-white border-emerald-400 px-3 py-1">
+                        <Zap className="w-3 h-3 mr-1" /> Most Popular
+                      </Badge>
+                    </div>
+                  )}
+
+                  {pkg.access_level && pkg.access_level !== 'free' && (
+                    <Badge className={`mb-3 ${
+                      pkg.access_level === 'elite'
+                        ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                        : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                    }`}>
+                      {levelLabels[pkg.access_level] || pkg.access_level} Access
+                    </Badge>
+                  )}
+
+                  <h3 className="text-2xl font-bold text-white mb-2">{pkg.name}</h3>
+
+                  <div className="mb-6">
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-4xl font-bold text-white">£{pkg.price}</span>
+                      <span className="text-slate-400">/{pkg.billing_period}</span>
+                    </div>
+                    {pkg.trial_days > 0 && (
+                      <p className="text-emerald-400 text-sm mt-1">
+                        {pkg.trial_days}-day free trial included
+                      </p>
+                    )}
+                  </div>
+
+                  {pkg.description && (
+                    <p className="text-slate-400 mb-6 text-sm">{pkg.description}</p>
+                  )}
+
+                  {pkg.features && pkg.features.length > 0 && (
+                    <div className="space-y-2 mb-6">
+                      {pkg.features.slice(0, 4).map((feature, fidx) => (
+                        <div key={fidx} className="flex items-start gap-2">
+                          <Check className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                          <span className="text-slate-300 text-sm">{feature}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={() => navigate('/Memberships')}
+                    className={`w-full ${
+                      isPopular
+                        ? 'bg-emerald-500 hover:bg-emerald-600'
+                        : 'bg-slate-700 hover:bg-slate-600'
+                    }`}
+                  >
+                    Get Started
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </Button>
+                </motion.div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="mt-8 text-center text-slate-500 text-sm">
+          <p>All prices in GBP. Cancel anytime. No hidden fees.</p>
+        </div>
+      </motion.div>
     </div>
   );
 }
