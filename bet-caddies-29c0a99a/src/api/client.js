@@ -161,6 +161,31 @@ export class BetCaddiesApi {
     return response.data || response
   }
 
+  async trackEvent(eventType, metadata = {}) {
+    try {
+      await this.client.post('/api/analytics/track', {
+        eventType,
+        metadata,
+        pageUrl: window.location.href,
+        referrer: document.referrer || null,
+      })
+    } catch {
+      // Silent fail — analytics should never break the app
+    }
+  }
+
+  async exportCsv(type) {
+    const url = `${API_BASE_URL}/api/admin/export/${type}`
+    const response = await fetch(url, { headers: this.buildHeaders() })
+    if (!response.ok) throw await this.buildHttpError(response)
+    const blob = await response.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${type}.csv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
   siteContent = {
     list: async () => {
       const response = await this.client.get('/api/site-content')
