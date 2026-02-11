@@ -1031,6 +1031,7 @@ export class WeeklyPipeline {
                 oddsDecimal: offer.oddsDecimal,
                 oddsDisplay: offer.oddsDisplay,
                 deepLink: offer.deepLink ?? null,
+                matchupLabel: offer.matchupLabel || null,
                 fetchedAt: offer.fetchedAt || new Date()
               }
             })
@@ -1455,9 +1456,6 @@ export class WeeklyPipeline {
             id: bestOffer.selectionId || null
           })
           const dgProb = this.getPredProbability(predsIndex, selectionKey, bestOffer.selectionId, market.marketKey)
-          const dgDisagreement = Number.isFinite(dgProb)
-            ? Math.abs(simProb - dgProb)
-            : null
           // Internal simulation is authoritative. DataGolf probabilities are optional priors/calibration inputs
           // and must never replace missing simulation outputs.
           let simProb
@@ -1491,6 +1489,9 @@ export class WeeklyPipeline {
             label: 'sim_probability',
             context: { selectionKey, marketKey: market.marketKey, event: event.eventName }
           })
+          const dgDisagreement = Number.isFinite(dgProb) && Number.isFinite(simProb)
+            ? Math.abs(simProb - dgProb)
+            : null
 
           if (!Number.isFinite(simProb)) {
             stat.invalid.missingFair += 1

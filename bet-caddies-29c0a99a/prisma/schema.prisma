@@ -214,6 +214,7 @@ model OddsOffer {
   deepLink      String?
   fetchedAt     DateTime   @default(now())
   selectionId   String?
+  matchupLabel  String?
   oddsMarket    OddsMarket @relation(fields: [oddsMarketId], references: [id], onDelete: Cascade)
 
   @@unique([oddsMarketId, selectionName, bookmaker])
