@@ -674,3 +674,205 @@ model SelectionOutcomeMetric {
   @@index([tour, marketKey])
   @@map("selection_outcome_metrics")
 }
+
+// ── Analytics & Tracking ─────────────────────────────────────────
+
+model AnalyticsEvent {
+  id           String   @id @default(cuid())
+  eventType    String
+  userId       String?
+  anonymousId  String?
+  sessionId    String?
+  metadata     Json?
+  ipAddress    String?
+  userAgent    String?
+  pageUrl      String?
+  referrer     String?
+  createdAt    DateTime @default(now())
+
+  @@index([eventType, createdAt])
+  @@index([userId])
+  @@index([anonymousId])
+  @@index([createdAt])
+  @@map("analytics_events")
+}
+
+// ── Discounts & Coupons ──────────────────────────────────────────
+
+model Coupon {
+  id                String    @id @default(cuid())
+  code              String    @unique
+  description       String?
+  discountType      String    // "percentage" | "fixed"
+  discountAmount    Float     // e.g. 20 for 20% or 5.00 for £5
+  currency          String    @default("gbp")
+  maxUses           Int?      // null = unlimited
+  currentUses       Int       @default(0)
+  minOrderAmount    Float?
+  applicablePackages Json?    // null = all packages, or array of package IDs
+  validFrom         DateTime  @default(now())
+  validUntil        DateTime?
+  enabled           Boolean   @default(true)
+  stripeCouponId    String?   // linked Stripe coupon
+  createdBy         String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  redemptions       CouponRedemption[]
+
+  @@index([code])
+  @@index([enabled, validFrom, validUntil])
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id             String   @id @default(cuid())
+  couponId       String
+  userId         String?
+  userEmail      String
+  subscriptionId String?
+  discountApplied Float
+  redeemedAt     DateTime @default(now())
+  coupon         Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+
+  @@index([couponId])
+  @@index([userEmail])
+  @@map("coupon_redemptions")
+}
+
+// ── Referral / Affiliate Program ─────────────────────────────────
+
+model Referral {
+  id               String    @id @default(cuid())
+  referrerUserId   String
+  referralCode     String    @unique
+  totalReferrals   Int       @default(0)
+  totalConversions Int       @default(0)
+  totalEarnings    Float     @default(0)
+  commissionRate   Float     @default(0)    // e.g. 0.10 for 10%
+  enabled          Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  clicks           ReferralClick[]
+
+  @@index([referrerUserId])
+  @@index([referralCode])
+  @@map("referrals")
+}
+
+model ReferralClick {
+  id            String   @id @default(cuid())
+  referralId    String
+  ipAddress     String?
+  userAgent     String?
+  convertedUserId String?
+  convertedAt   DateTime?
+  createdAt     DateTime @default(now())
+  referral      Referral @relation(fields: [referralId], references: [id], onDelete: Cascade)
+
+  @@index([referralId])
+  @@map("referral_clicks")
+}
+
+// ── Scheduled Publishing ─────────────────────────────────────────
+
+model ScheduledPublish {
+  id            String    @id @default(cuid())
+  resourceType  String    // "page" | "site_content" | "recap"
+  resourceId    String
+  action        String    // "publish" | "unpublish" | "update"
+  scheduledFor  DateTime
+  executedAt    DateTime?
+  status        String    @default("pending") // "pending" | "executed" | "cancelled" | "failed"
+  payload       Json?
+  createdBy     String?
+  createdAt     DateTime  @default(now())
+
+  @@index([status, scheduledFor])
+  @@map("scheduled_publishes")
+}
+
+// ── Webhook Configuration ────────────────────────────────────────
+
+model WebhookConfig {
+  id          String   @id @default(cuid())
+  name        String
+  url         String
+  events      Json     // array of event types to trigger on
+  secret      String?  // HMAC signing secret
+  enabled     Boolean  @default(true)
+  headers     Json?    // custom headers
+  retryCount  Int      @default(3)
+  lastTriggeredAt DateTime?
+  lastStatus  Int?     // HTTP status of last delivery
+  failCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("webhook_configs")
+}
+
+model WebhookDelivery {
+  id            String   @id @default(cuid())
+  webhookId     String
+  eventType     String
+  payload       Json
+  responseCode  Int?
+  responseBody  String?
+  duration      Int?     // ms
+  status        String   @default("pending") // "pending" | "success" | "failed"
+  attempts      Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([webhookId, createdAt])
+  @@index([status])
+  @@map("webhook_deliveries")
+}
+
+// ── System Health ────────────────────────────────────────────────
+
+model SystemHealthLog {
+  id           String   @id @default(cuid())
+  metric       String   // "api_response_time" | "db_query_time" | "pipeline_duration" | "error_rate"
+  value        Float
+  unit         String   @default("ms")
+  endpoint     String?
+  metadata     Json?
+  recordedAt   DateTime @default(now())
+
+  @@index([metric, recordedAt])
+  @@map("system_health_logs")
+}
+
+// ── Email Notifications ──────────────────────────────────────────
+
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  subject     String
+  bodyHtml    String
+  bodyText    String?
+  variables   Json?    // list of available template variables
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("email_templates")
+}
+
+model EmailSend {
+  id           String    @id @default(cuid())
+  templateSlug String?
+  toEmail      String
+  subject      String
+  status       String    @default("queued") // "queued" | "sent" | "failed" | "bounced"
+  provider     String?   // "smtp" | "sendgrid" | "ses"
+  providerMsgId String?
+  errorMessage String?
+  sentAt       DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([toEmail])
+  @@index([status, createdAt])
+  @@map("email_sends")
+}

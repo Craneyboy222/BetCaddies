@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { api } from '@/api/client';
 
 const STORAGE_KEY = 'betcaddies_tracked_bets';
 
@@ -38,7 +39,8 @@ export function useTrackedBets() {
   const toggleTrack = useCallback((bet) => {
     setTracked(prev => {
       const next = { ...prev };
-      if (next[bet.id]) {
+      const wasTracked = !!next[bet.id];
+      if (wasTracked) {
         delete next[bet.id];
       } else {
         next[bet.id] = {
@@ -59,6 +61,16 @@ export function useTrackedBets() {
           confidence_rating: bet.confidence_rating,
           tracked_at: new Date().toISOString()
         };
+        // Fire analytics event for server-side tracking
+        api.trackEvent('bet_tracked', {
+          betId: bet.id,
+          selection: bet.selection_name,
+          tier: bet.tier,
+          category: bet.category,
+          market: bet.market_label,
+          tour: bet.tour,
+          odds: bet.odds_decimal_best,
+        });
       }
       saveTracked(next);
       return next;

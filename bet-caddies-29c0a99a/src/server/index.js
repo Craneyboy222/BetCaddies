@@ -2014,6 +2014,915 @@ app.post('/api/admin/generate-recap', authRequired, adminOnly, async (req, res) 
   }
 })
 
+// ══════════════════════════════════════════════════════════════════
+// Analytics, Coupons, Referrals, Webhooks, Email Templates,
+// Scheduled Publish, System Health, Export, Bet Performance
+// ══════════════════════════════════════════════════════════════════
+
+// ── 1. Analytics Event Tracking (public) ────────────────────────
+app.post('/api/analytics/track', optionalAuth, async (req, res) => {
+  try {
+    const { eventType, metadata, pageUrl, referrer, sessionId } = req.body
+    if (!eventType) return res.status(400).json({ error: 'eventType is required' })
+
+    const userId = req.user?.id || null
+    const anonymousId = userId
+      ? null
+      : crypto.createHash('sha256').update(req.ip || 'unknown').digest('hex').slice(0, 16)
+
+    await prisma.analyticsEvent.create({
+      data: {
+        eventType,
+        userId,
+        anonymousId,
+        sessionId: sessionId || null,
+        metadata: metadata || undefined,
+        ipAddress: req.ip || null,
+        userAgent: req.headers['user-agent'] || null,
+        pageUrl: pageUrl || null,
+        referrer: referrer || null
+      }
+    })
+
+    res.json({ ok: true })
+  } catch (error) {
+    logger.error('Failed to track analytics event', { error: error.message })
+    res.status(500).json({ error: 'Failed to track event' })
+  }
+})
+
+// ── 2. Analytics Dashboard (admin only) ─────────────────────────
+
+app.get('/api/admin/analytics/overview', authRequired, adminOnly, async (req, res) => {
+  try {
+    const now = new Date()
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+
+    const [
+      totalUsers,
+      activeSubscriptions,
+      activeSubs,
+      totalBets,
+      totalPageViews,
+      signupsLast7Days,
+      signupsLast30Days
+    ] = await Promise.all([
+      prisma.user.count(),
+      prisma.membershipSubscription.count({ where: { status: 'active' } }),
+      prisma.membershipSubscription.findMany({
+        where: { status: 'active' },
+        select: { pricePaid: true, billingPeriod: true }
+      }),
+      prisma.betRecommendation.count(),
+      prisma.analyticsEvent.count({ where: { eventType: 'page_view' } }),
+      prisma.user.count({ where: { createdAt: { gte: sevenDaysAgo } } }),
+      prisma.user.count({ where: { createdAt: { gte: thirtyDaysAgo } } })
+    ])
+
+    const mrr = activeSubs.reduce((sum, sub) => {
+      if (sub.billingPeriod === 'yearly') return sum + (sub.pricePaid / 12)
+      return sum + sub.pricePaid
+    }, 0)
+
+    res.json({
+      totalUsers,
+      activeSubscriptions,
+      mrr: Math.round(mrr * 100) / 100,
+      totalBets,
+      totalPageViews,
+      signupsLast7Days,
+      signupsLast30Days
+    })
+  } catch (error) {
+    logger.error('Failed to fetch analytics overview', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch analytics overview' })
+  }
+})
+
+app.get('/api/admin/analytics/events', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { eventType, days = '30', limit = '100' } = req.query
+    const daysNum = parseInt(days, 10) || 30
+    const limitNum = parseInt(limit, 10) || 100
+    const since = new Date(Date.now() - daysNum * 24 * 60 * 60 * 1000)
+
+    const where = { createdAt: { gte: since } }
+    if (eventType) where.eventType = eventType
+
+    const events = await prisma.analyticsEvent.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limitNum
+    })
+
+    // Group by day
+    const grouped = {}
+    for (const ev of events) {
+      const day = ev.createdAt.toISOString().slice(0, 10)
+      if (!grouped[day]) grouped[day] = { date: day, count: 0 }
+      grouped[day].count++
+    }
+
+    res.json({
+      daily: Object.values(grouped).sort((a, b) => a.date.localeCompare(b.date)),
+      events
+    })
+  } catch (error) {
+    logger.error('Failed to fetch analytics events', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch analytics events' })
+  }
+})
+
+app.get('/api/admin/analytics/conversions', authRequired, adminOnly, async (req, res) => {
+  try {
+    const now = new Date()
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+
+    const funnelSteps = ['page_view', 'signup', 'checkout_start', 'checkout_complete']
+    const results = {}
+
+    await Promise.all(funnelSteps.map(async (step) => {
+      const [last7, last30] = await Promise.all([
+        prisma.analyticsEvent.count({ where: { eventType: step, createdAt: { gte: sevenDaysAgo } } }),
+        prisma.analyticsEvent.count({ where: { eventType: step, createdAt: { gte: thirtyDaysAgo } } })
+      ])
+      results[step] = { last7Days: last7, last30Days: last30 }
+    }))
+
+    res.json({
+      pageViews: results['page_view'],
+      signups: results['signup'],
+      checkoutStarts: results['checkout_start'],
+      checkoutCompletes: results['checkout_complete']
+    })
+  } catch (error) {
+    logger.error('Failed to fetch conversion data', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch conversion data' })
+  }
+})
+
+app.get('/api/admin/analytics/popular-bets', authRequired, adminOnly, async (req, res) => {
+  try {
+    const trackEvents = await prisma.analyticsEvent.findMany({
+      where: { eventType: 'track_bet' }
+    })
+
+    // Group by metadata.betId
+    const betCounts = {}
+    for (const ev of trackEvents) {
+      const betId = ev.metadata?.betId
+      if (!betId) continue
+      if (!betCounts[betId]) betCounts[betId] = 0
+      betCounts[betId]++
+    }
+
+    const sorted = Object.entries(betCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+
+    const betIds = sorted.map(([id]) => id)
+    const bets = await prisma.betRecommendation.findMany({
+      where: { id: { in: betIds } },
+      include: { tourEvent: true }
+    })
+
+    const betMap = {}
+    for (const b of bets) betMap[b.id] = b
+
+    const popular = sorted.map(([betId, count]) => {
+      const bet = betMap[betId]
+      return {
+        betId,
+        trackCount: count,
+        selection: bet?.selection || null,
+        tier: bet?.tier || null,
+        marketKey: bet?.marketKey || null,
+        tournament: bet?.tourEvent?.eventName || null,
+        tour: bet?.tourEvent?.tour || null
+      }
+    })
+
+    // Breakdown by tier
+    const tierBreakdown = {}
+    for (const item of popular) {
+      const tier = item.tier || 'unknown'
+      if (!tierBreakdown[tier]) tierBreakdown[tier] = { tier, count: 0 }
+      tierBreakdown[tier].count += item.trackCount
+    }
+
+    res.json({ popular, tierBreakdown: Object.values(tierBreakdown) })
+  } catch (error) {
+    logger.error('Failed to fetch popular bets', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch popular bets' })
+  }
+})
+
+// ── 3. Coupon CRUD (admin only) ─────────────────────────────────
+
+app.get('/api/admin/coupons', authRequired, adminOnly, async (req, res) => {
+  try {
+    const coupons = await prisma.coupon.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { _count: { select: { redemptions: true } } }
+    })
+    res.json({ data: coupons })
+  } catch (error) {
+    logger.error('Error fetching coupons', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch coupons' })
+  }
+})
+
+app.post('/api/admin/coupons', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { code, description, discountType, discountAmount, currency, maxUses, minOrderAmount, applicablePackages, validFrom, validUntil, enabled, stripeCouponId } = req.body
+    if (!discountType || discountAmount == null) {
+      return res.status(400).json({ error: 'discountType and discountAmount are required' })
+    }
+
+    const finalCode = code || crypto.randomBytes(6).toString('hex').toUpperCase()
+
+    const coupon = await prisma.coupon.create({
+      data: {
+        code: finalCode,
+        description: description || null,
+        discountType,
+        discountAmount,
+        currency: currency || 'gbp',
+        maxUses: maxUses || null,
+        minOrderAmount: minOrderAmount || null,
+        applicablePackages: applicablePackages || null,
+        validFrom: validFrom ? new Date(validFrom) : new Date(),
+        validUntil: validUntil ? new Date(validUntil) : null,
+        enabled: enabled !== false,
+        stripeCouponId: stripeCouponId || null,
+        createdBy: req.user.id || null
+      }
+    })
+
+    res.json(coupon)
+  } catch (error) {
+    logger.error('Error creating coupon', { error: error.message })
+    res.status(500).json({ error: 'Failed to create coupon' })
+  }
+})
+
+app.put('/api/admin/coupons/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const coupon = await prisma.coupon.update({
+      where: { id },
+      data: req.body
+    })
+    res.json(coupon)
+  } catch (error) {
+    logger.error('Error updating coupon', { error: error.message })
+    res.status(500).json({ error: 'Failed to update coupon' })
+  }
+})
+
+app.delete('/api/admin/coupons/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    await prisma.coupon.delete({ where: { id } })
+    res.json({ ok: true })
+  } catch (error) {
+    logger.error('Error deleting coupon', { error: error.message })
+    res.status(500).json({ error: 'Failed to delete coupon' })
+  }
+})
+
+// Public: validate coupon
+app.post('/api/coupons/validate', async (req, res) => {
+  try {
+    const { code, packageId } = req.body
+    if (!code) return res.status(400).json({ error: 'code is required' })
+
+    const coupon = await prisma.coupon.findUnique({ where: { code } })
+    if (!coupon) return res.status(404).json({ error: 'Coupon not found' })
+    if (!coupon.enabled) return res.status(400).json({ error: 'Coupon is disabled' })
+
+    const now = new Date()
+    if (coupon.validFrom && now < coupon.validFrom) return res.status(400).json({ error: 'Coupon not yet valid' })
+    if (coupon.validUntil && now > coupon.validUntil) return res.status(400).json({ error: 'Coupon has expired' })
+    if (coupon.maxUses && coupon.currentUses >= coupon.maxUses) return res.status(400).json({ error: 'Coupon usage limit reached' })
+
+    if (packageId && coupon.applicablePackages) {
+      const packages = Array.isArray(coupon.applicablePackages) ? coupon.applicablePackages : []
+      if (packages.length > 0 && !packages.includes(packageId)) {
+        return res.status(400).json({ error: 'Coupon not applicable to this package' })
+      }
+    }
+
+    res.json({
+      valid: true,
+      code: coupon.code,
+      discountType: coupon.discountType,
+      discountAmount: coupon.discountAmount,
+      description: coupon.description
+    })
+  } catch (error) {
+    logger.error('Error validating coupon', { error: error.message })
+    res.status(500).json({ error: 'Failed to validate coupon' })
+  }
+})
+
+// Authenticated: redeem coupon
+app.post('/api/coupons/redeem', authRequired, async (req, res) => {
+  try {
+    const { code, packageId } = req.body
+    if (!code) return res.status(400).json({ error: 'code is required' })
+
+    const coupon = await prisma.coupon.findUnique({ where: { code } })
+    if (!coupon) return res.status(404).json({ error: 'Coupon not found' })
+    if (!coupon.enabled) return res.status(400).json({ error: 'Coupon is disabled' })
+
+    const now = new Date()
+    if (coupon.validFrom && now < coupon.validFrom) return res.status(400).json({ error: 'Coupon not yet valid' })
+    if (coupon.validUntil && now > coupon.validUntil) return res.status(400).json({ error: 'Coupon has expired' })
+    if (coupon.maxUses && coupon.currentUses >= coupon.maxUses) return res.status(400).json({ error: 'Coupon usage limit reached' })
+
+    if (packageId && coupon.applicablePackages) {
+      const packages = Array.isArray(coupon.applicablePackages) ? coupon.applicablePackages : []
+      if (packages.length > 0 && !packages.includes(packageId)) {
+        return res.status(400).json({ error: 'Coupon not applicable to this package' })
+      }
+    }
+
+    const redemption = await prisma.couponRedemption.create({
+      data: {
+        couponId: coupon.id,
+        userId: req.user.id || null,
+        userEmail: req.user.email,
+        subscriptionId: null,
+        discountApplied: coupon.discountAmount
+      }
+    })
+
+    await prisma.coupon.update({
+      where: { id: coupon.id },
+      data: { currentUses: { increment: 1 } }
+    })
+
+    res.json({ ok: true, redemption })
+  } catch (error) {
+    logger.error('Error redeeming coupon', { error: error.message })
+    res.status(500).json({ error: 'Failed to redeem coupon' })
+  }
+})
+
+// ── 4. Referral CRUD (admin only) ───────────────────────────────
+
+app.get('/api/admin/referrals', authRequired, adminOnly, async (req, res) => {
+  try {
+    const referrals = await prisma.referral.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { _count: { select: { clicks: true } } }
+    })
+    res.json({ data: referrals })
+  } catch (error) {
+    logger.error('Error fetching referrals', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch referrals' })
+  }
+})
+
+app.post('/api/admin/referrals', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { referrerUserId, referralCode, commissionRate, enabled } = req.body
+    if (!referrerUserId) return res.status(400).json({ error: 'referrerUserId is required' })
+
+    const finalCode = referralCode || crypto.randomBytes(4).toString('hex').toUpperCase()
+
+    const referral = await prisma.referral.create({
+      data: {
+        referrerUserId,
+        referralCode: finalCode,
+        commissionRate: commissionRate || 0,
+        enabled: enabled !== false
+      }
+    })
+    res.json(referral)
+  } catch (error) {
+    logger.error('Error creating referral', { error: error.message })
+    res.status(500).json({ error: 'Failed to create referral' })
+  }
+})
+
+app.put('/api/admin/referrals/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const referral = await prisma.referral.update({
+      where: { id },
+      data: req.body
+    })
+    res.json(referral)
+  } catch (error) {
+    logger.error('Error updating referral', { error: error.message })
+    res.status(500).json({ error: 'Failed to update referral' })
+  }
+})
+
+// Public: track referral click
+app.get('/api/referral/:code', async (req, res) => {
+  try {
+    const { code } = req.params
+    const referral = await prisma.referral.findUnique({ where: { referralCode: code } })
+    if (!referral) return res.status(404).json({ error: 'Referral not found' })
+    if (!referral.enabled) return res.status(400).json({ error: 'Referral link is disabled' })
+
+    await prisma.referralClick.create({
+      data: {
+        referralId: referral.id,
+        ipAddress: req.ip || null,
+        userAgent: req.headers['user-agent'] || null
+      }
+    })
+
+    await prisma.referral.update({
+      where: { id: referral.id },
+      data: { totalReferrals: { increment: 1 } }
+    })
+
+    res.json({
+      referralCode: referral.referralCode,
+      referrerUserId: referral.referrerUserId
+    })
+  } catch (error) {
+    logger.error('Error tracking referral click', { error: error.message })
+    res.status(500).json({ error: 'Failed to track referral' })
+  }
+})
+
+// ── 5. Webhook Config CRUD (admin only) ─────────────────────────
+
+app.get('/api/admin/webhooks', authRequired, adminOnly, async (req, res) => {
+  try {
+    const webhooks = await prisma.webhookConfig.findMany({ orderBy: { createdAt: 'desc' } })
+    res.json({ data: webhooks })
+  } catch (error) {
+    logger.error('Error fetching webhooks', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch webhooks' })
+  }
+})
+
+app.post('/api/admin/webhooks', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { name, url, events, secret, enabled, headers, retryCount } = req.body
+    if (!name || !url || !events) return res.status(400).json({ error: 'name, url, and events are required' })
+
+    const webhook = await prisma.webhookConfig.create({
+      data: {
+        name,
+        url,
+        events,
+        secret: secret || null,
+        enabled: enabled !== false,
+        headers: headers || null,
+        retryCount: retryCount || 3
+      }
+    })
+    res.json(webhook)
+  } catch (error) {
+    logger.error('Error creating webhook', { error: error.message })
+    res.status(500).json({ error: 'Failed to create webhook' })
+  }
+})
+
+app.put('/api/admin/webhooks/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const webhook = await prisma.webhookConfig.update({
+      where: { id },
+      data: req.body
+    })
+    res.json(webhook)
+  } catch (error) {
+    logger.error('Error updating webhook', { error: error.message })
+    res.status(500).json({ error: 'Failed to update webhook' })
+  }
+})
+
+app.delete('/api/admin/webhooks/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    await prisma.webhookConfig.delete({ where: { id } })
+    res.json({ ok: true })
+  } catch (error) {
+    logger.error('Error deleting webhook', { error: error.message })
+    res.status(500).json({ error: 'Failed to delete webhook' })
+  }
+})
+
+app.get('/api/admin/webhooks/:id/deliveries', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const deliveries = await prisma.webhookDelivery.findMany({
+      where: { webhookId: id },
+      orderBy: { createdAt: 'desc' },
+      take: 50
+    })
+    res.json({ data: deliveries })
+  } catch (error) {
+    logger.error('Error fetching webhook deliveries', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch deliveries' })
+  }
+})
+
+app.post('/api/admin/webhooks/:id/test', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const webhook = await prisma.webhookConfig.findUnique({ where: { id } })
+    if (!webhook) return res.status(404).json({ error: 'Webhook not found' })
+
+    const testPayload = { event: 'test', timestamp: new Date().toISOString(), webhookId: id }
+    const headers = { 'Content-Type': 'application/json', ...(webhook.headers || {}) }
+    if (webhook.secret) {
+      headers['X-Webhook-Signature'] = crypto.createHmac('sha256', webhook.secret).update(JSON.stringify(testPayload)).digest('hex')
+    }
+
+    const startTime = Date.now()
+    let responseCode = null
+    let responseBody = null
+    let status = 'failed'
+
+    try {
+      const response = await fetch(webhook.url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(testPayload),
+        signal: AbortSignal.timeout(10000)
+      })
+      responseCode = response.status
+      responseBody = await response.text().catch(() => null)
+      status = response.ok ? 'success' : 'failed'
+    } catch (fetchErr) {
+      responseBody = fetchErr.message
+    }
+
+    const delivery = await prisma.webhookDelivery.create({
+      data: {
+        webhookId: id,
+        eventType: 'test',
+        payload: testPayload,
+        responseCode,
+        responseBody: responseBody?.slice(0, 2000) || null,
+        duration: Date.now() - startTime,
+        status,
+        attempts: 1
+      }
+    })
+
+    res.json({ ok: status === 'success', delivery })
+  } catch (error) {
+    logger.error('Error testing webhook', { error: error.message })
+    res.status(500).json({ error: 'Failed to test webhook' })
+  }
+})
+
+// ── 6. Email Template CRUD (admin only) ─────────────────────────
+
+app.get('/api/admin/email-templates', authRequired, adminOnly, async (req, res) => {
+  try {
+    const templates = await prisma.emailTemplate.findMany({ orderBy: { createdAt: 'desc' } })
+    res.json({ data: templates })
+  } catch (error) {
+    logger.error('Error fetching email templates', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch email templates' })
+  }
+})
+
+app.post('/api/admin/email-templates', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { slug, name, subject, bodyHtml, bodyText, variables, enabled } = req.body
+    if (!slug || !name || !subject || !bodyHtml) {
+      return res.status(400).json({ error: 'slug, name, subject, and bodyHtml are required' })
+    }
+
+    const template = await prisma.emailTemplate.create({
+      data: {
+        slug,
+        name,
+        subject,
+        bodyHtml,
+        bodyText: bodyText || null,
+        variables: variables || null,
+        enabled: enabled !== false
+      }
+    })
+    res.json(template)
+  } catch (error) {
+    logger.error('Error creating email template', { error: error.message })
+    res.status(500).json({ error: 'Failed to create email template' })
+  }
+})
+
+app.put('/api/admin/email-templates/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const template = await prisma.emailTemplate.update({
+      where: { id },
+      data: req.body
+    })
+    res.json(template)
+  } catch (error) {
+    logger.error('Error updating email template', { error: error.message })
+    res.status(500).json({ error: 'Failed to update email template' })
+  }
+})
+
+app.delete('/api/admin/email-templates/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    await prisma.emailTemplate.delete({ where: { id } })
+    res.json({ ok: true })
+  } catch (error) {
+    logger.error('Error deleting email template', { error: error.message })
+    res.status(500).json({ error: 'Failed to delete email template' })
+  }
+})
+
+app.post('/api/admin/email-templates/:id/test-send', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const { toEmail } = req.body
+    if (!toEmail) return res.status(400).json({ error: 'toEmail is required' })
+
+    const template = await prisma.emailTemplate.findUnique({ where: { id } })
+    if (!template) return res.status(404).json({ error: 'Template not found' })
+
+    const emailSend = await prisma.emailSend.create({
+      data: {
+        templateSlug: template.slug,
+        toEmail,
+        subject: `[TEST] ${template.subject}`,
+        status: 'queued',
+        provider: null
+      }
+    })
+
+    res.json({ ok: true, emailSend })
+  } catch (error) {
+    logger.error('Error sending test email', { error: error.message })
+    res.status(500).json({ error: 'Failed to send test email' })
+  }
+})
+
+app.get('/api/admin/email-sends', authRequired, adminOnly, async (req, res) => {
+  try {
+    const sends = await prisma.emailSend.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100
+    })
+    res.json({ data: sends })
+  } catch (error) {
+    logger.error('Error fetching email sends', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch email sends' })
+  }
+})
+
+// ── 7. Scheduled Publish CRUD (admin only) ──────────────────────
+
+app.get('/api/admin/scheduled', authRequired, adminOnly, async (req, res) => {
+  try {
+    const items = await prisma.scheduledPublish.findMany({ orderBy: { scheduledFor: 'desc' } })
+    res.json({ data: items })
+  } catch (error) {
+    logger.error('Error fetching scheduled publishes', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch scheduled publishes' })
+  }
+})
+
+app.post('/api/admin/scheduled', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { resourceType, resourceId, action, scheduledFor, payload } = req.body
+    if (!resourceType || !resourceId || !action || !scheduledFor) {
+      return res.status(400).json({ error: 'resourceType, resourceId, action, and scheduledFor are required' })
+    }
+
+    const item = await prisma.scheduledPublish.create({
+      data: {
+        resourceType,
+        resourceId,
+        action,
+        scheduledFor: new Date(scheduledFor),
+        payload: payload || null,
+        createdBy: req.user.id || null
+      }
+    })
+    res.json(item)
+  } catch (error) {
+    logger.error('Error creating scheduled publish', { error: error.message })
+    res.status(500).json({ error: 'Failed to create scheduled publish' })
+  }
+})
+
+app.put('/api/admin/scheduled/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    const data = { ...req.body }
+    if (data.scheduledFor) data.scheduledFor = new Date(data.scheduledFor)
+    const item = await prisma.scheduledPublish.update({ where: { id }, data })
+    res.json(item)
+  } catch (error) {
+    logger.error('Error updating scheduled publish', { error: error.message })
+    res.status(500).json({ error: 'Failed to update scheduled publish' })
+  }
+})
+
+app.delete('/api/admin/scheduled/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params
+    await prisma.scheduledPublish.delete({ where: { id } })
+    res.json({ ok: true })
+  } catch (error) {
+    logger.error('Error deleting scheduled publish', { error: error.message })
+    res.status(500).json({ error: 'Failed to delete scheduled publish' })
+  }
+})
+
+// ── 8. System Health (admin only) ───────────────────────────────
+
+app.get('/api/admin/system-health', authRequired, adminOnly, async (req, res) => {
+  try {
+    const now = new Date()
+    const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+
+    const [recentMetrics, errorCount, avgResponseTime, lastPipelineRun] = await Promise.all([
+      prisma.systemHealthLog.findMany({
+        where: { recordedAt: { gte: twentyFourHoursAgo } },
+        orderBy: { recordedAt: 'desc' },
+        take: 50
+      }),
+      prisma.systemHealthLog.count({
+        where: { metric: 'error_rate', recordedAt: { gte: twentyFourHoursAgo } }
+      }),
+      prisma.systemHealthLog.aggregate({
+        where: { metric: 'api_response_time', recordedAt: { gte: twentyFourHoursAgo } },
+        _avg: { value: true }
+      }),
+      prisma.systemHealthLog.findFirst({
+        where: { metric: 'pipeline_duration' },
+        orderBy: { recordedAt: 'desc' }
+      })
+    ])
+
+    // DB size estimate via Prisma raw query
+    let dbSizeMb = null
+    try {
+      const result = await prisma.$queryRaw`SELECT pg_database_size(current_database()) as size`
+      dbSizeMb = result[0]?.size ? Math.round(Number(result[0].size) / 1024 / 1024 * 100) / 100 : null
+    } catch {}
+
+    res.json({
+      uptimeSeconds: Math.floor(process.uptime()),
+      dbSizeMb,
+      errorCountLast24h: errorCount,
+      avgApiResponseTimeMs: avgResponseTime._avg?.value ? Math.round(avgResponseTime._avg.value * 100) / 100 : null,
+      lastPipelineRunDurationMs: lastPipelineRun?.value || null,
+      lastPipelineRunAt: lastPipelineRun?.recordedAt || null,
+      recentMetrics
+    })
+  } catch (error) {
+    logger.error('Failed to fetch system health', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch system health' })
+  }
+})
+
+// ── 9. Export endpoints (admin only) ────────────────────────────
+
+app.get('/api/admin/export/subscriptions', authRequired, adminOnly, async (req, res) => {
+  try {
+    const subs = await prisma.membershipSubscription.findMany({
+      orderBy: { createdDate: 'desc' },
+      include: { package: true }
+    })
+
+    const header = 'id,userEmail,packageName,status,billingPeriod,pricePaid,createdDate,stripeSubscriptionId\n'
+    const rows = subs.map(s =>
+      `"${s.id}","${s.userEmail}","${s.packageName}","${s.status}","${s.billingPeriod}",${s.pricePaid},"${s.createdDate.toISOString()}","${s.stripeSubscriptionId || ''}"`
+    ).join('\n')
+
+    res.setHeader('Content-Type', 'text/csv')
+    res.setHeader('Content-Disposition', 'attachment; filename="subscriptions.csv"')
+    res.send(header + rows)
+  } catch (error) {
+    logger.error('Failed to export subscriptions', { error: error.message })
+    res.status(500).json({ error: 'Failed to export subscriptions' })
+  }
+})
+
+app.get('/api/admin/export/users', authRequired, adminOnly, async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({ orderBy: { createdAt: 'desc' } })
+
+    const header = 'id,email,fullName,role,createdAt,onboardingCompleted,totalBetsPlaced,totalWins\n'
+    const rows = users.map(u =>
+      `"${u.id}","${u.email}","${u.fullName || ''}","${u.role}","${u.createdAt.toISOString()}",${u.onboardingCompleted},${u.totalBetsPlaced},${u.totalWins}`
+    ).join('\n')
+
+    res.setHeader('Content-Type', 'text/csv')
+    res.setHeader('Content-Disposition', 'attachment; filename="users.csv"')
+    res.send(header + rows)
+  } catch (error) {
+    logger.error('Failed to export users', { error: error.message })
+    res.status(500).json({ error: 'Failed to export users' })
+  }
+})
+
+app.get('/api/admin/export/bets', authRequired, adminOnly, async (req, res) => {
+  try {
+    const bets = await prisma.betRecommendation.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { tourEvent: true }
+    })
+
+    const header = 'id,tier,selection,marketKey,confidence,bestOdds,edge,tournament,tour,createdAt\n'
+    const rows = bets.map(b =>
+      `"${b.id}","${b.tier}","${b.selection}","${b.marketKey || ''}",${b.confidence1To5},${b.bestOdds},${b.edge || ''},"${b.tourEvent?.eventName || ''}","${b.tourEvent?.tour || ''}","${b.createdAt.toISOString()}"`
+    ).join('\n')
+
+    res.setHeader('Content-Type', 'text/csv')
+    res.setHeader('Content-Disposition', 'attachment; filename="bets.csv"')
+    res.send(header + rows)
+  } catch (error) {
+    logger.error('Failed to export bets', { error: error.message })
+    res.status(500).json({ error: 'Failed to export bets' })
+  }
+})
+
+// ── 10. Bet Performance (admin only) ────────────────────────────
+
+app.get('/api/admin/analytics/bet-performance', authRequired, adminOnly, async (req, res) => {
+  try {
+    const bets = await prisma.betRecommendation.findMany({
+      include: { tourEvent: true }
+    })
+
+    // Win rate by tier
+    const tierStats = {}
+    const marketStats = {}
+    const tourStats = {}
+
+    for (const bet of bets) {
+      const tier = bet.tier || 'unknown'
+      const market = bet.marketKey || 'unknown'
+      const tour = bet.tourEvent?.tour || 'unknown'
+      const isWin = bet.tierStatus === 'won'
+      const isSettled = bet.tierStatus === 'won' || bet.tierStatus === 'lost'
+
+      // Tier stats
+      if (!tierStats[tier]) tierStats[tier] = { tier, total: 0, wins: 0, settled: 0, totalEdge: 0, totalStake: 0, totalReturn: 0, probSum: 0, actualWins: 0 }
+      tierStats[tier].total++
+      if (isSettled) tierStats[tier].settled++
+      if (isWin) tierStats[tier].wins++
+      if (bet.edge) tierStats[tier].totalEdge += bet.edge
+      if (bet.fairProb) tierStats[tier].probSum += bet.fairProb
+      if (isWin) tierStats[tier].actualWins++
+
+      // Market stats
+      if (!marketStats[market]) marketStats[market] = { market, total: 0, wins: 0, settled: 0 }
+      marketStats[market].total++
+      if (isSettled) marketStats[market].settled++
+      if (isWin) marketStats[market].wins++
+
+      // Tour stats
+      if (!tourStats[tour]) tourStats[tour] = { tour, total: 0, wins: 0, settled: 0 }
+      tourStats[tour].total++
+      if (isSettled) tourStats[tour].settled++
+      if (isWin) tourStats[tour].wins++
+    }
+
+    const calcRate = (obj) => {
+      const entries = Object.values(obj)
+      return entries.map(e => ({
+        ...e,
+        winRate: e.settled > 0 ? Math.round((e.wins / e.settled) * 10000) / 100 : null
+      }))
+    }
+
+    const tierResults = Object.values(tierStats).map(t => ({
+      ...t,
+      winRate: t.settled > 0 ? Math.round((t.wins / t.settled) * 10000) / 100 : null,
+      avgPredictedProb: t.total > 0 ? Math.round((t.probSum / t.total) * 10000) / 100 : null,
+      actualWinRate: t.settled > 0 ? Math.round((t.actualWins / t.settled) * 10000) / 100 : null,
+      avgEdge: t.total > 0 ? Math.round((t.totalEdge / t.total) * 10000) / 100 : null,
+      roi: t.settled > 0 && t.totalEdge ? Math.round((t.totalEdge / t.total) * 10000) / 100 : null
+    }))
+
+    res.json({
+      byTier: tierResults,
+      byMarket: calcRate(marketStats),
+      byTour: calcRate(tourStats),
+      totalBets: bets.length,
+      totalSettled: bets.filter(b => b.tierStatus === 'won' || b.tierStatus === 'lost').length
+    })
+  } catch (error) {
+    logger.error('Failed to fetch bet performance', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch bet performance' })
+  }
+})
+
 // Get tournaments
 app.get('/api/tournaments', async (req, res) => {
   try {
@@ -5473,6 +6382,86 @@ process.on('unhandledRejection', (reason, promise) => {
 })
 
 // Auto-archive old bets on startup and periodically
+async function seedMembershipPackages() {
+  try {
+    const count = await prisma.membershipPackage.count()
+    if (count > 0) return // Already have packages
+
+    const packages = [
+      {
+        name: 'Par',
+        description: 'Perfect for casual golf punters who want an edge. Get weekly value picks backed by data — not gut feeling.',
+        price: 9.99,
+        billingPeriod: 'month',
+        features: [
+          '3-5 Par Tier picks every week',
+          'AI-powered selection analysis',
+          'Best odds comparison across bookmakers',
+          'Course fit ratings for every pick',
+          'Weekly results recap with P&L tracking',
+          'Email alerts for new picks'
+        ],
+        badges: [{ text: 'Great Value', color: 'emerald' }],
+        displayOrder: 1,
+        accessLevel: 'free',
+        trialDays: 7,
+        popular: false,
+        enabled: true
+      },
+      {
+        name: 'Birdie',
+        description: 'For serious bettors who want the full picture. Unlock mid-range value plays and deeper analysis to sharpen every decision.',
+        price: 19.99,
+        billingPeriod: 'month',
+        features: [
+          'Everything in Par, plus...',
+          '5-8 Birdie Tier picks every week',
+          'Matchup & head-to-head betting picks',
+          'Fair probability & edge % on every bet',
+          'Odds movement alerts & market signals',
+          'Live bet tracking dashboard',
+          'Priority access to new features'
+        ],
+        badges: [{ text: 'Most Popular', color: 'emerald' }, { text: 'Best Value', color: 'blue' }],
+        displayOrder: 2,
+        accessLevel: 'pro',
+        trialDays: 7,
+        popular: true,
+        enabled: true
+      },
+      {
+        name: 'Eagle',
+        description: 'The ultimate edge. High-conviction longshots, exclusive insights, and every tool we build — before anyone else sees it.',
+        price: 34.99,
+        billingPeriod: 'month',
+        features: [
+          'Everything in Birdie, plus...',
+          '3-5 Eagle Tier high-value longshots weekly',
+          'The Long Shots — curated moonshot picks',
+          'Full confidence ratings (1-5 stars)',
+          'Detailed course fit & form breakdowns',
+          'Exclusive Hole-in-One Challenge entry',
+          'VIP Discord community access',
+          'Export your betting history & analytics'
+        ],
+        badges: [{ text: 'Premium', color: 'amber' }, { text: 'All Access', color: 'purple' }],
+        displayOrder: 3,
+        accessLevel: 'elite',
+        trialDays: 7,
+        popular: false,
+        enabled: true
+      }
+    ]
+
+    for (const pkg of packages) {
+      await prisma.membershipPackage.create({ data: pkg })
+    }
+    logger.info('Seeded 3 membership packages (Par, Birdie, Eagle)')
+  } catch (error) {
+    logger.error('Failed to seed membership packages', { error: error.message })
+  }
+}
+
 async function autoArchiveOldBets() {
   try {
     const now = new Date()
@@ -5602,6 +6591,7 @@ async function processDunning() {
 const HOST = process.env.HOST || '0.0.0.0';
 try {
   await seedCmsPages()
+  await seedMembershipPackages()
 
   // Auto-archive old bets on startup
   await autoArchiveOldBets()
