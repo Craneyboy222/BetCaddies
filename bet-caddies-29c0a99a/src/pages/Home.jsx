@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
+import { useTrackedBets } from '@/hooks/useTrackedBets';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '../utils';
 import { motion } from 'framer-motion';
@@ -120,20 +121,7 @@ export default function Home() {
     queryFn: () => Promise.resolve([]) // Mock for now
   });
 
-  const { data: userBets = [] } = useQuery({
-    queryKey: ['userBets'],
-    queryFn: () => Promise.resolve([]), // Mock for now
-    enabled: !!user
-  });
-
-  const addBetMutation = useMutation({
-    mutationFn: (bet) => {
-      // Mock implementation - in production this would call the API
-      console.log('Adding bet:', bet);
-      return Promise.resolve({ success: true });
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['userBets'] })
-  });
+  const { isTracked, toggleTrack } = useTrackedBets();
 
   const filteredBets = bets.filter(bet =>
     selectedTour === 'all' || bet.tourEvent?.tour === selectedTour
@@ -147,7 +135,6 @@ export default function Home() {
   };
 
   const featuredBets = filteredBets.slice(0, 6);
-  const userBetIds = new Set(userBets.map(ub => ub.golf_bet_id));
 
   const currentWeek = bets[0]?.run_id?.replace('weekly_', '') || 'This Week';
 
@@ -250,8 +237,8 @@ export default function Home() {
                 <BetCard
                   bet={bet}
                   providers={providers}
-                  isAdded={userBetIds.has(bet.id)}
-                  onAddBet={(b) => addBetMutation.mutate(b)}
+                  isAdded={isTracked(bet.id)}
+                  onAddBet={toggleTrack}
                 />
               </motion.div>
             ))}

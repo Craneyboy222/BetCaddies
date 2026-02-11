@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '@/api/client';
 import { useQuery } from '@tanstack/react-query';
+import { useTrackedBets } from '@/hooks/useTrackedBets';
 import { motion } from 'framer-motion';
 import { Trophy, SlidersHorizontal } from 'lucide-react';
 import BetCard from '@/components/ui/BetCard';
@@ -35,9 +36,7 @@ export default function EagleBets() {
   });
 
   const providers = [];
-  const userBets = [];
-
-  const addBetMutation = { mutate: () => {} };
+  const { isTracked, toggleTrack } = useTrackedBets();
 
   let filteredBets = bets.filter(bet => 
     selectedTour === 'all' || bet.tour === selectedTour
@@ -51,7 +50,6 @@ export default function EagleBets() {
     filteredBets = [...filteredBets].sort((a, b) => (b.edge || 0) - (a.edge || 0));
   }
 
-  const userBetIds = new Set(userBets.map(ub => ub.golf_bet_id));
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
@@ -116,8 +114,8 @@ export default function EagleBets() {
               <BetCard
                 bet={bet}
                 providers={providers}
-                isAdded={userBetIds.has(bet.id)}
-                onAddBet={(b) => addBetMutation.mutate(b)}
+                isAdded={isTracked(bet.id)}
+                onAddBet={toggleTrack}
               />
             </motion.div>
           ))}

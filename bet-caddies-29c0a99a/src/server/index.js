@@ -706,12 +706,16 @@ async function formatBetWithRealStats(bet, playerStats) {
   }
   const marketLabel = marketLabels[bet.marketKey] || bet.marketKey || 'Outright'
 
-  // Extract matchup opponent from modelConfidenceJson
+  // Extract matchup opponent from modelConfidenceJson or selection field
   const matchupLabel = bet.modelConfidenceJson?.matchupLabel || null
   let matchupOpponent = null
-  if (isMatchup && matchupLabel) {
-    const parts = matchupLabel.split(' vs ').filter(n => n.toLowerCase() !== bet.selection?.toLowerCase())
-    matchupOpponent = parts.join(' & ')
+  if (isMatchup) {
+    // Try modelConfidenceJson first, then fall back to parsing the selection field
+    const labelToSplit = matchupLabel || bet.selection || ''
+    if (labelToSplit.includes(' vs ')) {
+      const parts = labelToSplit.split(' vs ').filter(n => n.toLowerCase() !== (bet.override?.selectionName || bet.selection || '').toLowerCase())
+      matchupOpponent = parts.join(' & ') || null
+    }
   }
 
   return {
@@ -758,6 +762,15 @@ async function formatBetWithRealStats(bet, playerStats) {
     dg_rank: form.dgRank,
     owgr_rank: form.owgrRank,
     course_fit_score: bet.override?.courseFitScore ?? courseFit.courseFitScore ?? null,
+    course_fit_rating: (() => {
+      const score = bet.override?.courseFitScore ?? courseFit.courseFitScore
+      if (score == null) return null
+      if (score >= 80) return 5
+      if (score >= 60) return 4
+      if (score >= 40) return 3
+      if (score >= 20) return 2
+      return 1
+    })(),
     course_fit_adjustment: courseFit.totalFitAdjustment,
     course_history_adjustment: courseFit.courseHistoryAdjustment,
     driving_advantage: courseFit.drivingAdvantage,
@@ -2963,6 +2976,49 @@ app.post(
   }
 )
 
+// Admin: Regenerate a single HIO question using real event data
+app.post(
+  '/api/entities/hio-challenges/:id/regenerate-question',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    index: z.number().int().min(0)
+  })),
+  async (req, res) => {
+    try {
+      const { id } = req.params
+      const { index } = req.body
+      const { generateWeeklyQuestions } = await import('../services/hio-question-generator.js')
+
+      const challenge = await prisma.hIOChallenge.findUnique({ where: { id } })
+      if (!challenge) return res.status(404).json({ error: 'Challenge not found' })
+
+      const questions = challenge.questions || []
+      if (index >= questions.length) return res.status(400).json({ error: 'Invalid question index' })
+
+      // Generate a fresh batch and pick one
+      const { questions: freshQuestions } = await generateWeeklyQuestions()
+      const replacement = freshQuestions[Math.floor(Math.random() * freshQuestions.length)]
+
+      questions[index] = replacement
+      const updated = await prisma.hIOChallenge.update({
+        where: { id },
+        data: { questions }
+      })
+
+      res.json({
+        data: {
+          id: updated.id,
+          questions: updated.questions
+        }
+      })
+    } catch (error) {
+      logger.error('Failed to regenerate HIO question', { error: error?.message })
+      res.status(500).json({ error: 'Failed to regenerate question' })
+    }
+  }
+)
+
 app.put(
   '/api/entities/hio-challenges/:id',
   authRequired,
@@ -3660,6 +3716,19 @@ app.get('/api/entities/pages/:id/revisions', authRequired, adminOnly, async (req
 })
 
 // Admin: media assets
+
+// R2 status check for admin
+app.get('/api/entities/media-assets/status', authRequired, adminOnly, (req, res) => {
+  const configured = !!(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET && R2_PUBLIC_BASE_URL)
+  const missing = []
+  if (!R2_ACCOUNT_ID) missing.push('R2_ACCOUNT_ID')
+  if (!R2_ACCESS_KEY_ID) missing.push('R2_ACCESS_KEY_ID')
+  if (!R2_SECRET_ACCESS_KEY) missing.push('R2_SECRET_ACCESS_KEY')
+  if (!R2_BUCKET) missing.push('R2_BUCKET')
+  if (!R2_PUBLIC_BASE_URL) missing.push('R2_PUBLIC_BASE_URL')
+  res.json({ configured, missing })
+})
+
 app.get('/api/entities/media-assets', authRequired, adminOnly, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 100, 500)
