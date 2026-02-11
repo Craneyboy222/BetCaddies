@@ -773,6 +773,25 @@ if (cronEnabled) {
       logger.error('Scheduled pipeline run failed (Tuesday)', { error: error.message })
     }
   }, { timezone: 'Europe/London' })
+
+  // Monday 7am GMT - Generate weekly recap for the previous week
+  cron.schedule('0 7 * * 1', async () => {
+    try {
+      logger.info('Starting MONDAY weekly recap generation')
+      // Find the most recent completed run
+      const latestRun = await prisma.run.findFirst({
+        where: { status: 'completed' },
+        orderBy: { weekEnd: 'desc' }
+      })
+      if (latestRun) {
+        await generateWeeklyRecap(latestRun.runKey)
+      } else {
+        logger.info('No completed runs found for recap generation')
+      }
+    } catch (error) {
+      logger.error('Weekly recap generation failed', { error: error.message })
+    }
+  }, { timezone: 'Europe/London' })
 }
 
 // Railway cron endpoint - can be called by Railway Cron or external scheduler
@@ -1647,17 +1666,72 @@ app.get('/api/results', async (req, res) => {
     })
 
     // Calculate summary statistics
+    const STAKE = 10 // £10 per bet
     const wins = formattedBets.filter(b => b.outcome === 'won')
     const losses = formattedBets.filter(b => b.outcome === 'lost')
     const pending = formattedBets.filter(b => !b.outcome || b.outcome === 'pending')
-    
+
+    // Financial calculations: profit per bet
+    // Win: £10 × (decimal odds - 1), Loss: -£10
+    const calcProfit = (bet) => {
+      if (bet.outcome === 'won') {
+        const odds = bet.odds_decimal_best || 2.0
+        return STAKE * (odds - 1)
+      }
+      if (bet.outcome === 'lost') return -STAKE
+      return 0
+    }
+
+    const totalWinnings = formattedBets.reduce((sum, b) => sum + calcProfit(b), 0)
+
+    // Weekly breakdown for running totals
+    const weekMap = new Map()
+    for (const bet of formattedBets) {
+      const wk = bet.run_id || 'unknown'
+      if (!weekMap.has(wk)) {
+        weekMap.set(wk, { weekKey: wk, weekStart: bet.run_week_start, weekEnd: bet.run_week_end, bets: [] })
+      }
+      weekMap.get(wk).bets.push(bet)
+    }
+
+    // Sort weeks chronologically
+    const weeklyBreakdown = [...weekMap.values()]
+      .sort((a, b) => new Date(a.weekStart || 0) - new Date(b.weekStart || 0))
+
+    let runningTotal = 0
+    const weeklyStats = weeklyBreakdown.map(w => {
+      const wWins = w.bets.filter(b => b.outcome === 'won')
+      const wLosses = w.bets.filter(b => b.outcome === 'lost')
+      const weekProfit = w.bets.reduce((sum, b) => sum + calcProfit(b), 0)
+      runningTotal += weekProfit
+      return {
+        weekKey: w.weekKey,
+        weekStart: w.weekStart,
+        weekEnd: w.weekEnd,
+        totalPicks: w.bets.length,
+        wins: wWins.length,
+        losses: wLosses.length,
+        weekWinnings: Math.round(weekProfit * 100) / 100,
+        runningTotal: Math.round(runningTotal * 100) / 100
+      }
+    })
+
+    // "Last week" = most recent completed week
+    const lastWeekStats = weeklyStats.length > 0 ? weeklyStats[weeklyStats.length - 1] : null
+
     const stats = {
       total: formattedBets.length,
       totalPicks: formattedBets.length,
       wins: wins.length,
       losses: losses.length,
       pending: pending.length,
-      winRate: formattedBets.length > 0 ? (wins.length / (wins.length + losses.length) * 100).toFixed(1) : 0
+      winRate: formattedBets.length > 0 ? (wins.length / (wins.length + losses.length) * 100).toFixed(1) : 0,
+      // Financial stats (£10/bet basis)
+      stake: STAKE,
+      totalWinnings: Math.round(totalWinnings * 100) / 100,
+      lastWeekWins: lastWeekStats?.wins || 0,
+      lastWeekWinnings: lastWeekStats?.weekWinnings || 0,
+      runningTotal: Math.round(runningTotal * 100) / 100
     }
 
     // Category breakdown with outcomes
@@ -1690,12 +1764,253 @@ app.get('/api/results', async (req, res) => {
       stats,
       categoryStats,
       tourStats,
+      weeklyStats,
       availableWeeks: uniqueRuns,
       count: formattedBets.length
     })
   } catch (error) {
     logger.error('Failed to fetch historical picks', { error: error.message })
     res.status(500).json({ error: 'Failed to fetch results' })
+  }
+})
+
+// ── Weekly Recap Generation ─────────────────────────────────────────
+async function generateWeeklyRecap(weekKey) {
+  try {
+    // Fetch all completed bets for this week
+    const run = await prisma.run.findUnique({ where: { runKey: weekKey } })
+    if (!run) {
+      logger.warn(`Weekly recap: no run found for ${weekKey}`)
+      return null
+    }
+
+    const allBets = await prisma.betRecommendation.findMany({
+      where: {
+        runId: run.id,
+        run: { status: 'completed' },
+        tourEvent: { endDate: { lt: new Date() } }
+      },
+      include: {
+        tourEvent: true,
+        override: true
+      }
+    })
+
+    if (allBets.length === 0) {
+      logger.info(`Weekly recap: no settled bets for ${weekKey}`)
+      return null
+    }
+
+    // Re-use the same outcome logic from the results endpoint
+    const STAKE = 10
+    const tourEventIds = [...new Set(allBets.map(b => b.tourEventId))]
+    const tourEvents = await prisma.tourEvent.findMany({ where: { id: { in: tourEventIds } } })
+
+    // Get leaderboard data for outcome determination
+    const leaderboards = await prisma.leaderboardSnapshot.findMany({
+      where: { tourEventId: { in: tourEventIds }, round: 4 },
+      orderBy: { fetchedAt: 'desc' }
+    })
+    const finalLbMap = new Map()
+    for (const lb of leaderboards) {
+      if (!finalLbMap.has(lb.tourEventId)) finalLbMap.set(lb.tourEventId, lb.leaderboardJson)
+    }
+
+    // Map bets to outcomes
+    const betsWithOutcome = allBets.map(bet => {
+      const lbJson = finalLbMap.get(bet.tourEventId)
+      let position = null, status = null
+      if (lbJson && Array.isArray(lbJson)) {
+        const entry = lbJson.find(p =>
+          (bet.dgPlayerId && (String(p.dg_id) === String(bet.dgPlayerId) || String(p.player_id) === String(bet.dgPlayerId))) ||
+          (bet.selection && (p.player_name || p.name || '').toLowerCase() === bet.selection.toLowerCase())
+        )
+        if (entry) {
+          const rawPos = entry.position ?? entry.pos ?? entry.current_pos
+          if (typeof rawPos === 'string') {
+            const norm = rawPos.toUpperCase().trim()
+            if (['MC', 'CUT', 'MISSED CUT'].includes(norm)) status = 'MC'
+            else if (['WD', 'W/D'].includes(norm)) status = 'WD'
+            else if (norm === 'DQ') status = 'DQ'
+            else position = parseInt(norm.replace('T', ''), 10) || null
+          } else if (typeof rawPos === 'number') {
+            position = rawPos
+          }
+        }
+      }
+      const scoring = position || status ? { position, status } : null
+      const eventCompleted = bet.tourEvent?.endDate && new Date(bet.tourEvent.endDate) < new Date()
+      let outcome = determineBetOutcome(bet.marketKey, scoring, eventCompleted ? 'completed' : 'live')
+      if (eventCompleted && (!outcome || outcome === 'pending') && !scoring) {
+        const mk = (bet.marketKey || '').toLowerCase()
+        if (mk === 'win' || mk.startsWith('top_') || mk === 'frl') outcome = 'lost'
+        else if (mk === 'mc') outcome = 'lost'
+        else if (mk === 'make_cut') outcome = 'won'
+      }
+      return {
+        selection: bet.override?.selectionName || bet.selection,
+        marketKey: bet.marketKey,
+        odds: bet.bestOdds,
+        outcome,
+        position,
+        status,
+        tournament: bet.tourEvent?.eventName,
+        tour: bet.tourEvent?.tour,
+        tier: bet.override?.tierOverride || bet.tier
+      }
+    })
+
+    const wins = betsWithOutcome.filter(b => b.outcome === 'won')
+    const losses = betsWithOutcome.filter(b => b.outcome === 'lost')
+    const totalProfit = betsWithOutcome.reduce((sum, b) => {
+      if (b.outcome === 'won') return sum + STAKE * ((b.odds || 2) - 1)
+      if (b.outcome === 'lost') return sum - STAKE
+      return sum
+    }, 0)
+
+    // Get tournament names
+    const tournamentNames = [...new Set(betsWithOutcome.map(b => b.tournament).filter(Boolean))]
+
+    // Pick one notable loss for the recap
+    const notableLoss = losses.length > 0
+      ? losses.sort((a, b) => (b.odds || 0) - (a.odds || 0))[0]
+      : null
+
+    // Generate the recap text
+    const marketLabel = (mk) => {
+      if (!mk) return ''
+      if (mk === 'win') return 'win'
+      if (mk === 'frl') return 'be first round leader'
+      if (mk === 'make_cut') return 'make the cut'
+      if (mk === 'mc') return 'miss the cut'
+      if (mk.startsWith('top_')) return `finish ${mk.replace('_', ' ')}`
+      return mk
+    }
+
+    // Build paragraphs
+    const paragraphs = []
+
+    // P1: Opening - tournament overview
+    const tournStr = tournamentNames.length === 1
+      ? tournamentNames[0]
+      : tournamentNames.slice(0, -1).join(', ') + ' and ' + tournamentNames[tournamentNames.length - 1]
+    const totalBets = betsWithOutcome.filter(b => b.outcome === 'won' || b.outcome === 'lost').length
+    paragraphs.push(
+      `Another week in the books! This week we had our eyes on ${tournStr}. ` +
+      `Across ${totalBets} picks, we landed ${wins.length} winner${wins.length !== 1 ? 's' : ''} ` +
+      `and finished the week ${totalProfit >= 0 ? 'up' : 'down'} £${Math.abs(Math.round(totalProfit * 100) / 100).toFixed(2)} ` +
+      `based on a flat £${STAKE} stake per bet.`
+    )
+
+    // P2: Highlight top wins
+    if (wins.length > 0) {
+      const topWins = wins.sort((a, b) => (b.odds || 0) - (a.odds || 0)).slice(0, 3)
+      const winLines = topWins.map(w =>
+        `${w.selection} at ${w.odds?.toFixed(2) || '?'}` +
+        (w.position ? ` (finished #${w.position})` : '')
+      )
+      const winStr = winLines.length === 1
+        ? winLines[0]
+        : winLines.slice(0, -1).join(', ') + ' and ' + winLines[winLines.length - 1]
+      paragraphs.push(
+        `The standout pick${topWins.length > 1 ? 's were' : ' was'} ${winStr}. ` +
+        `${wins.length > topWins.length ? `We also had ${wins.length - topWins.length} other winner${wins.length - topWins.length > 1 ? 's' : ''} to round off a solid week. ` : ''}` +
+        `It's always nice when the research pays off!`
+      )
+    }
+
+    // P3: Notable loss mention
+    if (notableLoss) {
+      const lossMarket = marketLabel(notableLoss.marketKey)
+      paragraphs.push(
+        `Unfortunately, ${notableLoss.selection} let us down as we had ${notableLoss.selection.split(' ').pop() === notableLoss.selection ? 'them' : 'him'} tipped to ${lossMarket}` +
+        (notableLoss.status === 'MC' ? ` but missed the cut.` :
+         notableLoss.position ? ` but could only manage a #${notableLoss.position} finish.` :
+         `.`) +
+        ` Can't win them all — on to next week!`
+      )
+    }
+
+    // P4: Look ahead (only if we have 3 or fewer paragraphs)
+    if (paragraphs.length < 4) {
+      paragraphs.push(
+        `New picks drop every Tuesday once the odds are locked in, so keep your eyes peeled. ` +
+        `If you haven't already, join the membership to get our full analysis and top-tier selections delivered straight to you.`
+      )
+    }
+
+    // Cap at 4 paragraphs
+    const recapText = paragraphs.slice(0, 4).join('\n\n')
+
+    const statsSnapshot = {
+      totalPicks: totalBets,
+      wins: wins.length,
+      losses: losses.length,
+      totalProfit: Math.round(totalProfit * 100) / 100,
+      topWin: wins.length > 0 ? { selection: wins[0].selection, odds: wins[0].odds } : null
+    }
+
+    // Upsert the recap
+    const recap = await prisma.weeklyRecap.upsert({
+      where: { weekKey },
+      update: {
+        recapText,
+        tournaments: tournamentNames,
+        statsSnapshot,
+        generatedAt: new Date()
+      },
+      create: {
+        weekKey,
+        weekStart: run.weekStart,
+        weekEnd: run.weekEnd,
+        recapText,
+        tournaments: tournamentNames,
+        statsSnapshot
+      }
+    })
+
+    logger.info(`Weekly recap generated for ${weekKey}`, { wins: wins.length, losses: losses.length })
+    return recap
+  } catch (error) {
+    logger.error(`Failed to generate weekly recap for ${weekKey}:`, { error: error.message })
+    return null
+  }
+}
+
+// Get latest weekly recap
+app.get('/api/weekly-recap', async (req, res) => {
+  try {
+    const recap = await prisma.weeklyRecap.findFirst({
+      orderBy: { generatedAt: 'desc' }
+    })
+    res.json(recap || null)
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch recap' })
+  }
+})
+
+// Get recap by week key
+app.get('/api/weekly-recap/:weekKey', async (req, res) => {
+  try {
+    const recap = await prisma.weeklyRecap.findUnique({
+      where: { weekKey: req.params.weekKey }
+    })
+    res.json(recap || null)
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch recap' })
+  }
+})
+
+// Admin: manually trigger recap generation
+app.post('/api/admin/generate-recap', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { weekKey } = req.body
+    if (!weekKey) return res.status(400).json({ error: 'weekKey is required' })
+    const recap = await generateWeeklyRecap(weekKey)
+    if (!recap) return res.status(404).json({ error: 'No data found for this week' })
+    res.json(recap)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
   }
 })
 

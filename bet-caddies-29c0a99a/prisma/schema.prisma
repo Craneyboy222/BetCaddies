@@ -531,6 +531,19 @@ model ContentAccessRule {
   @@map("content_access_rules")
 }
 
+model WeeklyRecap {
+  id            String   @id @default(cuid())
+  weekKey       String   @unique
+  weekStart     DateTime
+  weekEnd       DateTime
+  recapText     String
+  tournaments   Json
+  statsSnapshot Json
+  generatedAt   DateTime @default(now())
+
+  @@map("weekly_recaps")
+}
+
 model HIOChallenge {
   id               String     @id @default(cuid())
   status           String     @default("active")

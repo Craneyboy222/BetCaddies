@@ -151,6 +151,11 @@ export class BetCaddiesApi {
     return response
   }
 
+  async getWeeklyRecap() {
+    const response = await this.client.get('/api/weekly-recap')
+    return response
+  }
+
   async getTournaments() {
     const response = await this.client.get('/api/tournaments')
     return response.data || response
