@@ -698,6 +698,22 @@ async function formatBetWithRealStats(bet, playerStats) {
   const fairProbPct = bet.fairProb != null ? (bet.fairProb * 100) : null
   const marketProbPct = bet.marketProb != null ? (bet.marketProb * 100) : null
 
+  // Market label mapping
+  const marketLabels = {
+    win: 'Outright Winner', top_5: 'Top 5', top_10: 'Top 10', top_20: 'Top 20',
+    make_cut: 'Make Cut', mc: 'Missed Cut', frl: 'First Round Leader',
+    tournament_matchups: 'Tournament Matchup', round_matchups: 'Round Matchup', '3_balls': 'Three-Ball'
+  }
+  const marketLabel = marketLabels[bet.marketKey] || bet.marketKey || 'Outright'
+
+  // Extract matchup opponent from modelConfidenceJson
+  const matchupLabel = bet.modelConfidenceJson?.matchupLabel || null
+  let matchupOpponent = null
+  if (isMatchup && matchupLabel) {
+    const parts = matchupLabel.split(' vs ').filter(n => n.toLowerCase() !== bet.selection?.toLowerCase())
+    matchupOpponent = parts.join(' & ')
+  }
+
   return {
     id: bet.id,
     category: displayTier.toLowerCase().replace(/_/g, ''),
@@ -708,7 +724,10 @@ async function formatBetWithRealStats(bet, playerStats) {
     tier_status: bet.tierStatus || null,
     mode: bet.mode || 'PRE_TOURNAMENT',
     market_key: bet.marketKey || null,
+    market_label: marketLabel,
     is_matchup: isMatchup,
+    matchup_opponent: matchupOpponent,
+    matchup_label: matchupLabel,
     books_used: bet.booksUsed || [],
     selection_name: bet.override?.selectionName || bet.selection,
     confidence_rating: bet.override?.confidenceRating ?? bet.confidence1To5,

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, ChevronUp, Zap, TrendingUp, TrendingDown, Minus, Cloud, Sun, Wind, Droplets, Plus, ExternalLink, Check } from 'lucide-react';
+import { ChevronDown, ChevronUp, Zap, TrendingUp, TrendingDown, Minus, Cloud, Sun, Wind, Droplets, Plus, ExternalLink, Check, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
@@ -24,6 +24,18 @@ const weatherIcons = {
   cloudy: Cloud,
   windy: Wind,
   rainy: Droplets
+};
+
+const marketColors = {
+  'Outright Winner': 'bg-purple-500/20 text-purple-300 border-purple-500/30',
+  'Top 5': 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
+  'Top 10': 'bg-sky-500/20 text-sky-300 border-sky-500/30',
+  'Top 20': 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+  'Make Cut': 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+  'First Round Leader': 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+  'Tournament Matchup': 'bg-rose-500/20 text-rose-300 border-rose-500/30',
+  'Round Matchup': 'bg-orange-500/20 text-orange-300 border-orange-500/30',
+  'Three-Ball': 'bg-pink-500/20 text-pink-300 border-pink-500/30',
 };
 
 const CaddyIcon = ({ filled }) => (
@@ -59,6 +71,8 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
 
   const WeatherIcon = weatherIcons[bet.weather_icon] || Cloud;
   const providerData = providers.find(p => p.slug === bet.provider_best_slug);
+  const marketLabel = bet.market_label || bet.bet_title || 'Outright';
+  const marketColor = marketColors[marketLabel] || 'bg-slate-500/20 text-slate-300 border-slate-500/30';
 
   return (
     <motion.div
@@ -70,15 +84,18 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
       <div className="absolute -top-20 -right-20 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl" />
       
       <div className="relative p-5">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">
-              Active
+        {/* Header - Market type badge is prominent */}
+        <div className="flex items-start justify-between mb-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant="outline" className={`${marketColor} text-sm font-semibold px-3 py-1`}>
+              {marketLabel}
+            </Badge>
+            <Badge variant="outline" className={`${tourColors[bet.tour]} text-xs`}>
+              {bet.tour}
             </Badge>
             {bet.is_fallback && bet.fallback_type === 'tier_min_fill' && (
               <Badge variant="outline" className="bg-rose-500/20 text-rose-400 border-rose-500/30 text-xs">
-                Not +EV (fallback)
+                Not +EV
               </Badge>
             )}
             {bet.prob_source === 'market_fallback' && (
@@ -86,22 +103,28 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
                 Fair prob fallback
               </Badge>
             )}
-            <Badge variant="outline" className={`${tourColors[bet.tour]} text-xs`}>
-              {bet.tour}
-            </Badge>
           </div>
           <ConfidenceRating rating={bet.confidence_rating} />
         </div>
 
-        {/* Title */}
+        {/* Tournament */}
         <p className="text-slate-400 text-sm mb-1">
-          {bet.bet_title} at {bet.tour}: {bet.tournament_name}
+          {bet.tournament_name}
         </p>
-        
+
         {/* Player Name */}
-        <h3 className="text-2xl font-bold text-white mb-4">
+        <h3 className="text-2xl font-bold text-white mb-1">
           {bet.selection_name}
         </h3>
+
+        {/* Matchup opponent */}
+        {bet.is_matchup && bet.matchup_opponent && (
+          <div className="flex items-center gap-2 mb-3">
+            <Users className="w-4 h-4 text-slate-400" />
+            <span className="text-slate-400 text-sm">vs {bet.matchup_opponent}</span>
+          </div>
+        )}
+        {!(bet.is_matchup && bet.matchup_opponent) && <div className="mb-3" />}
 
         {/* Provider & Odds */}
         <div className="flex items-center justify-between mb-4">
@@ -215,20 +238,20 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
                 </div>
               </div>
 
-              {/* Outright: Form */}
+              {/* Outright: Fair Prob */}
               <div className="bg-slate-800/50 rounded-xl p-3">
-                <div className="text-xs text-slate-500 mb-1">Form</div>
-                <div className="flex items-center gap-2">
-                  <span className={`text-lg font-semibold ${
-                    bet.form_indicator === 'up' ? 'text-emerald-400' :
-                    bet.form_indicator === 'down' ? 'text-red-400' : 'text-white'
-                  }`}>
-                    {bet.form_label || '—'}
-                  </span>
-                  <FormIndicator indicator={bet.form_indicator} />
+                <div className="text-xs text-slate-500 mb-1">Fair Prob</div>
+                <div className="flex items-center gap-1">
+                  {bet.fair_prob_pct != null ? (
+                    <span className="text-lg font-semibold text-white">
+                      {bet.fair_prob_pct.toFixed(1)}%
+                    </span>
+                  ) : (
+                    <span className="text-lg font-semibold text-slate-400">—</span>
+                  )}
                 </div>
-                {bet.sg_total != null && (
-                  <div className="text-xs text-slate-500 mt-1">SG: {bet.sg_total >= 0 ? '+' : ''}{bet.sg_total.toFixed(2)}</div>
+                {bet.market_prob_pct != null && (
+                  <div className="text-xs text-slate-500 mt-1">Mkt {bet.market_prob_pct.toFixed(1)}%</div>
                 )}
               </div>
             </>

@@ -1991,7 +1991,12 @@ export class WeeklyPipeline {
       marketKey: candidate.marketKey,
       selection: candidate.selection,
       dgPlayerId: candidate.bestOffer?.selectionId ? String(candidate.bestOffer.selectionId) : null,
-      modelConfidenceJson: candidate.modelConfidenceJson || null,
+      modelConfidenceJson: {
+        ...(candidate.modelConfidenceJson || {}),
+        ...((['tournament_matchups', 'round_matchups', '3_balls'].includes(candidate.marketKey) && candidate.bestOffer?.matchupLabel)
+          ? { matchupLabel: candidate.bestOffer.matchupLabel }
+          : {})
+      },
       confidence1To5: isFallback ? 1 : this.calculateConfidence(candidate.edge),
       bestBookmaker: candidate.bestOffer.bookmaker,
       bestOdds: candidate.bestOffer.oddsDecimal,
