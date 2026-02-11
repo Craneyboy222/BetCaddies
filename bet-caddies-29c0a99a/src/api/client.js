@@ -405,6 +405,10 @@ export class BetCaddiesApi {
       }
     },
     MediaAsset: {
+      status: async () => {
+        const response = await this.client.get('/api/entities/media-assets/status')
+        return response
+      },
       list: async (limit = 100) => {
         const qs = new URLSearchParams({ limit: String(limit) })
         const response = await this.client.get(`/api/entities/media-assets?${qs.toString()}`)
@@ -533,6 +537,12 @@ export class BetCaddiesApi {
       generateWeekly: async (prizeDescription) => {
         const response = await this.client.post('/api/entities/hio-challenges/generate-weekly', {
           prize_description: prizeDescription
+        })
+        return response.data || response
+      },
+      regenerateQuestion: async (id, index) => {
+        const response = await this.client.post(`/api/entities/hio-challenges/${id}/regenerate-question`, {
+          index
         })
         return response.data || response
       }

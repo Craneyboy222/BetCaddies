@@ -200,6 +200,12 @@ export default function Admin() {
     queryFn: () => api.entities.MediaAsset.list(200)
   });
 
+  const { data: r2Status } = useQuery({
+    queryKey: ['r2Status'],
+    enabled: !!user,
+    queryFn: () => api.entities.MediaAsset.status()
+  });
+
   // Mutations
   const updateBetMutation = useMutation({
     mutationFn: ({ id, data }) => api.entities.GolfBet.update(id, data),
@@ -1331,6 +1337,15 @@ export default function Admin() {
         {/* Media Tab */}
         <TabsContent value="media">
           <div className="space-y-4">
+            {r2Status && !r2Status.configured && (
+              <div className="bg-amber-500/10 border border-amber-500/30 text-amber-200 rounded-lg p-4">
+                <p className="font-semibold mb-2">Cloudflare R2 not configured</p>
+                <p className="text-sm text-amber-300/80 mb-2">Image uploads require Cloudflare R2 object storage. Add these environment variables in Railway:</p>
+                <ul className="text-sm text-amber-300/80 list-disc list-inside space-y-1">
+                  {(r2Status.missing || []).map(v => <li key={v}><code className="bg-slate-800 px-1 rounded">{v}</code></li>)}
+                </ul>
+              </div>
+            )}
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div>
                 <h2 className="text-xl font-bold text-white">Media Library</h2>
@@ -1342,6 +1357,7 @@ export default function Admin() {
                   accept="image/*"
                   onChange={(e) => handleUploadMedia(e.target.files?.[0])}
                   className="bg-slate-800 border-slate-700"
+                  disabled={r2Status && !r2Status.configured}
                 />
                 {mediaUploading && (
                   <span className="text-xs text-slate-400">Uploading…</span>

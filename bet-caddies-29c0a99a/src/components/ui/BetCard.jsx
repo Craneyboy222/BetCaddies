@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, ChevronUp, Zap, TrendingUp, TrendingDown, Minus, Cloud, Sun, Wind, Droplets, Plus, ExternalLink, Check, Users } from 'lucide-react';
+import { ChevronDown, ChevronUp, Zap, TrendingUp, TrendingDown, Minus, Cloud, Sun, Wind, Droplets, Plus, ExternalLink, Check, Users, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
@@ -63,6 +63,22 @@ const FormIndicator = ({ indicator }) => {
   if (indicator === 'up') return <TrendingUp className="w-4 h-4 text-emerald-400" />;
   if (indicator === 'down') return <TrendingDown className="w-4 h-4 text-red-400" />;
   return <Minus className="w-4 h-4 text-slate-400" />;
+};
+
+const CourseFitStars = ({ rating }) => {
+  const labels = ['', 'Poor', 'Below Avg', 'Average', 'Good', 'Excellent'];
+  const colors = ['', 'text-red-400', 'text-orange-400', 'text-amber-400', 'text-emerald-400', 'text-emerald-400'];
+  const r = rating || 0;
+  return (
+    <div>
+      <div className="flex items-center gap-0.5">
+        {[1, 2, 3, 4, 5].map(i => (
+          <Star key={i} className={`w-3.5 h-3.5 ${i <= r ? colors[r] : 'text-slate-700'}`} fill={i <= r ? 'currentColor' : 'none'} />
+        ))}
+      </div>
+      {r > 0 && <div className={`text-xs mt-1 ${colors[r]}`}>{labels[r]}</div>}
+    </div>
+  );
 };
 
 export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, providers = [] }) {
@@ -185,23 +201,13 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
                 )}
               </div>
 
-              {/* Matchup: DG Rank */}
+              {/* Matchup: Course Fit */}
               <div className="bg-slate-800/50 rounded-xl p-3">
-                <div className="text-xs text-slate-500 mb-1">DG Rank</div>
-                <div className="flex items-center gap-1">
-                  {bet.dg_rank ? (
-                    <span className={`text-lg font-semibold ${bet.dg_rank <= 30 ? 'text-emerald-400' : bet.dg_rank <= 75 ? 'text-white' : 'text-slate-400'}`}>
-                      #{bet.dg_rank}
-                    </span>
-                  ) : (
-                    <span className="text-lg font-semibold text-slate-400">—</span>
-                  )}
-                </div>
-                {bet.form_label && bet.form_label !== 'Unknown' && (
-                  <div className="flex items-center gap-1 mt-1">
-                    <FormIndicator indicator={bet.form_indicator} />
-                    <span className="text-xs text-slate-500">{bet.form_label}</span>
-                  </div>
+                <div className="text-xs text-slate-500 mb-1">Course Fit</div>
+                {bet.course_fit_rating != null ? (
+                  <CourseFitStars rating={bet.course_fit_rating} />
+                ) : (
+                  <span className="text-lg font-semibold text-slate-400">—</span>
                 )}
               </div>
             </>
@@ -224,18 +230,14 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
                 )}
               </div>
 
-              {/* Outright: DG Rank */}
+              {/* Outright: Course Fit */}
               <div className="bg-slate-800/50 rounded-xl p-3">
-                <div className="text-xs text-slate-500 mb-1">DG Rank</div>
-                <div className="flex items-center gap-1">
-                  {bet.dg_rank ? (
-                    <span className={`text-lg font-semibold ${bet.dg_rank <= 30 ? 'text-emerald-400' : bet.dg_rank <= 75 ? 'text-white' : 'text-slate-400'}`}>
-                      #{bet.dg_rank}
-                    </span>
-                  ) : (
-                    <span className="text-lg font-semibold text-slate-400">—</span>
-                  )}
-                </div>
+                <div className="text-xs text-slate-500 mb-1">Course Fit</div>
+                {bet.course_fit_rating != null ? (
+                  <CourseFitStars rating={bet.course_fit_rating} />
+                ) : (
+                  <span className="text-lg font-semibold text-slate-400">—</span>
+                )}
               </div>
 
               {/* Outright: Fair Prob */}
@@ -354,12 +356,12 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
             {isAdded ? (
               <>
                 <Check className="w-4 h-4 mr-2" />
-                Added
+                Tracking
               </>
             ) : (
               <>
                 <Plus className="w-4 h-4 mr-2" />
-                Add Bet
+                Track Bet
               </>
             )}
           </Button>
