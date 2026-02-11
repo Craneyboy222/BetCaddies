@@ -7,7 +7,7 @@ import zlib from 'node:zlib'
 import { prisma } from '../db/client.js'
 import { logger, logStep, logError } from '../observability/logger.js'
 import { DataIssueTracker } from '../observability/data-issue-tracker.js'
-import { PlayerNormalizer } from '../domain/player-normalizer.js'
+import { PlayerNormalizer, normalizeName } from '../domain/player-normalizer.js'
 import { DataGolfClient, normalizeDataGolfArray, safeLogDataGolfError } from '../sources/datagolf/index.js'
 import { parseOddsPayload, parseOutrightsOffers } from '../sources/datagolf/parsers.js'
 import { getAllowedBooks, getAllowedBooksSet, isAllowedBook } from '../sources/odds/allowed-books.js'
@@ -1261,9 +1261,8 @@ export class WeeklyPipeline {
       const fieldStrengthScale = top50Count > 0 ? Math.min(1.0, top50Count / 25) : null
 
       // Phase 4.1: Enable score export when matchup/three-ball markets are present
-      const hasMatchupMarkets = eventOdds.markets.some(m =>
-        m.marketKey?.includes('matchup') || m.marketKey?.includes('3ball') || m.marketKey?.includes('three_ball')
-      )
+      const MATCHUP_MARKET_KEYS = new Set(['tournament_matchups', 'round_matchups', '3_balls'])
+      const hasMatchupMarkets = eventOdds.markets.some(m => MATCHUP_MARKET_KEYS.has(m.marketKey))
 
       const simResults = simulateTournament({
         players: playerParams,
@@ -1461,7 +1460,29 @@ export class WeeklyPipeline {
             : null
           // Internal simulation is authoritative. DataGolf probabilities are optional priors/calibration inputs
           // and must never replace missing simulation outputs.
-          let simProb = simProbabilities.get(selectionKey)?.[this.mapMarketKeyToSim(market.marketKey)]
+          let simProb
+
+          // For matchup/3-ball markets, compute fair probability from per-sim scores
+          if (MATCHUP_MARKET_KEYS.has(market.marketKey) && simScoresForMatchups && bestOffer.matchupLabel) {
+            const opponents = (bestOffer.matchupLabel || '').split(' vs ').map(n => normalizeName(n))
+            const playerIdx = opponents.indexOf(selectionKey)
+            if (playerIdx >= 0 && opponents.length >= 2) {
+              if (opponents.length === 2) {
+                // Head-to-head matchup
+                const [a, b] = opponents
+                const prob = matchupProbability(selectionKey, selectionKey === a ? b : a, simScoresForMatchups)
+                simProb = prob
+              } else if (opponents.length === 3) {
+                // Three-ball
+                const others = opponents.filter(o => o !== selectionKey)
+                const prob = threeBallProbability(selectionKey, others[0], others[1], simScoresForMatchups)
+                simProb = prob
+              }
+            }
+          } else {
+            simProb = simProbabilities.get(selectionKey)?.[this.mapMarketKeyToSim(market.marketKey)]
+          }
+
           if (market.marketKey === 'mc' && Number.isFinite(simProb)) {
             simProb = clampProbability(1 - simProb)
           }
@@ -1681,7 +1702,7 @@ export class WeeklyPipeline {
         : (offer.selectionKey || this.playerNormalizer.cleanPlayerName(offer.selectionName || offer.selection))
       if (!selectionKey) continue
       const fieldSet = fieldIndex.get(event.id)
-      const isMatchup = selectionKey.includes(' vs ')
+      const isMatchup = selectionKey.includes(' vs ') || Boolean(offer.matchupLabel)
       if (!isMatchup && fieldSet && !fieldSet.names.has(selectionKey) && (!selectionId || !fieldSet.dgIds.has(selectionId))) continue
       if (!map[selectionKey]) map[selectionKey] = []
       map[selectionKey].push({ ...offer, selectionKey })
@@ -2206,6 +2227,42 @@ export class WeeklyPipeline {
   parseMatchupOffers(rows = []) {
     const offers = []
     for (const row of rows) {
+      // DataGolf matchup format: p1_player_name, p2_player_name, p3_player_name
+      // with odds: { bet365: { p1: 2.2, p2: 3.4, p3: 3 }, ... }
+      const positions = []
+      if (row.p1_player_name) positions.push({ key: 'p1', name: row.p1_player_name, dgId: row.p1_dg_id })
+      if (row.p2_player_name) positions.push({ key: 'p2', name: row.p2_player_name, dgId: row.p2_dg_id })
+      if (row.p3_player_name) positions.push({ key: 'p3', name: row.p3_player_name, dgId: row.p3_dg_id })
+
+      if (positions.length >= 2) {
+        // Build selection label: "Player A vs Player B [vs Player C]"
+        const selectionLabel = positions.map(p => p.name).join(' vs ')
+        const oddsMap = row.odds && typeof row.odds === 'object' ? row.odds : {}
+
+        for (const [bookKey, bookOdds] of Object.entries(oddsMap)) {
+          if (!bookOdds || typeof bookOdds !== 'object') continue
+          if (bookKey === 'datagolf') continue // skip DG model odds, not real book
+
+          for (const pos of positions) {
+            const decimal = Number(bookOdds[pos.key])
+            if (!Number.isFinite(decimal) || decimal <= 1) continue
+            offers.push({
+              selectionName: pos.name,
+              selectionKey: pos.name ? normalizeName(pos.name) : null,
+              selectionId: pos.dgId ? String(pos.dgId) : null,
+              matchupLabel: selectionLabel,
+              book: bookKey,
+              bookmaker: bookKey,
+              oddsDecimal: decimal,
+              oddsDisplay: String(decimal),
+              ties: row.ties || null
+            })
+          }
+        }
+        continue
+      }
+
+      // Fallback: legacy flat format
       const players = row.players || row.matchup || row.selection
       const selection = Array.isArray(players) ? players.join(' vs ') : players
       if (!selection) continue

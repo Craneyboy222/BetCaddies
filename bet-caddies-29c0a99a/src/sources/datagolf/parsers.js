@@ -106,6 +106,8 @@ const findArray = (payload) => {
     payload.rows,
     payload.offers,
     payload.matchups,
+    payload.match_list,
+    payload.pairings,
     payload?.odds?.data,
     payload?.odds?.offers,
     payload?.data?.odds,
