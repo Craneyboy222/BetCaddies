@@ -336,6 +336,7 @@ model User {
   createdAt            DateTime  @default(now())
   disabledAt           DateTime?
   disabledReason       String?
+  subscriptions        MembershipSubscription[]
 
   @@map("users")
 }
@@ -445,6 +446,9 @@ model MembershipPackage {
   enabled         Boolean                  @default(true)
   createdAt       DateTime                 @default(now())
   stripeProductId String?
+  accessLevel     String                   @default("free")
+  trialDays       Int                      @default(0)
+  popular         Boolean                  @default(false)
   subscriptions   MembershipSubscription[]
 
   @@map("membership_packages")
@@ -453,6 +457,7 @@ model MembershipPackage {
 model MembershipSubscription {
   id                   String            @id @default(cuid())
   userEmail            String
+  userId               String?
   packageId            String
   packageName          String
   status               String
@@ -466,9 +471,64 @@ model MembershipSubscription {
   stripeCustomerId     String?
   stripeSubscriptionId String?           @unique
   stripePriceId        String?
+  paymentProvider      String            @default("stripe")
+  paypalSubscriptionId String?           @unique
+  failedPaymentCount   Int               @default(0)
+  lastFailedAt         DateTime?
+  dunningStep          Int               @default(0)
   package              MembershipPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  user                 User?             @relation(fields: [userId], references: [id])
+  invoices             Invoice[]
 
+  @@index([userEmail])
+  @@index([userId])
   @@map("membership_subscriptions")
+}
+
+model Invoice {
+  id               String                @id @default(cuid())
+  subscriptionId   String?
+  userEmail        String
+  amount           Float
+  currency         String                @default("gbp")
+  status           String                @default("paid")
+  paymentProvider  String
+  providerInvoiceId String?
+  description      String?
+  createdAt        DateTime              @default(now())
+  subscription     MembershipSubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([userEmail])
+  @@index([subscriptionId])
+  @@map("invoices")
+}
+
+model PaymentSettings {
+  id               String   @id @default(cuid())
+  provider         String   @unique
+  enabled          Boolean  @default(false)
+  mode             String   @default("test")
+  publicKey        String?
+  secretKey        String?
+  webhookSecret    String?
+  additionalConfig Json?
+  updatedAt        DateTime @updatedAt
+  updatedBy        String?
+
+  @@map("payment_settings")
+}
+
+model ContentAccessRule {
+  id                  String   @id @default(cuid())
+  resourceType        String
+  resourceIdentifier  String
+  minimumAccessLevel  String   @default("free")
+  description         String?
+  enabled             Boolean  @default(true)
+  createdAt           DateTime @default(now())
+
+  @@unique([resourceType, resourceIdentifier])
+  @@map("content_access_rules")
 }
 
 model HIOChallenge {
