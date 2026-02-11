@@ -253,6 +253,128 @@ const adminOnly = (req, res, next) => {
   return next()
 }
 
+// Subscription-based access control middleware
+// Usage: requireSubscription('pro') or requireSubscription('elite')
+// Checks user's active subscription against the required access level
+// Admin users always pass. Unauthenticated users get 'free' access.
+const requireSubscription = (minLevel = 'free') => async (req, res, next) => {
+  // Admin always passes
+  if (req.user?.role === 'admin') return next()
+
+  // Free level always passes
+  if (minLevel === 'free') return next()
+
+  const email = req.user?.email
+  if (!email) {
+    return res.status(403).json({
+      error: 'Subscription required',
+      required_level: minLevel,
+      user_level: 'free'
+    })
+  }
+
+  try {
+    const userLevel = await getUserAccessLevel(email)
+    if (meetsAccessLevel(userLevel, minLevel)) {
+      return next()
+    }
+
+    return res.status(403).json({
+      error: 'Subscription upgrade required',
+      required_level: minLevel,
+      user_level: userLevel
+    })
+  } catch (error) {
+    logger.error('Error checking subscription access', { error: error.message })
+    // Fail open for free, fail closed for paid
+    if (minLevel === 'free') return next()
+    return res.status(500).json({ error: 'Failed to verify subscription' })
+  }
+}
+
+// Dynamic content gating - checks ContentAccessRule table
+const requireContentAccess = (resourceType, resourceIdentifier) => async (req, res, next) => {
+  // Admin always passes
+  if (req.user?.role === 'admin') return next()
+
+  try {
+    const rule = await prisma.contentAccessRule.findUnique({
+      where: {
+        resourceType_resourceIdentifier: {
+          resourceType,
+          resourceIdentifier
+        }
+      }
+    })
+
+    // No rule = free access
+    if (!rule || !rule.enabled || rule.minimumAccessLevel === 'free') return next()
+
+    const email = req.user?.email
+    const userLevel = email ? await getUserAccessLevel(email) : 'free'
+
+    if (meetsAccessLevel(userLevel, rule.minimumAccessLevel)) {
+      return next()
+    }
+
+    return res.status(403).json({
+      error: 'Content requires higher subscription',
+      required_level: rule.minimumAccessLevel,
+      user_level: userLevel
+    })
+  } catch (error) {
+    logger.error('Error checking content access', { error: error.message })
+    return next() // Fail open
+  }
+}
+
+// Endpoint to check access for a specific resource (used by frontend ContentGate)
+app.get('/api/access-check', async (req, res) => {
+  const { type, id } = req.query
+  if (!type || !id) return res.json({ allowed: true, level: 'free' })
+
+  try {
+    const rule = await prisma.contentAccessRule.findUnique({
+      where: {
+        resourceType_resourceIdentifier: {
+          resourceType: type,
+          resourceIdentifier: id
+        }
+      }
+    })
+
+    if (!rule || !rule.enabled || rule.minimumAccessLevel === 'free') {
+      return res.json({ allowed: true, required_level: 'free' })
+    }
+
+    // Check if user is authenticated
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    let email = null
+
+    if (token && JWT_SECRET) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET)
+        email = decoded.email
+        if (decoded.role === 'admin') {
+          return res.json({ allowed: true, required_level: rule.minimumAccessLevel, user_level: 'admin' })
+        }
+      } catch {}
+    }
+
+    const userLevel = email ? await getUserAccessLevel(email) : 'free'
+    const allowed = meetsAccessLevel(userLevel, rule.minimumAccessLevel)
+
+    return res.json({
+      allowed,
+      required_level: rule.minimumAccessLevel,
+      user_level: userLevel
+    })
+  } catch (error) {
+    return res.json({ allowed: true, required_level: 'free' })
+  }
+})
+
 const validateBody = (schema) => (req, res, next) => {
   const result = schema.safeParse(req.body)
   if (!result.success) {
@@ -870,10 +992,48 @@ app.get('/api/bets/latest', async (req, res) => {
   }
 })
 
-// Get bets by tier
-app.get('/api/bets/tier/:tier', async (req, res) => {
+// Optional auth - attaches user if token present, but doesn't fail if absent
+const optionalAuth = (req, res, next) => {
+  const authHeader = req.headers.authorization || ''
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+  if (token && JWT_SECRET) {
+    try {
+      req.user = jwt.verify(token, JWT_SECRET)
+    } catch {}
+  }
+  return next()
+}
+
+// Get bets by tier (with dynamic content gating)
+app.get('/api/bets/tier/:tier', optionalAuth, async (req, res) => {
   try {
     const { tier } = req.params
+
+    // Check content access rule for this tier
+    const tierKey = tier.toLowerCase().replace(/[_-]/g, '')
+    const rule = await prisma.contentAccessRule.findFirst({
+      where: {
+        resourceType: 'page',
+        resourceIdentifier: { in: [tierKey, tier.toLowerCase(), `${tierKey}-bets`] },
+        enabled: true
+      }
+    })
+
+    if (rule && rule.minimumAccessLevel !== 'free') {
+      const email = req.user?.email
+      const isAdmin = req.user?.role === 'admin'
+      if (!isAdmin) {
+        const userLevel = email ? await getUserAccessLevel(email) : 'free'
+        if (!meetsAccessLevel(userLevel, rule.minimumAccessLevel)) {
+          return res.status(403).json({
+            error: 'Subscription upgrade required',
+            required_level: rule.minimumAccessLevel,
+            user_level: userLevel
+          })
+        }
+      }
+    }
+
     const TOP_PICKS_LIMIT = 5 // Only show top 5 best picks per category
     const now = new Date()
     

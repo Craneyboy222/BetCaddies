@@ -8,6 +8,7 @@ import BetCard from '@/components/ui/BetCard';
 import TourFilter from '@/components/ui/TourFilter';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 import EmptyState from '@/components/ui/EmptyState';
+import ContentGate from '@/components/ui/ContentGate';
 import {
   Select,
   SelectContent,
@@ -52,6 +53,7 @@ export default function BirdieBets() {
 
 
   return (
+    <ContentGate resourceType="page" resourceId="birdie-bets" blur>
     <div className="max-w-7xl mx-auto px-4 py-8">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -128,5 +130,6 @@ export default function BirdieBets() {
         </div>
       )}
     </div>
+    </ContentGate>
   );
 }

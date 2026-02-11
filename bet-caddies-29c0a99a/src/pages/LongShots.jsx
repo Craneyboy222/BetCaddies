@@ -8,6 +8,7 @@ import BetCard from '@/components/ui/BetCard';
 import TourFilter from '@/components/ui/TourFilter';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 import EmptyState from '@/components/ui/EmptyState';
+import ContentGate from '@/components/ui/ContentGate';
 import {
   Select,
   SelectContent,
@@ -52,6 +53,7 @@ export default function LongShots() {
 
 
   return (
+    <ContentGate resourceType="page" resourceId="long-shots" blur>
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Header */}
       <motion.div
@@ -132,5 +134,6 @@ export default function LongShots() {
         </div>
       )}
     </div>
+    </ContentGate>
   );
 }
