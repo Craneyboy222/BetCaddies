@@ -6382,6 +6382,86 @@ process.on('unhandledRejection', (reason, promise) => {
 })
 
 // Auto-archive old bets on startup and periodically
+async function seedMembershipPackages() {
+  try {
+    const count = await prisma.membershipPackage.count()
+    if (count > 0) return // Already have packages
+
+    const packages = [
+      {
+        name: 'Par',
+        description: 'Perfect for casual golf punters who want an edge. Get weekly value picks backed by data — not gut feeling.',
+        price: 9.99,
+        billingPeriod: 'month',
+        features: [
+          '3-5 Par Tier picks every week',
+          'AI-powered selection analysis',
+          'Best odds comparison across bookmakers',
+          'Course fit ratings for every pick',
+          'Weekly results recap with P&L tracking',
+          'Email alerts for new picks'
+        ],
+        badges: [{ text: 'Great Value', color: 'emerald' }],
+        displayOrder: 1,
+        accessLevel: 'free',
+        trialDays: 7,
+        popular: false,
+        enabled: true
+      },
+      {
+        name: 'Birdie',
+        description: 'For serious bettors who want the full picture. Unlock mid-range value plays and deeper analysis to sharpen every decision.',
+        price: 19.99,
+        billingPeriod: 'month',
+        features: [
+          'Everything in Par, plus...',
+          '5-8 Birdie Tier picks every week',
+          'Matchup & head-to-head betting picks',
+          'Fair probability & edge % on every bet',
+          'Odds movement alerts & market signals',
+          'Live bet tracking dashboard',
+          'Priority access to new features'
+        ],
+        badges: [{ text: 'Most Popular', color: 'emerald' }, { text: 'Best Value', color: 'blue' }],
+        displayOrder: 2,
+        accessLevel: 'pro',
+        trialDays: 7,
+        popular: true,
+        enabled: true
+      },
+      {
+        name: 'Eagle',
+        description: 'The ultimate edge. High-conviction longshots, exclusive insights, and every tool we build — before anyone else sees it.',
+        price: 34.99,
+        billingPeriod: 'month',
+        features: [
+          'Everything in Birdie, plus...',
+          '3-5 Eagle Tier high-value longshots weekly',
+          'The Long Shots — curated moonshot picks',
+          'Full confidence ratings (1-5 stars)',
+          'Detailed course fit & form breakdowns',
+          'Exclusive Hole-in-One Challenge entry',
+          'VIP Discord community access',
+          'Export your betting history & analytics'
+        ],
+        badges: [{ text: 'Premium', color: 'amber' }, { text: 'All Access', color: 'purple' }],
+        displayOrder: 3,
+        accessLevel: 'elite',
+        trialDays: 7,
+        popular: false,
+        enabled: true
+      }
+    ]
+
+    for (const pkg of packages) {
+      await prisma.membershipPackage.create({ data: pkg })
+    }
+    logger.info('Seeded 3 membership packages (Par, Birdie, Eagle)')
+  } catch (error) {
+    logger.error('Failed to seed membership packages', { error: error.message })
+  }
+}
+
 async function autoArchiveOldBets() {
   try {
     const now = new Date()
@@ -6511,6 +6591,7 @@ async function processDunning() {
 const HOST = process.env.HOST || '0.0.0.0';
 try {
   await seedCmsPages()
+  await seedMembershipPackages()
 
   // Auto-archive old bets on startup
   await autoArchiveOldBets()
