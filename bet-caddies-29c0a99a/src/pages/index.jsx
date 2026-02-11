@@ -1,5 +1,7 @@
 import Layout from "./Layout.jsx";
 
+import Account from "./Account";
+
 import Admin from "./Admin";
 
 import BirdieBets from "./BirdieBets";
@@ -30,7 +32,9 @@ import Results from "./Results";
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 
 const PAGES = {
-    
+
+    Account: Account,
+
     Admin: Admin,
     
     BirdieBets: BirdieBets,
@@ -85,6 +89,7 @@ function PagesContent() {
                     <Route path="/" element={<Home />} />
                 
                 
+                <Route path="/Account" element={<Account />} />
                 <Route path="/Admin" element={<Admin />} />
                 
                 <Route path="/BirdieBets" element={<BirdieBets />} />
