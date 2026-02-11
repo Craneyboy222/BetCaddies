@@ -19,6 +19,18 @@ import { liveTrackingService, determineBetOutcome } from '../live-tracking/live-
 import { DataGolfClient, normalizeDataGolfArray } from '../sources/datagolf/client.js'
 import { tourMap } from '../sources/datagolf/tourMap.js'
 import { createPlayerStatsService } from '../services/player-stats.js'
+import {
+  createCheckout,
+  getAvailableProviders,
+  getUserAccessLevel,
+  accessLevelRank,
+  meetsAccessLevel,
+  clearSettingsCache,
+  capturePayPalOrder,
+  getStripeClient,
+  getStripeConfig,
+  getPayPalConfig
+} from '../services/payment-service.js'
 
 // Initialize player stats service for real form/course fit data
 const playerStatsService = createPlayerStatsService(prisma)
@@ -1565,7 +1577,10 @@ app.get('/api/membership-packages', async (req, res) => {
       badges: Array.isArray(pkg.badges) ? pkg.badges : [],
       enabled: pkg.enabled,
       stripe_price_id: pkg.stripePriceId,
-      display_order: pkg.displayOrder
+      display_order: pkg.displayOrder,
+      access_level: pkg.accessLevel,
+      trial_days: pkg.trialDays,
+      popular: pkg.popular
     }))
 
     res.json({ data: formatted })
@@ -1584,8 +1599,9 @@ app.get('/api/membership-subscriptions/me', authRequired, async (req, res) => {
     const subscription = await prisma.membershipSubscription.findFirst({
       where: {
         userEmail: email,
-        status: 'active'
+        status: { in: ['active', 'trialing'] }
       },
+      include: { package: true },
       orderBy: { createdDate: 'desc' }
     })
 
@@ -1604,7 +1620,9 @@ app.get('/api/membership-subscriptions/me', authRequired, async (req, res) => {
         next_payment_date: subscription.nextPaymentDate?.toISOString?.() || subscription.nextPaymentDate,
         created_date: subscription.createdDate?.toISOString?.() || subscription.createdDate,
         cancelled_at: subscription.cancelledAt?.toISOString?.() || subscription.cancelledAt,
-        cancel_at_period_end: subscription.cancelAtPeriodEnd
+        cancel_at_period_end: subscription.cancelAtPeriodEnd,
+        access_level: subscription.package?.accessLevel || 'free',
+        payment_provider: subscription.paymentProvider
       }
     })
   } catch (error) {
@@ -1803,52 +1821,118 @@ app.post(
   '/api/membership-subscriptions/checkout',
   authRequired,
   validateBody(z.object({
-    package_id: z.string().min(1)
+    package_id: z.string().min(1),
+    provider: z.string().optional()
   })),
   async (req, res) => {
     try {
       const email = req.user?.email
       if (!email) return res.status(400).json({ error: 'Missing user email' })
 
-      if (!stripe || !STRIPE_SUCCESS_URL || !STRIPE_CANCEL_URL) {
-        return res.status(400).json({ error: 'Stripe checkout is not configured' })
-      }
-
       const pkg = await prisma.membershipPackage.findUnique({ where: { id: req.body.package_id } })
       if (!pkg || pkg.enabled === false) {
         return res.status(404).json({ error: 'Membership package not found' })
       }
 
-      if (!pkg.stripePriceId) {
+      const provider = req.body.provider || 'stripe'
+
+      // For Stripe, require stripePriceId
+      if (provider === 'stripe' && !pkg.stripePriceId) {
         return res.status(400).json({ error: 'Checkout is not configured for this package yet' })
       }
 
-      const mode = pkg.billingPeriod === 'lifetime' ? 'payment' : 'subscription'
-
-      const session = await stripe.checkout.sessions.create({
-        mode,
-        customer_email: email,
-        line_items: [{ price: pkg.stripePriceId, quantity: 1 }],
-        allow_promotion_codes: true,
-        success_url: STRIPE_SUCCESS_URL,
-        cancel_url: STRIPE_CANCEL_URL,
-        metadata: {
-          packageId: pkg.id,
-          userEmail: email,
-          stripePriceId: pkg.stripePriceId
-        },
-        subscription_data: mode === 'subscription'
-          ? { metadata: { packageId: pkg.id, userEmail: email } }
-          : undefined
-      })
-
-      return res.json({ url: session.url })
+      const result = await createCheckout({ provider, pkg, email })
+      return res.json({ url: result.url, provider: result.provider })
     } catch (error) {
       logger.error('Error creating membership checkout session', { error: error.message })
-      return res.status(500).json({ error: 'Failed to start checkout' })
+      return res.status(500).json({ error: error.message || 'Failed to start checkout' })
     }
   }
 )
+
+// Get available payment providers (public)
+app.get('/api/payment-providers', async (req, res) => {
+  try {
+    const providers = await getAvailableProviders()
+    res.json({ data: providers })
+  } catch (error) {
+    logger.error('Error fetching payment providers', { error: error.message })
+    res.json({ data: [{ id: 'stripe', name: 'Stripe', enabled: false, modes: ['card'] }] })
+  }
+})
+
+// PayPal: capture order after user approves
+app.post('/api/paypal/capture-order', authRequired, async (req, res) => {
+  try {
+    const { order_id, package_id } = req.body || {}
+    if (!order_id) return res.status(400).json({ error: 'Missing order_id' })
+
+    const captureData = await capturePayPalOrder(order_id)
+    const status = captureData?.status
+
+    if (status === 'COMPLETED') {
+      const email = req.user?.email
+      const customId = captureData?.purchase_units?.[0]?.payments?.captures?.[0]?.custom_id
+      let packageId = package_id
+      let userEmail = email
+
+      if (customId) {
+        try {
+          const parsed = JSON.parse(customId)
+          packageId = parsed.packageId || packageId
+          userEmail = parsed.userEmail || userEmail
+        } catch {}
+      }
+
+      if (packageId && userEmail) {
+        await upsertMembershipSubscription({
+          userEmail,
+          packageId,
+          stripeCustomerId: null,
+          stripeSubscriptionId: null,
+          stripePriceId: null,
+          status: 'active',
+          currentPeriodEnd: null,
+          cancelAtPeriodEnd: false
+        })
+
+        // Also update paymentProvider on the subscription
+        const sub = await prisma.membershipSubscription.findFirst({
+          where: { userEmail, packageId, status: 'active' },
+          orderBy: { createdDate: 'desc' }
+        })
+        if (sub) {
+          await prisma.membershipSubscription.update({
+            where: { id: sub.id },
+            data: { paymentProvider: 'paypal', paypalSubscriptionId: order_id }
+          })
+        }
+
+        // Create invoice record
+        const captureAmount = captureData?.purchase_units?.[0]?.payments?.captures?.[0]?.amount
+        await prisma.invoice.create({
+          data: {
+            subscriptionId: sub?.id || null,
+            userEmail,
+            amount: parseFloat(captureAmount?.value || '0'),
+            currency: (captureAmount?.currency_code || 'GBP').toLowerCase(),
+            status: 'paid',
+            paymentProvider: 'paypal',
+            providerInvoiceId: order_id,
+            description: `PayPal payment for ${sub?.packageName || 'membership'}`
+          }
+        })
+      }
+
+      return res.json({ success: true, status: 'COMPLETED' })
+    }
+
+    return res.json({ success: false, status })
+  } catch (error) {
+    logger.error('PayPal capture failed', { error: error.message })
+    return res.status(500).json({ error: 'Failed to capture PayPal payment' })
+  }
+})
 
 // Public: active Hole In One challenge
 app.get('/api/hio/challenge/active', async (req, res) => {
@@ -4021,7 +4105,10 @@ app.get('/api/entities/membership-packages', authRequired, adminOnly, async (req
       badges: pkg.badges,
       enabled: pkg.enabled,
       stripe_price_id: pkg.stripePriceId,
-      display_order: pkg.displayOrder
+      display_order: pkg.displayOrder,
+      access_level: pkg.accessLevel,
+      trial_days: pkg.trialDays,
+      popular: pkg.popular
     }))
     res.json({ data: formatted })
   } catch (error) {
@@ -4043,7 +4130,10 @@ app.post(
     badges: z.array(z.any()).optional().default([]),
     enabled: z.boolean().optional(),
     stripe_price_id: z.string().optional().nullable(),
-    display_order: z.coerce.number().int().optional()
+    display_order: z.coerce.number().int().optional(),
+    access_level: z.enum(['free', 'pro', 'elite']).optional(),
+    trial_days: z.coerce.number().int().nonnegative().optional(),
+    popular: z.boolean().optional()
   })),
   async (req, res) => {
   try {
@@ -4056,7 +4146,10 @@ app.post(
       badges,
       enabled,
       stripe_price_id,
-      display_order
+      display_order,
+      access_level,
+      trial_days,
+      popular
     } = req.body || {}
 
     let created = await prisma.membershipPackage.create({
@@ -4070,7 +4163,10 @@ app.post(
         enabled: enabled !== false,
         stripePriceId: stripe_price_id || null,
         stripeProductId: null,
-        displayOrder: Number.isFinite(display_order) ? display_order : 0
+        displayOrder: Number.isFinite(display_order) ? display_order : 0,
+        accessLevel: access_level || 'free',
+        trialDays: Number.isFinite(trial_days) ? trial_days : 0,
+        popular: popular === true
       }
     })
 
@@ -4288,6 +4384,265 @@ app.put(
   } catch (error) {
     logger.error('Error updating membership subscription:', error)
     res.status(500).json({ error: 'Failed to update membership subscription' })
+  }
+})
+
+// ── Payment Settings (Admin) ────────────────────────────────────────────────
+app.get('/api/admin/payment-settings', authRequired, adminOnly, async (req, res) => {
+  try {
+    const settings = await prisma.paymentSettings.findMany({ orderBy: { provider: 'asc' } })
+    const formatted = settings.map(s => ({
+      id: s.id,
+      provider: s.provider,
+      enabled: s.enabled,
+      mode: s.mode,
+      public_key: s.publicKey ? '••••' + s.publicKey.slice(-4) : null,
+      has_secret_key: !!s.secretKey,
+      has_webhook_secret: !!s.webhookSecret,
+      additional_config: s.additionalConfig,
+      updated_at: s.updatedAt
+    }))
+    res.json({ data: formatted })
+  } catch (error) {
+    logger.error('Error fetching payment settings:', error)
+    res.status(500).json({ error: 'Failed to fetch payment settings' })
+  }
+})
+
+app.put(
+  '/api/admin/payment-settings/:provider',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(['test', 'live']).optional(),
+    public_key: z.string().optional().nullable(),
+    secret_key: z.string().optional().nullable(),
+    webhook_secret: z.string().optional().nullable(),
+    additional_config: z.record(z.any()).optional().nullable()
+  })),
+  async (req, res) => {
+    try {
+      const { provider } = req.params
+      const validProviders = ['stripe', 'paypal', 'apple_pay', 'google_pay']
+      if (!validProviders.includes(provider)) {
+        return res.status(400).json({ error: `Invalid provider: ${provider}` })
+      }
+
+      const { enabled, mode, public_key, secret_key, webhook_secret, additional_config } = req.body
+
+      const data = {
+        provider,
+        enabled: typeof enabled === 'boolean' ? enabled : undefined,
+        mode: mode ?? undefined,
+        publicKey: public_key !== undefined ? public_key : undefined,
+        secretKey: secret_key !== undefined ? secret_key : undefined,
+        webhookSecret: webhook_secret !== undefined ? webhook_secret : undefined,
+        additionalConfig: additional_config !== undefined ? additional_config : undefined,
+        updatedBy: req.user?.email || null
+      }
+
+      // Remove undefined keys
+      Object.keys(data).forEach(k => data[k] === undefined && delete data[k])
+
+      const updated = await prisma.paymentSettings.upsert({
+        where: { provider },
+        update: data,
+        create: { ...data, provider }
+      })
+
+      // Clear cached settings so new keys take effect immediately
+      clearSettingsCache()
+
+      await writeAuditLog({
+        req,
+        action: 'payment_settings.update',
+        entityType: 'PaymentSettings',
+        entityId: provider,
+        afterJson: { enabled: updated.enabled, mode: updated.mode, provider }
+      })
+
+      res.json({
+        data: {
+          id: updated.id,
+          provider: updated.provider,
+          enabled: updated.enabled,
+          mode: updated.mode,
+          public_key: updated.publicKey ? '••••' + updated.publicKey.slice(-4) : null,
+          has_secret_key: !!updated.secretKey,
+          has_webhook_secret: !!updated.webhookSecret,
+          additional_config: updated.additionalConfig
+        }
+      })
+    } catch (error) {
+      logger.error('Error updating payment settings:', error)
+      res.status(500).json({ error: 'Failed to update payment settings' })
+    }
+  }
+)
+
+app.post('/api/admin/payment-settings/test', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { provider } = req.body || {}
+    if (!provider) return res.status(400).json({ error: 'Missing provider' })
+
+    if (provider === 'stripe') {
+      const stripeClient = await getStripeClient()
+      if (!stripeClient) return res.json({ success: false, error: 'Stripe not configured' })
+      try {
+        await stripeClient.products.list({ limit: 1 })
+        return res.json({ success: true, message: 'Stripe connection successful' })
+      } catch (e) {
+        return res.json({ success: false, error: e.message })
+      }
+    }
+
+    if (provider === 'paypal') {
+      const cfg = await getPayPalConfig()
+      if (!cfg.clientId || !cfg.clientSecret) {
+        return res.json({ success: false, error: 'PayPal not configured' })
+      }
+      try {
+        const baseUrl = cfg.mode === 'live'
+          ? 'https://api-m.paypal.com'
+          : 'https://api-m.sandbox.paypal.com'
+        const tokenRes = await fetch(`${baseUrl}/v1/oauth2/token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Authorization: `Basic ${Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64')}`
+          },
+          body: 'grant_type=client_credentials'
+        })
+        if (!tokenRes.ok) {
+          const text = await tokenRes.text()
+          return res.json({ success: false, error: `Auth failed: ${tokenRes.status} ${text}` })
+        }
+        return res.json({ success: true, message: `PayPal ${cfg.mode} connection successful` })
+      } catch (e) {
+        return res.json({ success: false, error: e.message })
+      }
+    }
+
+    return res.json({ success: false, error: 'Unknown provider' })
+  } catch (error) {
+    logger.error('Error testing payment connection:', error)
+    res.status(500).json({ error: 'Failed to test connection' })
+  }
+})
+
+// ── Content Access Rules (Admin) ────────────────────────────────────────────
+app.get('/api/admin/content-access-rules', authRequired, adminOnly, async (req, res) => {
+  try {
+    const rules = await prisma.contentAccessRule.findMany({ orderBy: { resourceType: 'asc' } })
+    res.json({ data: rules })
+  } catch (error) {
+    logger.error('Error fetching content access rules:', error)
+    res.status(500).json({ error: 'Failed to fetch content access rules' })
+  }
+})
+
+app.post(
+  '/api/admin/content-access-rules',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    resource_type: z.string().min(1),
+    resource_identifier: z.string().min(1),
+    minimum_access_level: z.enum(['free', 'pro', 'elite']),
+    description: z.string().optional().nullable(),
+    enabled: z.boolean().optional()
+  })),
+  async (req, res) => {
+    try {
+      const { resource_type, resource_identifier, minimum_access_level, description, enabled } = req.body
+      const rule = await prisma.contentAccessRule.create({
+        data: {
+          resourceType: resource_type,
+          resourceIdentifier: resource_identifier,
+          minimumAccessLevel: minimum_access_level,
+          description: description || null,
+          enabled: enabled !== false
+        }
+      })
+      res.json({ data: rule })
+    } catch (error) {
+      if (error?.code === 'P2002') {
+        return res.status(409).json({ error: 'Rule already exists for this resource' })
+      }
+      logger.error('Error creating content access rule:', error)
+      res.status(500).json({ error: 'Failed to create content access rule' })
+    }
+  }
+)
+
+app.put(
+  '/api/admin/content-access-rules/:id',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    minimum_access_level: z.enum(['free', 'pro', 'elite']).optional(),
+    description: z.string().optional().nullable(),
+    enabled: z.boolean().optional()
+  })),
+  async (req, res) => {
+    try {
+      const { id } = req.params
+      const { minimum_access_level, description, enabled } = req.body
+      const updated = await prisma.contentAccessRule.update({
+        where: { id },
+        data: {
+          minimumAccessLevel: minimum_access_level ?? undefined,
+          description: description !== undefined ? description : undefined,
+          enabled: typeof enabled === 'boolean' ? enabled : undefined
+        }
+      })
+      res.json({ data: updated })
+    } catch (error) {
+      logger.error('Error updating content access rule:', error)
+      res.status(500).json({ error: 'Failed to update content access rule' })
+    }
+  }
+)
+
+app.delete('/api/admin/content-access-rules/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    await prisma.contentAccessRule.delete({ where: { id: req.params.id } })
+    res.json({ success: true })
+  } catch (error) {
+    logger.error('Error deleting content access rule:', error)
+    res.status(500).json({ error: 'Failed to delete content access rule' })
+  }
+})
+
+// ── Invoices (Admin + User) ─────────────────────────────────────────────────
+app.get('/api/entities/invoices', authRequired, adminOnly, async (req, res) => {
+  try {
+    const invoices = await prisma.invoice.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 500
+    })
+    res.json({ data: invoices })
+  } catch (error) {
+    logger.error('Error fetching invoices:', error)
+    res.status(500).json({ error: 'Failed to fetch invoices' })
+  }
+})
+
+app.get('/api/membership-subscriptions/invoices', authRequired, async (req, res) => {
+  try {
+    const email = req.user?.email
+    if (!email) return res.status(400).json({ error: 'Missing user email' })
+
+    const invoices = await prisma.invoice.findMany({
+      where: { userEmail: email },
+      orderBy: { createdAt: 'desc' },
+      take: 100
+    })
+    res.json({ data: invoices })
+  } catch (error) {
+    logger.error('Error fetching user invoices:', error)
+    res.status(500).json({ error: 'Failed to fetch invoices' })
   }
 })
 

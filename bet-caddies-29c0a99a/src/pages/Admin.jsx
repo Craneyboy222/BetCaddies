@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import SubscriptionCRM from '@/components/admin/SubscriptionCRM';
 import HIOChallengeAdmin from '@/components/admin/HIOChallengeAdmin';
+import PaymentSettingsAdmin from '@/components/admin/PaymentSettingsAdmin';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/use-toast';
 import { Input } from '@/components/ui/input';
@@ -858,6 +859,10 @@ export default function Admin() {
           <TabsTrigger value="hio" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
             <Trophy className="w-4 h-4 mr-2" />
             HIO Challenge
+          </TabsTrigger>
+          <TabsTrigger value="payments" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+            <CreditCard className="w-4 h-4 mr-2" />
+            Payments
           </TabsTrigger>
         </TabsList>
 
@@ -2239,6 +2244,9 @@ export default function Admin() {
         {/* HIO Challenge Admin Tab */}
         <TabsContent value="hio">
           <HIOChallengeAdmin />
+        </TabsContent>
+        <TabsContent value="payments">
+          <PaymentSettingsAdmin />
         </TabsContent>
       </Tabs>
 

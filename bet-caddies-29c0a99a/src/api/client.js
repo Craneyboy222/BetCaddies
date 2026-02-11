@@ -179,11 +179,30 @@ export class BetCaddiesApi {
       const response = await this.client.get('/api/membership-subscriptions/me')
       return response.data || null
     },
-    checkout: async (packageId) => {
+    checkout: async (packageId, provider = 'stripe') => {
       const response = await this.client.post('/api/membership-subscriptions/checkout', {
-        package_id: packageId
+        package_id: packageId,
+        provider
       })
       return response.data || response
+    },
+    invoices: async () => {
+      const response = await this.client.get('/api/membership-subscriptions/invoices')
+      return response.data || []
+    }
+  }
+
+  paymentProviders = {
+    available: async () => {
+      const response = await this.client.get('/api/payment-providers')
+      return response.data || []
+    },
+    capturePayPal: async (orderId, packageId) => {
+      const response = await this.client.post('/api/paypal/capture-order', {
+        order_id: orderId,
+        package_id: packageId
+      })
+      return response
     }
   }
 
@@ -552,6 +571,47 @@ export class BetCaddiesApi {
       listByChallenge: async (challengeId) => {
         const qs = new URLSearchParams({ challenge_id: String(challengeId || '') })
         const response = await this.client.get(`/api/entities/hio-entries?${qs.toString()}`)
+        return response.data || []
+      }
+    },
+
+    PaymentSettings: {
+      list: async () => {
+        const response = await this.client.get('/api/admin/payment-settings')
+        return response.data || []
+      },
+      update: async (provider, data) => {
+        const response = await this.client.put(`/api/admin/payment-settings/${provider}`, data)
+        return response.data || response
+      },
+      test: async (provider) => {
+        const response = await this.client.post('/api/admin/payment-settings/test', { provider })
+        return response
+      }
+    },
+
+    ContentAccessRule: {
+      list: async () => {
+        const response = await this.client.get('/api/admin/content-access-rules')
+        return response.data || []
+      },
+      create: async (data) => {
+        const response = await this.client.post('/api/admin/content-access-rules', data)
+        return response.data || response
+      },
+      update: async (id, data) => {
+        const response = await this.client.put(`/api/admin/content-access-rules/${id}`, data)
+        return response.data || response
+      },
+      delete: async (id) => {
+        const response = await this.client.delete(`/api/admin/content-access-rules/${id}`)
+        return response.data || response
+      }
+    },
+
+    Invoice: {
+      list: async () => {
+        const response = await this.client.get('/api/entities/invoices')
         return response.data || []
       }
     }
