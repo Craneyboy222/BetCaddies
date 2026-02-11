@@ -620,6 +620,89 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
       })
     }
 
+    // Handle failed payment
+    if (event.type === 'invoice.payment_failed') {
+      const invoice = event.data.object
+      const stripeSubscriptionId = invoice?.subscription
+      const userEmail = invoice?.customer_email
+
+      if (stripeSubscriptionId) {
+        const sub = await prisma.membershipSubscription.findFirst({
+          where: { stripeSubscriptionId }
+        })
+
+        if (sub) {
+          const newCount = (sub.failedPaymentCount || 0) + 1
+          const dunningStep = Math.min(newCount, 3)
+          const newStatus = dunningStep >= 3 ? 'past_due' : sub.status
+
+          await prisma.membershipSubscription.update({
+            where: { id: sub.id },
+            data: {
+              failedPaymentCount: newCount,
+              lastFailedAt: new Date(),
+              dunningStep,
+              status: newStatus
+            }
+          })
+
+          // Create failed invoice record
+          await prisma.invoice.create({
+            data: {
+              subscriptionId: sub.id,
+              userEmail: sub.userEmail,
+              amount: (invoice?.amount_due || 0) / 100,
+              currency: invoice?.currency || 'gbp',
+              status: 'failed',
+              paymentProvider: 'stripe',
+              providerInvoiceId: invoice?.id,
+              description: `Failed payment attempt ${newCount}`
+            }
+          })
+
+          logger.warn('Payment failed', {
+            email: sub.userEmail,
+            attempt: newCount,
+            dunningStep
+          })
+        }
+      }
+    }
+
+    // Handle successful payment (create invoice record)
+    if (event.type === 'invoice.payment_succeeded') {
+      const invoice = event.data.object
+      const stripeSubscriptionId = invoice?.subscription
+      if (stripeSubscriptionId) {
+        const sub = await prisma.membershipSubscription.findFirst({
+          where: { stripeSubscriptionId }
+        })
+        if (sub) {
+          // Reset dunning on successful payment
+          if (sub.failedPaymentCount > 0) {
+            await prisma.membershipSubscription.update({
+              where: { id: sub.id },
+              data: { failedPaymentCount: 0, dunningStep: 0 }
+            })
+          }
+
+          // Create paid invoice
+          await prisma.invoice.create({
+            data: {
+              subscriptionId: sub.id,
+              userEmail: sub.userEmail,
+              amount: (invoice?.amount_paid || 0) / 100,
+              currency: invoice?.currency || 'gbp',
+              status: 'paid',
+              paymentProvider: 'stripe',
+              providerInvoiceId: invoice?.id,
+              description: `Payment for ${sub.packageName}`
+            }
+          })
+        }
+      }
+    }
+
     res.json({ received: true })
   } catch (error) {
     logger.error('Stripe webhook handler failed', { error: error?.message })
@@ -5155,21 +5238,69 @@ async function autoArchiveOldBets() {
   }
 }
 
+// Dunning: auto-downgrade past_due subscriptions after grace period
+// Grace periods: dunningStep 1 = 3 days, 2 = 7 days, 3 = 14 days -> expire
+async function processDunning() {
+  try {
+    const now = new Date()
+    const GRACE_DAYS = [0, 3, 7, 14] // dunningStep 0=N/A, 1=3d, 2=7d, 3=14d
+
+    // Find subscriptions with failed payments
+    const failedSubs = await prisma.membershipSubscription.findMany({
+      where: {
+        failedPaymentCount: { gt: 0 },
+        status: { in: ['active', 'trialing', 'past_due'] },
+        lastFailedAt: { not: null }
+      }
+    })
+
+    let expiredCount = 0
+    for (const sub of failedSubs) {
+      const step = sub.dunningStep || 0
+      const graceDays = GRACE_DAYS[Math.min(step, 3)]
+      const graceDeadline = new Date(sub.lastFailedAt)
+      graceDeadline.setDate(graceDeadline.getDate() + graceDays)
+
+      if (now > graceDeadline && step >= 3) {
+        // Grace period exceeded at max dunning step -> expire
+        await prisma.membershipSubscription.update({
+          where: { id: sub.id },
+          data: {
+            status: 'expired',
+            cancelledAt: now
+          }
+        })
+        expiredCount++
+        logger.info(`Dunning: expired subscription for ${sub.userEmail} after ${sub.failedPaymentCount} failed payments`)
+      }
+    }
+
+    if (expiredCount > 0) {
+      logger.info(`Dunning: expired ${expiredCount} subscriptions`)
+    }
+  } catch (error) {
+    logger.error('Dunning process failed:', { error: error.message })
+  }
+}
+
 // Start server with robust error handling
 const HOST = process.env.HOST || '0.0.0.0';
 try {
   await seedCmsPages()
-  
+
   // Auto-archive old bets on startup
   await autoArchiveOldBets()
-  
+
   app.listen(PORT, HOST, () => {
     logger.info(`BetCaddies API server running on http://${HOST}:${PORT}`);
     console.log(`BetCaddies API server running on http://${HOST}:${PORT}`);
     console.log('cwd:', process.cwd());
-    
+
     // Re-run auto-archive every 6 hours
     setInterval(() => autoArchiveOldBets(), 6 * 60 * 60 * 1000)
+
+    // Run dunning check every 6 hours
+    setInterval(() => processDunning(), 6 * 60 * 60 * 1000)
   });
 } catch (error) {
   logger.error('Failed to start server', { error: error.message });
