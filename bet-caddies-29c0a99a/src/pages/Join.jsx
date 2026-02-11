@@ -95,6 +95,7 @@ export default function Join() {
     }
 
     try {
+      api.trackEvent('signup_complete', { tours: selectedTours, riskAppetite });
       const updatedUser = await api.users.me.update({
         favorite_tours: selectedTours,
         risk_appetite: riskAppetite,

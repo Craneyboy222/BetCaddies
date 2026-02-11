@@ -89,12 +89,13 @@ export default function Memberships() {
     }
 
     try {
+      api.trackEvent('checkout_start', { packageId: pkg.id, packageName: pkg.name, provider: selectedProvider });
       const response = await api.membershipSubscriptions.checkout(pkg.id, selectedProvider);
       const url = response?.url;
       if (!url) throw new Error('Checkout session did not return a URL');
       window.location.href = url;
     } catch (error) {
-      console.error('Checkout error:', error);
+      api.trackEvent('checkout_error', { packageId: pkg.id, error: error.message });
       alert(error.message || 'Failed to start checkout. Please try again.');
     }
   };

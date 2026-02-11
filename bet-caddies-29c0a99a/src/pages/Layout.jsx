@@ -40,6 +40,11 @@ export default function Layout({ children, currentPageName }) {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
 
+  // Track page views
+  useEffect(() => {
+    api.trackEvent('page_view', { page: currentPageName });
+  }, [currentPageName]);
+
   useEffect(() => {
     const loadUser = async () => {
       try {

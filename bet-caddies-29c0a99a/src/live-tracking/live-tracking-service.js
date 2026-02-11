@@ -385,14 +385,31 @@ export const createLiveTrackingService = ({
       })
     }
 
+    // Deduplicate events by dgEventId+tour (multiple runs may create separate tourEvent records)
+    const dedupMap = new Map()
+    for (const event of results) {
+      const key = `${event.dgEventId}:${event.tour}`
+      const existing = dedupMap.get(key)
+      if (!existing) {
+        dedupMap.set(key, event)
+      } else {
+        existing.trackedCount += event.trackedCount
+        if (event.status === 'live' && existing.status !== 'live') {
+          existing.status = 'live'
+          existing.liveDataAvailable = true
+        }
+      }
+    }
+    const dedupedResults = Array.from(dedupMap.values())
+
     // Sort: live events first, then by start date
-    results.sort((a, b) => {
+    dedupedResults.sort((a, b) => {
       if (a.status === 'live' && b.status !== 'live') return -1
       if (b.status === 'live' && a.status !== 'live') return 1
       return new Date(a.startDate) - new Date(b.startDate)
     })
 
-    const response = { data: results, issues }
+    const response = { data: dedupedResults, issues }
     setCached(cacheKey, response, ttlMs)
     return response
   }
@@ -423,9 +440,13 @@ export const createLiveTrackingService = ({
 
     if (!candidates.length) return { tourEvent: null, picks: [] }
 
-    // Pick the tourEvent that actually has bets (prefer completed run with most bets)
-    let tourEvent = candidates[0] // default to newest
-    for (const c of candidates) {
+    // Collect all tourEvent IDs from completed runs
+    const completedCandidates = candidates.filter(c => c.run?.status === 'completed')
+    const completedIds = completedCandidates.map(c => c.id)
+
+    // Pick the primary tourEvent for metadata (completed run with most bets)
+    let tourEvent = completedCandidates[0] || candidates[0]
+    for (const c of completedCandidates) {
       if (c._count.betRecommendations > (tourEvent._count?.betRecommendations || 0)) {
         tourEvent = c
       }
@@ -434,44 +455,54 @@ export const createLiveTrackingService = ({
     logger.info('Live tracking: resolved tourEvent', {
       tour, dgEventId,
       candidates: candidates.length,
+      completedCandidates: completedCandidates.length,
+      completedIds,
       selectedId: tourEvent.id,
       selectedBetCount: tourEvent._count?.betRecommendations,
       runKey: tourEvent.run?.runKey
     })
 
-    if (!tourEvent) return { tourEvent: null, picks: [] }
-
-    // Only show bets if the run is completed
-    if (tourEvent.run?.status !== 'completed') {
-      logger.info('Live tracking: tourEvent run not completed', { 
-        tour, dgEventId, runStatus: tourEvent.run?.status 
+    if (!completedIds.length) {
+      logger.info('Live tracking: no completed runs for event', {
+        tour, dgEventId, candidates: candidates.length
       })
       return { tourEvent, picks: [] }
     }
 
-    // Get only non-archived picks from this specific tour event
-    const picks = await prisma.betRecommendation.findMany({
+    // Get non-archived picks from ALL matching tourEvents with completed runs
+    // (multiple pipeline runs may create separate tourEvent records for the same tournament)
+    const allPicks = await prisma.betRecommendation.findMany({
       where: {
-        tourEventId: tourEvent.id,
-        // Exclude archived bets
+        tourEventId: { in: completedIds },
         OR: [
           { override: null },
           { override: { status: { not: 'archived' } } }
         ]
       },
       orderBy: [
-        { tier: 'asc' },  // EAGLE, BIRDIE, PAR ordering
+        { tier: 'asc' },
         { confidence1To5: 'desc' },
         { createdAt: 'desc' }
       ],
       include: { override: true }
     })
 
+    // Deduplicate picks by selection+marketKey (keep highest confidence from latest run)
+    const seenPickKeys = new Set()
+    const picks = []
+    for (const pick of allPicks) {
+      const key = `${pick.selection}:${pick.marketKey}`
+      if (!seenPickKeys.has(key)) {
+        seenPickKeys.add(key)
+        picks.push(pick)
+      }
+    }
+
     logger.info('Live tracking: found picks for event', {
       tour,
       dgEventId,
-      tourEventId: tourEvent.id,
-      runKey: tourEvent.run?.runKey,
+      completedTourEventIds: completedIds,
+      totalPicksBeforeDedup: allPicks.length,
       pickCount: picks.length,
       markets: [...new Set(picks.map(p => p.marketKey))]
     })
