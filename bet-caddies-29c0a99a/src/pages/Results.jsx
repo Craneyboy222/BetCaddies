@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { api } from '@/api/client';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -80,12 +80,15 @@ const OutcomeBadge = ({ outcome }) => {
 };
 
 export default function Results() {
-  const [selectedWeek, setSelectedWeek] = useState('all');
+  const [selectedWeek, setSelectedWeek] = useState(null); // null = auto-select latest
+  const [initialised, setInitialised] = useState(false);
   const navigate = useNavigate();
 
+  // First fetch with 'all' to get availableWeeks, then auto-select latest week
+  const queryWeek = selectedWeek || 'all';
   const { data: resultsData, isLoading, error } = useQuery({
-    queryKey: ['historicalPicks', selectedWeek],
-    queryFn: () => api.getSettledResults(selectedWeek),
+    queryKey: ['historicalPicks', queryWeek],
+    queryFn: () => api.getSettledResults(queryWeek),
     refetchInterval: 5 * 60 * 1000,
     staleTime: 2 * 60 * 1000,
   });
@@ -108,11 +111,20 @@ export default function Results() {
     retry: false
   });
 
+  const availableWeeks = resultsData?.availableWeeks || [];
+
+  // Auto-select the most recent week on first load
+  useEffect(() => {
+    if (!initialised && availableWeeks.length > 0) {
+      setSelectedWeek(availableWeeks[availableWeeks.length - 1]);
+      setInitialised(true);
+    }
+  }, [availableWeeks, initialised]);
+
   const picks = resultsData?.data || [];
   const stats = resultsData?.stats || {};
   const categoryStats = resultsData?.categoryStats || [];
   const tourStats = resultsData?.tourStats || [];
-  const availableWeeks = resultsData?.availableWeeks || [];
 
   const ctaTitle = ctaContent?.json?.title || 'Get Our Best Picks Every Week';
   const ctaSubtitle = ctaContent?.json?.subtitle || 'Join BetCaddies and unlock expert golf betting picks, detailed analysis, and weekly insights delivered straight to you.';
@@ -148,7 +160,7 @@ export default function Results() {
       {/* Week Filter */}
       <div className="flex items-center gap-4 mb-8">
         <Calendar className="w-4 h-4 text-slate-400" />
-        <Select value={selectedWeek} onValueChange={setSelectedWeek}>
+        <Select value={queryWeek} onValueChange={(val) => { setSelectedWeek(val); setInitialised(true); }}>
           <SelectTrigger className="w-56 bg-slate-800/50 border-slate-700 text-white">
             <SelectValue placeholder="Select week" />
           </SelectTrigger>
