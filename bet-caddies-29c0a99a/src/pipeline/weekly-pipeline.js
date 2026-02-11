@@ -2142,60 +2142,122 @@ export class WeeklyPipeline {
     const bookmaker = candidate.bestOffer.bookmaker
     const fairProb = ((candidate.fairProb || 0) * 100).toFixed(1)
     const marketProb = ((candidate.marketProb || 0) * 100).toFixed(1)
+    const ev = ((candidate.ev || 0) * 100).toFixed(1)
     const bookCount = candidate.altOffers?.length + 1 || 1
     const tournamentName = candidate.tourEvent?.eventName || 'this tournament'
-    
+    const tour = candidate.tourEvent?.tour || ''
+    const marketKey = candidate.marketKey || ''
+    const isMatchup = ['tournament_matchups', 'round_matchups', '3_balls'].includes(marketKey)
+
     if (candidate.isFallback) {
-      return `${playerName} is available at ${odds} odds via ${bookmaker}. ` +
-        `This is a fallback selection due to limited positive-EV options in the ${candidate.tier} tier. ` +
-        `Model probability: ${fairProb}% vs market implied: ${marketProb}%.`
+      return `${playerName} at ${odds} odds (${bookmaker}) is a speculative pick to fill the ${candidate.tier} tier. ` +
+        `Our model gives a ${fairProb}% probability against the market's ${marketProb}%. ` +
+        `Limited positive-EV options available this week — treat as a lower-confidence selection.`
     }
-    
+
     const parts = []
-    
-    // Opening with edge opportunity
-    parts.push(`${playerName} presents a ${edge}% edge opportunity at ${odds} decimal odds (${bookmaker}).`)
-    
-    // Probability comparison
-    parts.push(`Our model assigns a ${fairProb}% win probability versus ${marketProb}% market implied across ${bookCount} books.`)
-    
-    // Tournament context
-    if (candidate.tourEvent?.tour) {
-      parts.push(`This ${candidate.tourEvent.tour} event at ${tournamentName} offers favorable conditions.`)
+
+    if (isMatchup) {
+      // Matchup-specific analysis
+      const matchupType = marketKey === '3_balls' ? 'three-ball' : marketKey === 'round_matchups' ? 'round matchup' : 'tournament matchup'
+
+      // Varied openings for matchups
+      const openers = [
+        `Our simulation gives ${playerName} a ${fairProb}% chance of winning this ${matchupType}, compared to ${marketProb}% implied by ${bookmaker}'s odds of ${odds}.`,
+        `${playerName} holds a simulated ${fairProb}% win rate in this ${matchupType}. The market prices them at ${marketProb}%, creating a ${edge}% edge at ${odds} (${bookmaker}).`,
+        `In head-to-head simulations, ${playerName} wins this ${matchupType} ${fairProb}% of the time — the bookmakers have them at just ${marketProb}%.`
+      ]
+      parts.push(openers[this._hashName(playerName) % openers.length])
+
+      // Value context
+      if (Number(ev) > 10) {
+        parts.push(`At +${ev}% expected value, this represents one of the stronger matchup edges this week.`)
+      } else if (Number(ev) > 5) {
+        parts.push(`Expected value of +${ev}% makes this a solid matchup play.`)
+      } else if (Number(ev) > 0) {
+        parts.push(`A marginal +${ev}% EV edge — worth taking at this price.`)
+      }
+    } else {
+      // Outright market analysis
+      const marketLabel = this._marketKeyToLabel(marketKey)
+
+      // Varied openings based on edge size and market type
+      if (Number(edge) >= 10) {
+        const bigEdge = [
+          `${playerName} stands out as a ${marketLabel} value play at ${odds} (${bookmaker}), with our model finding a significant ${edge}% edge over the market.`,
+          `Our simulation identifies ${playerName} as notably underpriced for ${marketLabel} — a ${fairProb}% model probability vs the market's ${marketProb}% creates a ${edge}% edge.`,
+          `At ${odds} via ${bookmaker}, ${playerName} offers a compelling ${edge}% edge for ${marketLabel}. The market appears to be underestimating their chances.`
+        ]
+        parts.push(bigEdge[this._hashName(playerName) % bigEdge.length])
+      } else if (Number(edge) >= 3) {
+        const midEdge = [
+          `${playerName} at ${odds} (${bookmaker}) offers a ${edge}% edge for ${marketLabel}. Our model puts their probability at ${fairProb}% against the market's ${marketProb}%.`,
+          `Our model favours ${playerName} for ${marketLabel} at ${fairProb}% — above the ${marketProb}% market consensus across ${bookCount} books. Best price: ${odds} at ${bookmaker}.`,
+          `There's a ${edge}% pricing gap on ${playerName} for ${marketLabel}. At ${odds} (${bookmaker}), the expected return justifies the bet.`
+        ]
+        parts.push(midEdge[this._hashName(playerName) % midEdge.length])
+      } else {
+        const smallEdge = [
+          `${playerName} carries a slim ${edge}% edge for ${marketLabel} at ${odds} (${bookmaker}). Our model sees a ${fairProb}% chance vs the market's ${marketProb}%.`,
+          `A narrow edge of ${edge}% on ${playerName} for ${marketLabel}, priced at ${odds} by ${bookmaker}. Model probability: ${fairProb}%.`
+        ]
+        parts.push(smallEdge[this._hashName(playerName) % smallEdge.length])
+      }
+
+      // EV assessment (varied)
+      if (Number(ev) > 8) {
+        parts.push(`Expected value of +${ev}% across ${bookCount} books analysed.`)
+      } else if (Number(ev) > 3) {
+        parts.push(`+${ev}% EV based on odds from ${bookCount} sportsbooks.`)
+      } else if (Number(ev) > 0) {
+        parts.push(`Modest +${ev}% EV — a disciplined value play.`)
+      }
     }
-    
-    // Value assessment
-    if (candidate.ev > 0.05) {
-      parts.push(`Strong expected value of +${((candidate.ev || 0) * 100).toFixed(1)}%.`)
-    } else if (candidate.ev > 0) {
-      parts.push(`Positive expected value of +${((candidate.ev || 0) * 100).toFixed(1)}%.`)
-    }
-    
+
     return parts.join(' ')
+  }
+
+  _hashName(name) {
+    let h = 0
+    for (let i = 0; i < (name || '').length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0
+    return Math.abs(h)
+  }
+
+  _marketKeyToLabel(marketKey) {
+    const labels = {
+      win: 'an outright win',
+      top_5: 'a top 5 finish',
+      top_10: 'a top 10 finish',
+      top_20: 'a top 20 finish',
+      make_cut: 'making the cut',
+      mc: 'a missed cut',
+      frl: 'first round leader'
+    }
+    return labels[marketKey] || marketKey
   }
 
   generateAnalysisBullets(candidate) {
     const bullets = []
     const bookCount = candidate.altOffers?.length + 1 || 1
-    
-    // Core probability metrics
-    bullets.push(`Model probability: ${((candidate.fairProb || 0) * 100).toFixed(1)}%`)
-    bullets.push(`Market implied: ${((candidate.marketProb || 0) * 100).toFixed(1)}%`)
-    bullets.push(`Edge: ${((candidate.edge || 0) * 100).toFixed(1)}%`)
-    bullets.push(`Expected Value: ${((candidate.ev || 0) * 100).toFixed(1)}%`)
-    
-    // Odds info
-    bullets.push(`Best odds: ${candidate.bestOffer.oddsDecimal.toFixed(2)} (${candidate.bestOffer.bookmaker})`)
-    bullets.push(`Books analyzed: ${bookCount}`)
-    
-    // Market info
-    if (candidate.marketKey) {
-      bullets.push(`Market: ${candidate.marketKey}`)
+    const edge = ((candidate.edge || 0) * 100).toFixed(1)
+    const fairProb = ((candidate.fairProb || 0) * 100).toFixed(1)
+    const marketProb = ((candidate.marketProb || 0) * 100).toFixed(1)
+    const ev = ((candidate.ev || 0) * 100).toFixed(1)
+    const isMatchup = ['tournament_matchups', 'round_matchups', '3_balls'].includes(candidate.marketKey)
+
+    // Lead with edge — the most important number
+    bullets.push(`Edge: +${edge}% (model ${fairProb}% vs market ${marketProb}%)`)
+    bullets.push(`Expected value: +${ev}%`)
+    bullets.push(`Best price: ${candidate.bestOffer.oddsDecimal.toFixed(2)} at ${candidate.bestOffer.bookmaker}`)
+
+    if (isMatchup) {
+      bullets.push(`Market: ${candidate.marketKey === '3_balls' ? 'Three-ball' : candidate.marketKey === 'round_matchups' ? 'Round matchup' : 'Tournament matchup'}`)
+    } else {
+      bullets.push(`Market: ${this._marketKeyToLabel(candidate.marketKey)}`)
     }
-    
-    // Tier info
-    bullets.push(`Tier: ${candidate.tier}`)
-    
+
+    bullets.push(`Compared across ${bookCount} sportsbook${bookCount !== 1 ? 's' : ''}`)
+
     return bullets
   }
 

@@ -124,67 +124,115 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
           </div>
         </div>
 
-        {/* Signals Row - Now showing real DataGolf stats */}
+        {/* Signals Row */}
         <div className="grid grid-cols-3 gap-3 mb-4">
-          {/* SG Total / Form */}
-          <div className="bg-slate-800/50 rounded-xl p-3">
-            <div className="text-xs text-slate-500 mb-1">SG Total</div>
-            <div className="flex items-center gap-2">
-              {bet.sg_total != null ? (
-                <>
-                  <span className={`text-lg font-semibold ${bet.sg_total >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {bet.sg_total >= 0 ? '+' : ''}{bet.sg_total.toFixed(2)}
+          {bet.is_matchup ? (
+            <>
+              {/* Matchup: Win Prob */}
+              <div className="bg-slate-800/50 rounded-xl p-3">
+                <div className="text-xs text-slate-500 mb-1">Win Prob</div>
+                <div className="flex items-center gap-1">
+                  {bet.fair_prob_pct != null ? (
+                    <span className={`text-lg font-semibold ${bet.fair_prob_pct >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {bet.fair_prob_pct.toFixed(1)}%
+                    </span>
+                  ) : (
+                    <span className="text-lg font-semibold text-slate-400">—</span>
+                  )}
+                </div>
+                {bet.market_prob_pct != null && (
+                  <div className="text-xs text-slate-500 mt-1">Market: {bet.market_prob_pct.toFixed(1)}%</div>
+                )}
+              </div>
+
+              {/* Matchup: Edge */}
+              <div className="bg-slate-800/50 rounded-xl p-3">
+                <div className="text-xs text-slate-500 mb-1">Edge</div>
+                <div className="flex items-center gap-1">
+                  {bet.edge_pct != null ? (
+                    <span className={`text-lg font-semibold ${bet.edge_pct > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {bet.edge_pct > 0 ? '+' : ''}{bet.edge_pct.toFixed(1)}%
+                    </span>
+                  ) : (
+                    <span className="text-lg font-semibold text-slate-400">—</span>
+                  )}
+                </div>
+                {bet.ev != null && (
+                  <div className="text-xs text-slate-500 mt-1">EV: {bet.ev > 0 ? '+' : ''}{(bet.ev * 100).toFixed(1)}%</div>
+                )}
+              </div>
+
+              {/* Matchup: DG Rank */}
+              <div className="bg-slate-800/50 rounded-xl p-3">
+                <div className="text-xs text-slate-500 mb-1">DG Rank</div>
+                <div className="flex items-center gap-1">
+                  {bet.dg_rank ? (
+                    <span className={`text-lg font-semibold ${bet.dg_rank <= 30 ? 'text-emerald-400' : bet.dg_rank <= 75 ? 'text-white' : 'text-slate-400'}`}>
+                      #{bet.dg_rank}
+                    </span>
+                  ) : (
+                    <span className="text-lg font-semibold text-slate-400">—</span>
+                  )}
+                </div>
+                {bet.form_label && bet.form_label !== 'Unknown' && (
+                  <div className="flex items-center gap-1 mt-1">
+                    <FormIndicator indicator={bet.form_indicator} />
+                    <span className="text-xs text-slate-500">{bet.form_label}</span>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Outright: Edge */}
+              <div className="bg-slate-800/50 rounded-xl p-3">
+                <div className="text-xs text-slate-500 mb-1">Edge</div>
+                <div className="flex items-center gap-1">
+                  {bet.edge_pct != null ? (
+                    <span className={`text-lg font-semibold ${bet.edge_pct > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {bet.edge_pct > 0 ? '+' : ''}{bet.edge_pct.toFixed(1)}%
+                    </span>
+                  ) : (
+                    <span className="text-lg font-semibold text-slate-400">—</span>
+                  )}
+                </div>
+                {bet.ev != null && (
+                  <div className="text-xs text-slate-500 mt-1">EV: {bet.ev > 0 ? '+' : ''}{(bet.ev * 100).toFixed(1)}%</div>
+                )}
+              </div>
+
+              {/* Outright: DG Rank */}
+              <div className="bg-slate-800/50 rounded-xl p-3">
+                <div className="text-xs text-slate-500 mb-1">DG Rank</div>
+                <div className="flex items-center gap-1">
+                  {bet.dg_rank ? (
+                    <span className={`text-lg font-semibold ${bet.dg_rank <= 30 ? 'text-emerald-400' : bet.dg_rank <= 75 ? 'text-white' : 'text-slate-400'}`}>
+                      #{bet.dg_rank}
+                    </span>
+                  ) : (
+                    <span className="text-lg font-semibold text-slate-400">—</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Outright: Form */}
+              <div className="bg-slate-800/50 rounded-xl p-3">
+                <div className="text-xs text-slate-500 mb-1">Form</div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-lg font-semibold ${
+                    bet.form_indicator === 'up' ? 'text-emerald-400' :
+                    bet.form_indicator === 'down' ? 'text-red-400' : 'text-white'
+                  }`}>
+                    {bet.form_label || '—'}
                   </span>
                   <FormIndicator indicator={bet.form_indicator} />
-                </>
-              ) : (
-                <span className="text-lg font-semibold text-white">{bet.form_label || '—'}</span>
-              )}
-            </div>
-            {bet.dg_rank && bet.dg_rank <= 100 && (
-              <div className="text-xs text-slate-500 mt-1">DG Rank #{bet.dg_rank}</div>
-            )}
-          </div>
-          
-          {/* Course Fit - Now using real adjustment */}
-          <div className="bg-slate-800/50 rounded-xl p-3">
-            <div className="text-xs text-slate-500 mb-1">Course Fit</div>
-            <div className="flex items-center gap-2">
-              {bet.course_fit_adjustment != null ? (
-                <span className={`text-lg font-semibold ${bet.course_fit_adjustment >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  {bet.course_fit_adjustment >= 0 ? '+' : ''}{bet.course_fit_adjustment.toFixed(2)}
-                </span>
-              ) : bet.course_fit_score != null ? (
-                <>
-                  <div className="text-lg font-semibold text-white">{bet.course_fit_score}/100</div>
-                  <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full"
-                      style={{ width: `${bet.course_fit_score}%` }}
-                    />
-                  </div>
-                </>
-              ) : (
-                <span className="text-lg font-semibold text-slate-400">—</span>
-              )}
-            </div>
-            {bet.course_history_adjustment != null && bet.course_history_adjustment > 0 && (
-              <div className="text-xs text-emerald-400 mt-1">History +{bet.course_history_adjustment.toFixed(2)}</div>
-            )}
-          </div>
-          
-          {/* Confidence Score */}
-          <div className="bg-slate-800/50 rounded-xl p-3">
-            <div className="text-xs text-slate-500 mb-1">Confidence</div>
-            <div className="flex items-center gap-2">
-              <span className="text-lg font-semibold text-white">
-                {bet.confidence_score != null ? `${bet.confidence_score}/100` : `${bet.confidence_rating}/5`}
-              </span>
-            </div>
-            <div className="mt-1">
-              <ConfidenceRating rating={bet.confidence_rating} />
-            </div>
-          </div>
+                </div>
+                {bet.sg_total != null && (
+                  <div className="text-xs text-slate-500 mt-1">SG: {bet.sg_total >= 0 ? '+' : ''}{bet.sg_total.toFixed(2)}</div>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Odds Movement */}
