@@ -525,6 +525,7 @@ export const createLiveTrackingService = ({
       orderBy: [
         { tier: 'asc' },
         { confidence1To5: 'desc' },
+        { edge: 'desc' },
         { createdAt: 'desc' }
       ],
       include: { override: true }
