@@ -25,6 +25,8 @@ import {
   getUserAccessLevel,
   accessLevelRank,
   meetsAccessLevel,
+  canAccessTier,
+  TIER_ACCESS_MAP,
   clearSettingsCache,
   capturePayPalOrder,
   getStripeClient,
@@ -1034,66 +1036,6 @@ app.get('/health', (req, res) => {
   });
 })
 
-// Get latest bets
-app.get('/api/bets/latest', async (req, res) => {
-  try {
-    const bets = await prisma.betRecommendation.findMany({
-      where: {
-        run: {
-          status: 'completed'
-        }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      },
-      take: 150,
-      include: {
-        run: {
-          select: {
-            id: true,
-            weekStart: true,
-            weekEnd: true
-          }
-        },
-        tourEvent: true,
-        override: true
-      }
-    })
-
-    // Featured = pinned bets shown on homepage
-    const visible = bets
-      .filter(bet => bet.override?.status !== 'archived' && bet.override?.pinned === true)
-      .sort((a, b) => {
-        const aOrder = Number.isFinite(a.override?.pinOrder) ? a.override.pinOrder : Number.POSITIVE_INFINITY
-        const bOrder = Number.isFinite(b.override?.pinOrder) ? b.override.pinOrder : Number.POSITIVE_INFINITY
-        if (aOrder !== bOrder) return aOrder - bOrder
-
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      })
-      .slice(0, 30)
-
-    // Load player stats for all runs
-    const runIds = [...new Set(visible.map(b => b.run?.id).filter(Boolean))]
-    const statsPromises = runIds.map(runId => playerStatsService.loadStatsForRun(runId))
-    const statsArrays = await Promise.all(statsPromises)
-    const statsByRun = new Map(runIds.map((id, i) => [id, statsArrays[i]]))
-
-    // Transform to frontend format with real player stats
-    const formattedBets = await Promise.all(visible.map(bet => {
-      const playerStats = statsByRun.get(bet.run?.id)
-      return formatBetWithRealStats(bet, playerStats)
-    }))
-
-    res.json({
-      data: formattedBets,
-      count: formattedBets.length
-    })
-  } catch (error) {
-    logger.error('Failed to fetch latest bets', { error: error.message })
-    res.status(500).json({ error: 'Failed to fetch bets' })
-  }
-})
-
 // Optional auth - attaches user if token present, but doesn't fail if absent
 const optionalAuth = (req, res, next) => {
   const authHeader = req.headers.authorization || ''
@@ -1106,35 +1048,114 @@ const optionalAuth = (req, res, next) => {
   return next()
 }
 
+// Get latest bets — auto-features top 3 from each tier
+app.get('/api/bets/latest', optionalAuth, async (req, res) => {
+  try {
+    const now = new Date()
+    const dayOfWeek = now.getDay()
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+    const startOfWeek = new Date(now)
+    startOfWeek.setDate(now.getDate() + diffToMonday)
+    startOfWeek.setHours(0, 0, 0, 0)
+    const endOfWeek = new Date(startOfWeek)
+    endOfWeek.setDate(startOfWeek.getDate() + 6)
+    endOfWeek.setHours(23, 59, 59, 999)
+
+    const bets = await prisma.betRecommendation.findMany({
+      where: {
+        run: { status: 'completed' },
+        tourEvent: {
+          endDate: { gte: startOfWeek, lte: endOfWeek }
+        }
+      },
+      orderBy: [
+        { confidence1To5: 'desc' },
+        { edge: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      take: 500,
+      include: {
+        run: { select: { id: true, weekStart: true, weekEnd: true } },
+        tourEvent: true,
+        override: true
+      }
+    })
+
+    // Auto-feature: top 3 from each tier (pinned overrides still respected)
+    const visible = bets.filter(bet => bet.override?.status !== 'archived')
+    const tierGroups = { PAR: [], BIRDIE: [], EAGLE: [], LONG_SHOTS: [] }
+    for (const bet of visible) {
+      const tier = bet.override?.tierOverride || bet.tier
+      if (tierGroups[tier]) tierGroups[tier].push(bet)
+    }
+
+    // Sort each tier, take top 3 (pinned first, then by quality)
+    const featured = []
+    for (const [tier, tierBets] of Object.entries(tierGroups)) {
+      tierBets.sort((a, b) => {
+        const aPinned = a.override?.pinned === true
+        const bPinned = b.override?.pinned === true
+        if (aPinned !== bPinned) return aPinned ? -1 : 1
+        const confA = a.override?.confidenceRating ?? a.confidence1To5 ?? 0
+        const confB = b.override?.confidenceRating ?? b.confidence1To5 ?? 0
+        if (confB !== confA) return confB - confA
+        const edgeA = a.edge ?? 0
+        const edgeB = b.edge ?? 0
+        return edgeB - edgeA
+      })
+      featured.push(...tierBets.slice(0, 3))
+    }
+
+    // Determine user access level for locking
+    const email = req.user?.email
+    const isAdmin = req.user?.role === 'admin'
+    const userLevel = isAdmin ? 'eagle' : (email ? await getUserAccessLevel(email) : 'free')
+
+    const runIds = [...new Set(featured.map(b => b.run?.id).filter(Boolean))]
+    const statsPromises = runIds.map(runId => playerStatsService.loadStatsForRun(runId))
+    const statsArrays = await Promise.all(statsPromises)
+    const statsByRun = new Map(runIds.map((id, i) => [id, statsArrays[i]]))
+
+    const formattedBets = await Promise.all(featured.map(async bet => {
+      const playerStats = statsByRun.get(bet.run?.id)
+      const formatted = await formatBetWithRealStats(bet, playerStats)
+      const tier = bet.override?.tierOverride || bet.tier
+      const locked = !canAccessTier(userLevel, tier)
+      if (locked) {
+        formatted.selection_name = 'Locked Player'
+        formatted.player_name = 'Locked Player'
+        formatted.analysis_paragraph = null
+        formatted.analysis_bullets = null
+        formatted.best_bookmaker = null
+        formatted.alt_offers = null
+      }
+      formatted.locked = locked
+      formatted.required_level = TIER_ACCESS_MAP[tier] || 'free'
+      return formatted
+    }))
+
+    res.json({
+      data: formattedBets,
+      count: formattedBets.length,
+      userLevel
+    })
+  } catch (error) {
+    logger.error('Failed to fetch latest bets', { error: error.message })
+    res.status(500).json({ error: 'Failed to fetch bets' })
+  }
+})
+
+// optionalAuth moved above /api/bets/latest
+
 // Get bets by tier (with dynamic content gating)
 app.get('/api/bets/tier/:tier', optionalAuth, async (req, res) => {
   try {
     const { tier } = req.params
 
-    // Check content access rule for this tier
-    const tierKey = tier.toLowerCase().replace(/[_-]/g, '')
-    const rule = await prisma.contentAccessRule.findFirst({
-      where: {
-        resourceType: 'page',
-        resourceIdentifier: { in: [tierKey, tier.toLowerCase(), `${tierKey}-bets`] },
-        enabled: true
-      }
-    })
-
-    if (rule && rule.minimumAccessLevel !== 'free') {
-      const email = req.user?.email
-      const isAdmin = req.user?.role === 'admin'
-      if (!isAdmin) {
-        const userLevel = email ? await getUserAccessLevel(email) : 'free'
-        if (!meetsAccessLevel(userLevel, rule.minimumAccessLevel)) {
-          return res.status(403).json({
-            error: 'Subscription upgrade required',
-            required_level: rule.minimumAccessLevel,
-            user_level: userLevel
-          })
-        }
-      }
-    }
+    // Determine user access level for locking
+    const email = req.user?.email
+    const isAdmin = req.user?.role === 'admin'
+    const userLevel = isAdmin ? 'eagle' : (email ? await getUserAccessLevel(email) : 'free')
 
     const TOP_PICKS_LIMIT = 5 // Only show top 5 best picks per category
     const now = new Date()
@@ -1268,15 +1289,33 @@ app.get('/api/bets/tier/:tier', optionalAuth, async (req, res) => {
     const statsArrays = await Promise.all(statsPromises)
     const statsByRun = new Map(runIds.map((id, i) => [id, statsArrays[i]]))
 
-    // Transform to frontend format with real player stats
-    const formattedBets = await Promise.all(selectedPicks.map(bet => {
+    // Transform to frontend format with real player stats + locking
+    const tierForAccess = requestedTier
+    const locked = !canAccessTier(userLevel, tierForAccess)
+    const requiredLevel = TIER_ACCESS_MAP[tierForAccess] || 'free'
+
+    const formattedBets = await Promise.all(selectedPicks.map(async bet => {
       const playerStats = statsByRun.get(bet.run?.id)
-      return formatBetWithRealStats(bet, playerStats)
+      const formatted = await formatBetWithRealStats(bet, playerStats)
+      if (locked) {
+        formatted.selection_name = 'Locked Player'
+        formatted.player_name = 'Locked Player'
+        formatted.analysis_paragraph = null
+        formatted.analysis_bullets = null
+        formatted.best_bookmaker = null
+        formatted.alt_offers = null
+      }
+      formatted.locked = locked
+      formatted.required_level = requiredLevel
+      return formatted
     }))
 
     res.json({
       data: formattedBets,
-      count: formattedBets.length
+      count: formattedBets.length,
+      userLevel,
+      locked,
+      requiredLevel
     })
   } catch (error) {
     logger.error('Failed to fetch bets by tier', { error: error.message, tier: req.params.tier })
@@ -3115,13 +3154,48 @@ app.get('/api/live-tracking/active', async (req, res) => {
 })
 
 // Live bet tracking: event leaderboard
-app.get('/api/live-tracking/event/:dgEventId', async (req, res) => {
+app.get('/api/live-tracking/event/:dgEventId', optionalAuth, async (req, res) => {
   try {
     const { dgEventId } = req.params
     const tour = String(req.query?.tour || '')
     if (!tour) return res.status(400).json({ error: 'Missing tour query parameter' })
 
     const response = await liveTrackingService.getEventTracking({ dgEventId, tour })
+
+    // Apply access locking + limit to top 5 per tier
+    const email = req.user?.email
+    const isAdmin = req.user?.role === 'admin'
+    const userLevel = isAdmin ? 'eagle' : (email ? await getUserAccessLevel(email) : 'free')
+
+    // Group rows by tier, take top 5 per tier (sorted by edge desc)
+    const tierBuckets = {}
+    for (const row of (response.rows || [])) {
+      const tier = row.tier || 'PAR'
+      if (!tierBuckets[tier]) tierBuckets[tier] = []
+      tierBuckets[tier].push(row)
+    }
+
+    const limitedRows = []
+    for (const [tier, rows] of Object.entries(tierBuckets)) {
+      // Already sorted by quality from getTrackedPlayersForEvent
+      const top5 = rows.slice(0, 5)
+      const locked = !canAccessTier(userLevel, tier)
+      for (const row of top5) {
+        if (locked) {
+          row.playerName = 'Locked Player'
+          row.baselineBook = null
+          row.currentBook = null
+          row.baselineOddsDecimal = null
+          row.currentOddsDecimal = null
+          row.oddsMovement = null
+        }
+        row.locked = locked
+      }
+      limitedRows.push(...top5)
+    }
+
+    response.rows = limitedRows
+    response.userLevel = userLevel
     res.json(response)
   } catch (error) {
     logger.error('Error fetching live tracking event', { error: error.message })

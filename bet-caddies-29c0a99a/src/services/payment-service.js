@@ -8,15 +8,29 @@ import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
 
 // ── helpers ────────────────────────────────────────────────────────────────
-const ACCESS_LEVELS = ['free', 'pro', 'elite']
+const ACCESS_LEVELS = ['free', 'birdie', 'eagle']
 
 export function accessLevelRank(level) {
-  const idx = ACCESS_LEVELS.indexOf(level)
+  const idx = ACCESS_LEVELS.indexOf(level?.toLowerCase?.() || '')
   return idx === -1 ? 0 : idx
 }
 
 export function meetsAccessLevel(userLevel, requiredLevel) {
   return accessLevelRank(userLevel) >= accessLevelRank(requiredLevel)
+}
+
+// Tier access mapping: which membership level is required to view each bet tier
+// Par = free (everyone), Birdie = birdie membership, Eagle + Long Shots = eagle membership
+export const TIER_ACCESS_MAP = {
+  PAR: 'free',
+  BIRDIE: 'birdie',
+  EAGLE: 'eagle',
+  LONG_SHOTS: 'eagle'
+}
+
+export function canAccessTier(userLevel, tier) {
+  const required = TIER_ACCESS_MAP[tier?.toUpperCase?.()] || 'free'
+  return meetsAccessLevel(userLevel || 'free', required)
 }
 
 // ── provider settings cache (refreshed every 60s) ─────────────────────────

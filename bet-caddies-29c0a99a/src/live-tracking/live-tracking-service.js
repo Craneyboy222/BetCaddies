@@ -1,12 +1,13 @@
 import { DataGolfClient, normalizeDataGolfArray } from '../sources/datagolf/client.js'
 import { parseOutrightsOffers } from '../sources/datagolf/parsers.js'
 import { getAllowedBooksSet } from '../sources/odds/allowed-books.js'
+import { normalizeBookKey } from '../sources/odds/book-utils.js'
 import { DataIssueTracker } from '../observability/data-issue-tracker.js'
 import { logger } from '../observability/logger.js'
 import { prisma } from '../db/client.js'
 
 // Debug version - used to verify deployment. Updated: 2026-02-09T10:00:00Z
-const LIVE_TRACKING_VERSION = 'v2.4.0-same-book-odds-one-per-player'
+const LIVE_TRACKING_VERSION = 'v2.5.0-strict-same-book-only'
 
 const DEFAULT_TTL_MS = Number(process.env.LIVE_TRACKING_CACHE_TTL_MS || 300000)
 const DEFAULT_CONCURRENCY = Number(process.env.LIVE_TRACKING_MAX_CONCURRENCY || 3)
@@ -283,20 +284,13 @@ export const computeOddsMovement = (baseline, current) => {
   }
 }
 
-const selectBestOffer = (offers = [], preferredBook = null) => {
-  if (!offers.length) return null
-  // If we have a preferred book (the baseline bookmaker), try to match it first
-  // This ensures we compare apples-to-apples (same bookmaker baseline vs current)
-  if (preferredBook) {
-    const normalizedPref = preferredBook.toLowerCase().trim()
-    const sameBookOffer = offers.find(o => o.book && o.book.toLowerCase().trim() === normalizedPref)
-    if (sameBookOffer) return sameBookOffer
-  }
-  // Fallback: best odds from any book
-  return offers.reduce((best, offer) => {
-    if (!best) return offer
-    return offer.oddsDecimal > best.oddsDecimal ? offer : best
-  }, null)
+const selectSameBookOffer = (offers = [], baselineBook = null) => {
+  if (!offers.length || !baselineBook) return null
+  // STRICT same-book matching only — never compare different bookmakers
+  // Use normalizeBookKey so "DraftKings" matches "draftkings", "Caesars Sportsbook" matches "caesars"
+  const normalizedBaseline = normalizeBookKey(baselineBook)
+  if (!normalizedBaseline) return null
+  return offers.find(o => o.book && normalizeBookKey(o.book) === normalizedBaseline) || null
 }
 
 const getAllowedBooks = () => getAllowedBooksSet()
@@ -823,8 +817,8 @@ export const createLiveTrackingService = ({
       const baselineOdds = Number.isFinite(pick.bestOdds) ? pick.bestOdds : null
       const baselineBook = pick.bestBookmaker || null
 
-      // Prefer same bookmaker as baseline for apples-to-apples comparison
-      const bestOffer = selectBestOffer(playerOffers, baselineBook)
+      // STRICT same-book matching — only compare odds from the same bookmaker
+      const bestOffer = selectSameBookOffer(playerOffers, baselineBook)
       if (!bestOffer) {
         await logIssue(tour, 'warning', 'ODDS_MISSING', 'No live odds for player/market from allowed books', {
           dgPlayerId,

@@ -227,10 +227,10 @@ export default function BetsTab() {
   const [betShowArchived, setBetShowArchived] = useState(false);
   const [collapsedTiers, setCollapsedTiers] = useState({});
 
-  // Query
+  // Query — fetch current week's bets only
   const { data: bets = [], isLoading: betsLoading } = useQuery({
     queryKey: ['allBets'],
-    queryFn: () => api.entities.GolfBet.list('-created_date', 100)
+    queryFn: () => api.entities.GolfBet.list('-created_date', 200)
   });
 
   // Mutations
@@ -295,15 +295,29 @@ export default function BetsTab() {
 
   const filteredBets = betShowArchived ? bets : bets.filter(b => b.listed);
 
+  // Sort by quality: confidence desc, edge desc, odds desc
+  const sortedBets = [...filteredBets].sort((a, b) => {
+    const confA = a.confidence_rating ?? 0;
+    const confB = b.confidence_rating ?? 0;
+    if (confB !== confA) return confB - confA;
+    const edgeA = a.edge ?? 0;
+    const edgeB = b.edge ?? 0;
+    if (edgeB !== edgeA) return edgeB - edgeA;
+    const oddsA = a.odds_decimal_best ?? 0;
+    const oddsB = b.odds_decimal_best ?? 0;
+    return oddsB - oddsA;
+  });
+
   const groupedBets = TIER_CONFIG.reduce((acc, tier) => {
-    const tierBets = filteredBets.filter(b => {
+    const tierBets = sortedBets.filter(b => {
       const betTier = (b.category || '').toLowerCase().replace(/[\s-]/g, '_');
       if (tier.key === 'uncategorized') {
         return !betTier || !['par', 'birdie', 'eagle', 'long_shots', 'longshots'].includes(betTier);
       }
       return betTier === tier.key || (tier.key === 'long_shots' && betTier === 'longshots');
     });
-    acc[tier.key] = tierBets;
+    // Top 10 per tier for admin view
+    acc[tier.key] = tierBets.slice(0, 10);
     return acc;
   }, {});
 
@@ -394,15 +408,14 @@ export default function BetsTab() {
                     </div>
                     <div className="flex items-center gap-3">
                       <Badge variant="outline" className={`${colors.bg} ${colors.text} ${colors.border}`}>
-                        {tierBets.length} bets
+                        Top {tierBets.length}
                       </Badge>
                       <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
                         <Eye className="w-3 h-3 mr-1" />
                         {listedInTier} listed
                       </Badge>
-                      <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/30">
-                        <Star className="w-3 h-3 mr-1" />
-                        {featuredInTier} featured
+                      <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/30">
+                        Top 5 on tier pages
                       </Badge>
                       {isCollapsed ? (
                         <ChevronRight className={`w-5 h-5 ${colors.text}`} />
@@ -415,13 +428,21 @@ export default function BetsTab() {
                   {/* Tier bets */}
                   {!isCollapsed && (
                     <div className="divide-y divide-slate-700/30">
-                      {tierBets.map(bet => (
+                      {tierBets.map((bet, rankIdx) => (
                         <div
                           key={bet.id}
                           className={`px-4 py-3 flex items-center gap-4 ${
-                            !bet.listed ? 'opacity-50 bg-slate-900/30' : 'bg-slate-800/20'
+                            !bet.listed ? 'opacity-50 bg-slate-900/30' : rankIdx < 5 ? 'bg-slate-800/20' : 'bg-slate-800/10'
                           } hover:bg-slate-700/20 transition-colors`}
                         >
+                          {/* Rank number */}
+                          <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                            rankIdx < 3 ? 'bg-emerald-500/20 text-emerald-400' :
+                            rankIdx < 5 ? 'bg-blue-500/20 text-blue-400' :
+                            'bg-slate-700/30 text-slate-500'
+                          }`}>
+                            {rankIdx + 1}
+                          </div>
                           {/* Listed toggle (shown on tier pages + results) */}
                           <button
                             onClick={() => toggleListedMutation.mutate({ id: bet.id, listed: !bet.listed })}

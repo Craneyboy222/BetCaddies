@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, ChevronUp, Zap, TrendingUp, TrendingDown, Minus, Cloud, Sun, Wind, Droplets, Plus, ExternalLink, Check, Users, Star } from 'lucide-react';
+import { ChevronDown, ChevronUp, Zap, TrendingUp, TrendingDown, Minus, Cloud, Sun, Wind, Droplets, Plus, ExternalLink, Check, Users, Star, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { useNavigate } from 'react-router-dom';
 
 const tourColors = {
   PGA: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
@@ -84,11 +85,96 @@ const CourseFitStars = ({ rating }) => {
 export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, providers = [] }) {
   const [expanded, setExpanded] = useState(false);
   const [showOdds, setShowOdds] = useState(false);
+  const navigate = useNavigate();
 
   const WeatherIcon = weatherIcons[bet.weather_icon] || Cloud;
   const providerData = providers.find(p => p.slug === bet.provider_best_slug);
   const marketLabel = bet.market_label || bet.bet_title || 'Outright';
   const marketColor = marketColors[marketLabel] || 'bg-slate-500/20 text-slate-300 border-slate-500/30';
+
+  // If bet is locked, show restricted view
+  if (bet.locked) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className={`relative overflow-hidden rounded-2xl border bg-gradient-to-br ${categoryColors[bet.category]} backdrop-blur-xl`}
+      >
+        <div className="absolute -top-20 -right-20 w-40 h-40 bg-slate-500/10 rounded-full blur-3xl" />
+        <div className="relative p-5">
+          {/* Header - still visible */}
+          <div className="flex items-start justify-between mb-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" className={`${marketColor} text-sm font-semibold px-3 py-1`}>
+                {marketLabel}
+              </Badge>
+              <Badge variant="outline" className={`${tourColors[bet.tour]} text-xs`}>
+                {bet.tour}
+              </Badge>
+            </div>
+            <ConfidenceRating rating={bet.confidence_rating} />
+          </div>
+
+          {/* Tournament name visible */}
+          <p className="text-slate-400 text-sm mb-1">{bet.tournament_name}</p>
+
+          {/* Player name - LOCKED */}
+          <h3 className="text-2xl font-bold text-slate-600 mb-1 blur-sm select-none">Hidden Player</h3>
+          <div className="mb-3" />
+
+          {/* Odds still visible */}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="h-8 px-3 bg-slate-700/50 rounded flex items-center">
+                <Lock className="w-4 h-4 text-slate-500" />
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-3xl font-bold text-emerald-400">
+                {bet.odds_display_best}
+              </div>
+              <div className="text-xs text-slate-500">
+                {bet.odds_decimal_best?.toFixed(2)} decimal
+              </div>
+            </div>
+          </div>
+
+          {/* Signal boxes still visible */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="bg-white/5 rounded-xl p-3 text-center">
+              <div className="text-xs text-slate-400 mb-1">Edge</div>
+              <div className="text-lg font-bold text-emerald-400">{bet.edge ? `${(bet.edge * 100).toFixed(1)}%` : '—'}</div>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3 text-center">
+              <div className="text-xs text-slate-400 mb-1">Fair Prob</div>
+              <div className="text-lg font-bold text-emerald-400">{bet.fair_prob ? `${(bet.fair_prob * 100).toFixed(1)}%` : '—'}</div>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3 text-center">
+              <div className="text-xs text-slate-400 mb-1">Course Fit</div>
+              <div className="text-lg font-bold text-slate-500 blur-sm">—</div>
+            </div>
+          </div>
+
+          {/* Lock overlay */}
+          <div className="flex flex-col items-center gap-3 py-4 border-t border-slate-700/50">
+            <div className="flex items-center gap-2 text-amber-400">
+              <Lock className="w-5 h-5" />
+              <span className="font-bold text-lg">BET LOCKED</span>
+            </div>
+            <p className="text-xs text-slate-400 text-center">
+              Upgrade to {bet.required_level === 'eagle' ? 'Eagle' : 'Birdie'} to unlock this pick
+            </p>
+            <Button
+              onClick={() => navigate('/membership')}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white font-semibold px-6"
+            >
+              Upgrade Now
+            </Button>
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div
