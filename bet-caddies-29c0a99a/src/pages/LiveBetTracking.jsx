@@ -36,6 +36,19 @@ const formatEdge = (value) => {
   return `${(value * 100).toFixed(1)}%`
 }
 
+const formatProb = (value) => {
+  if (value == null || !Number.isFinite(value)) return null
+  return `${(value * 100).toFixed(1)}%`
+}
+
+const getProbColor = (prob) => {
+  if (prob == null) return 'text-slate-500'
+  if (prob >= 0.5) return 'text-emerald-400'
+  if (prob >= 0.25) return 'text-emerald-300'
+  if (prob >= 0.1) return 'text-amber-400'
+  return 'text-slate-400'
+}
+
 const formatDate = (dateStr) => {
   if (!dateStr) return null
   const date = new Date(dateStr)
@@ -155,6 +168,30 @@ const BetOutcomeBadge = ({ outcome, playerStatus }) => {
   // Pending
   return (
     <span className="text-slate-500 text-xs">In Play</span>
+  )
+}
+
+const ProbabilityCell = ({ row }) => {
+  const mProb = row.marketProb
+  const wProb = row.winProb
+  const label = row.marketProbLabel
+
+  if (mProb == null && wProb == null) return <span className="text-slate-600">—</span>
+
+  return (
+    <div className="flex flex-col items-start gap-0.5">
+      {mProb != null && (
+        <div className={`font-semibold ${getProbColor(mProb)}`}>
+          {formatProb(mProb)}
+          <span className="text-[10px] text-slate-500 ml-1">{label}</span>
+        </div>
+      )}
+      {wProb != null && mProb !== wProb && (
+        <div className="text-[10px] text-slate-500">
+          {formatProb(wProb)} win
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -308,6 +345,7 @@ const LiveEventTable = ({ rows, status }) => {
             <th>Now</th>
             <th>Movement</th>
             <th>Result</th>
+            <th>Model Prob</th>
             <th>Edge</th>
           </tr>
           <tr className="text-[10px] text-slate-500">
@@ -326,6 +364,7 @@ const LiveEventTable = ({ rows, status }) => {
             <th className="text-slate-500 font-normal">Current</th>
             <th></th>
             <th></th>
+            <th className="text-slate-500 font-normal">Live DG</th>
             <th></th>
           </tr>
         </thead>
@@ -385,6 +424,9 @@ const LiveEventTable = ({ rows, status }) => {
               </td>
               <td>
                 <BetOutcomeBadge outcome={row.betOutcome} playerStatus={row.playerStatus} />
+              </td>
+              <td>
+                <ProbabilityCell row={row} />
               </td>
               <td className="text-emerald-400">{formatEdge(row.edge) || '—'}</td>
             </tr>
