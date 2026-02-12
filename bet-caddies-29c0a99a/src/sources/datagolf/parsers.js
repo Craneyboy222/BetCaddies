@@ -154,7 +154,7 @@ const isLikelyBookKey = (key) => {
   if (KNOWN_BOOK_KEYS.has(normalized)) return true
   if (normalized.length <= 2) return false
   if (NON_BOOK_KEYS.has(normalized)) return false
-  return false
+  return true
 }
 
 const convertAmericanToDecimal = (american) => {

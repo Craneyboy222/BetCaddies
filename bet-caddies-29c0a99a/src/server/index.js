@@ -544,7 +544,7 @@ const createStripePriceForPackage = async ({
     product: productId
   }
 
-  if (billingPeriod !== 'lifetime') {
+  if (billingPeriod !== 'lifetime' && billingPeriod !== 'one-time') {
     priceData.recurring = {
       interval: billingPeriod === 'yearly' ? 'year' : 'month'
     }
@@ -5798,7 +5798,8 @@ app.post(
       }
     })
 
-    if (!stripe_price_id) {
+    // Only auto-create Stripe price for paid packages (price > 0) without a manual stripe_price_id
+    if (!stripe_price_id && Number(price || 0) > 0) {
       if (!stripe) {
         await prisma.membershipPackage.delete({ where: { id: created.id } })
         return res.status(400).json({ error: 'Stripe is not configured for membership checkout' })
@@ -5852,7 +5853,10 @@ app.put(
     badges: z.array(z.any()).optional(),
     enabled: z.boolean().optional(),
     stripe_price_id: z.string().optional().nullable(),
-    display_order: z.coerce.number().int().optional()
+    display_order: z.coerce.number().int().optional(),
+    popular: z.boolean().optional(),
+    access_level: z.enum(['free', 'pro', 'elite']).optional(),
+    trial_days: z.coerce.number().int().nonnegative().optional()
   })),
   async (req, res) => {
   try {
@@ -5866,7 +5870,10 @@ app.put(
       badges,
       enabled,
       stripe_price_id,
-      display_order
+      display_order,
+      popular,
+      access_level,
+      trial_days
     } = req.body || {}
 
     const existing = await prisma.membershipPackage.findUnique({ where: { id } })
@@ -5883,28 +5890,39 @@ app.put(
         badges: Array.isArray(badges) ? badges : undefined,
         enabled: typeof enabled === 'boolean' ? enabled : undefined,
         stripePriceId: stripe_price_id ?? undefined,
-        displayOrder: Number.isFinite(display_order) ? display_order : undefined
+        displayOrder: Number.isFinite(display_order) ? display_order : undefined,
+        popular: typeof popular === 'boolean' ? popular : undefined,
+        accessLevel: access_level ?? undefined,
+        trialDays: Number.isFinite(trial_days) ? trial_days : undefined
       }
     })
 
     const priceChanged = Number.isFinite(price) && price !== existing.price
     const periodChanged = billing_period && billing_period !== existing.billingPeriod
-    const missingStripePrice = !updated.stripePriceId
 
-    if (!stripe_price_id && stripe && (priceChanged || periodChanged || missingStripePrice)) {
-      const stripeIds = await createStripePriceForPackage({
-        packageId: updated.id,
-        name: updated.name,
-        description: updated.description,
-        price: updated.price,
-        billingPeriod: updated.billingPeriod,
-        stripeProductId: updated.stripeProductId
-      })
+    // Only auto-create Stripe price when price/period explicitly changed on a paid package
+    // Don't trigger for simple enabled toggles or free (price=0) packages
+    if (!stripe_price_id && stripe && (priceChanged || periodChanged) && updated.price > 0) {
+      try {
+        const stripeIds = await createStripePriceForPackage({
+          packageId: updated.id,
+          name: updated.name,
+          description: updated.description,
+          price: updated.price,
+          billingPeriod: updated.billingPeriod,
+          stripeProductId: updated.stripeProductId
+        })
 
-      updated = await prisma.membershipPackage.update({
-        where: { id: updated.id },
-        data: stripeIds
-      })
+        updated = await prisma.membershipPackage.update({
+          where: { id: updated.id },
+          data: stripeIds
+        })
+      } catch (stripeError) {
+        logger.warn('Auto-create Stripe price failed (update still saved)', {
+          packageId: updated.id,
+          error: stripeError.message
+        })
+      }
     }
 
     res.json({
@@ -5918,7 +5936,10 @@ app.put(
         badges: updated.badges,
         enabled: updated.enabled,
         stripe_price_id: updated.stripePriceId,
-        display_order: updated.displayOrder
+        display_order: updated.displayOrder,
+        popular: updated.popular,
+        access_level: updated.accessLevel,
+        trial_days: updated.trialDays
       }
     })
   } catch (error) {

@@ -6,7 +6,7 @@ import { logger } from '../observability/logger.js'
 import { prisma } from '../db/client.js'
 
 // Debug version - used to verify deployment. Updated: 2026-02-09T10:00:00Z
-const LIVE_TRACKING_VERSION = 'v2.2.0-fix-duplicate-tourEvent'
+const LIVE_TRACKING_VERSION = 'v2.3.0-event-validation-audit-fixes'
 
 const DEFAULT_TTL_MS = Number(process.env.LIVE_TRACKING_CACHE_TTL_MS || 300000)
 const DEFAULT_CONCURRENCY = Number(process.env.LIVE_TRACKING_MAX_CONCURRENCY || 3)
@@ -78,9 +78,9 @@ const resolveEventName = (payload) => {
 }
 
 const resolvePlayerId = (row) => {
-  if (row?.dg_id) return String(row.dg_id)
-  if (row?.player_id) return String(row.player_id)
-  if (row?.id) return String(row.id)
+  if (row?.dg_id != null) return String(row.dg_id)
+  if (row?.player_id != null) return String(row.player_id)
+  if (row?.id != null) return String(row.id)
   return null
 }
 
@@ -100,7 +100,7 @@ const extractScoringFields = (row) => {
   const r2 = row.R2 ?? row.r2 ?? row.round_2 ?? row.round2 ?? null
   const r3 = row.R3 ?? row.r3 ?? row.round_3 ?? row.round3 ?? null
   const r4 = row.R4 ?? row.r4 ?? row.round_4 ?? row.round4 ?? null
-  const currentRound = row.round ?? null
+  const currentRound = row.current_round ?? row.round ?? row.round_number ?? row.roundNumber ?? null
   
   // Parse position - check for special statuses like MC (missed cut), WD (withdrawn), DQ (disqualified)
   let position = rawPosition
@@ -140,6 +140,49 @@ const extractScoringFields = (row) => {
     r4,
     currentRound
   }
+}
+
+/**
+ * Extract live model probabilities from the DataGolf in-play predictions row.
+ * Returns all available probabilities as decimals (0-1).
+ */
+const extractProbabilities = (row) => {
+  if (!row || typeof row !== 'object') return null
+
+  const winProb = row.win_prob ?? row.win ?? null
+  const top5Prob = row.top_5_prob ?? row.top5_prob ?? row.top_5 ?? null
+  const top10Prob = row.top_10_prob ?? row.top10_prob ?? row.top_10 ?? null
+  const top20Prob = row.top_20_prob ?? row.top20_prob ?? row.top_20 ?? null
+  const makeCutProb = row.make_cut_prob ?? row.make_cut ?? null
+
+  if (winProb == null && top5Prob == null && top10Prob == null && top20Prob == null && makeCutProb == null) {
+    return null
+  }
+
+  return { winProb, top5Prob, top10Prob, top20Prob, makeCutProb }
+}
+
+/**
+ * Get the probability most relevant to the bet's market type.
+ * Returns { marketProb, marketProbLabel } or null.
+ */
+const getMarketRelevantProb = (market, probs) => {
+  if (!market || !probs) return null
+
+  const key = market.toLowerCase()
+
+  if (key === 'win') return { marketProb: probs.winProb, marketProbLabel: 'Win' }
+  if (key === 'top_5' || key === 'top5') return { marketProb: probs.top5Prob, marketProbLabel: 'Top 5' }
+  if (key === 'top_10' || key === 'top10') return { marketProb: probs.top10Prob, marketProbLabel: 'Top 10' }
+  if (key === 'top_20' || key === 'top20') return { marketProb: probs.top20Prob, marketProbLabel: 'Top 20' }
+  if (key === 'make_cut') return { marketProb: probs.makeCutProb, marketProbLabel: 'Make Cut' }
+  if (key === 'mc') {
+    // Miss Cut = inverse of Make Cut probability
+    const mcProb = probs.makeCutProb != null ? 1 - probs.makeCutProb : null
+    return { marketProb: mcProb, marketProbLabel: 'Miss Cut' }
+  }
+
+  return null
 }
 
 /**
@@ -209,19 +252,17 @@ export const determineBetOutcome = (market, scoring, eventStatus) => {
       if (typeof position === 'number') {
         return position <= n ? 'won' : 'lost'
       }
+      return null // completed but missing position - can't determine
     }
     return 'pending'
   }
   
   // For FRL (first round leader)
+  // NOTE: FRL outcome requires comparing R1 scores across ALL players,
+  // which we can't do here with single-player data. Return null (unknown)
+  // so the UI shows "In Play" rather than an incorrect won/lost.
   if (marketKey === 'frl') {
-    if (status === 'MC' || status === 'WD' || status === 'DQ') return 'lost'
-    if (eventStatus === 'completed') {
-      // FRL = finished 1st after round 1. Position 1 after R1 wins.
-      if (position === 1) return 'won'
-      if (typeof position === 'number') return 'lost'
-    }
-    return 'pending'
+    return null
   }
   
   // Unknown market type
@@ -627,33 +668,76 @@ export const createLiveTrackingService = ({
       await logIssue(tour, 'warning', 'TOUR_NOT_SUPPORTED', 'Tour not supported for live tracking odds', { tour })
     }
 
+    // Fetch live scoring first to validate event match
+    const { scoringRows, inPlayPayload, statsPayload } = tourCode
+      ? await fetchLiveScoring(tourCode)
+      : { scoringRows: [], inPlayPayload: null, statsPayload: null }
+
+    // CRITICAL: Verify the live data is for the SAME tournament as our picks.
+    // DataGolf endpoints return data for whatever event is currently live on the tour,
+    // which may differ from the event our picks are for.
+    const liveEventId = resolveEventId(inPlayPayload, scoringRows) || resolveEventId(statsPayload)
+    const expectedEventId = tourEvent.dgEventId
+    const eventMatches = !expectedEventId || !liveEventId || String(liveEventId) === String(expectedEventId)
+
+    if (!eventMatches) {
+      await logIssue(tour, 'warning', 'EVENT_MISMATCH',
+        `Live data is for event ${liveEventId} but picks are for event ${expectedEventId}. Skipping live scoring & odds.`, {
+          expectedEventId,
+          liveEventId,
+          eventName: tourEvent.eventName,
+          tour
+        })
+    }
+
+    // Only build scoring index if the event IDs match
+    const scoringIndex = new Map()
+    if (eventMatches) {
+      for (const row of scoringRows) {
+        const id = resolvePlayerId(row)
+        if (!id) continue
+        scoringIndex.set(String(id), row)
+      }
+    }
+
+    if (eventMatches && !scoringRows.length) {
+      await logIssue(tour, 'warning', 'STATS_MISSING', 'Live scoring feeds returned no rows', {
+        tour,
+        hasInPlayPayload: Boolean(inPlayPayload),
+        hasStatsPayload: Boolean(statsPayload)
+      })
+    }
+
+    // Only fetch odds if the live data event matches our picks
     const uniqueMarkets = Array.from(new Set(picks.map((pick) => pick.marketKey).filter(Boolean)))
 
-    const oddsResults = await withConcurrencyLimit(uniqueMarkets, maxConcurrency, async (marketKey) => {
-      if (!tourCode) return { marketKey, payload: null, offers: [] }
-      try {
-        const result = await fetchLiveOddsByMarket(tourCode, marketKey)
-        if (!result.payload) {
-          await logIssue(tour, 'warning', 'MARKET_NOT_SUPPORTED', 'DataGolf returned no payload for market', {
-            marketKey
-          })
-        }
-        const rows = normalizeDataGolfArray(result.payload)
-        if (rows.length && result.offers.length === 0) {
-          await logIssue(tour, 'warning', 'ODDS_BOOK_NOT_ALLOWED', 'Odds feed returned data but no allowed books remained after filtering', {
-            marketKey
-          })
-        }
-        return { marketKey, ...result }
-      } catch (error) {
-        await logIssue(tour, 'warning', 'ODDS_MISSING', 'Failed to fetch live odds', {
-          tour,
-          marketKey,
-          message: error?.message
+    const oddsResults = eventMatches
+      ? await withConcurrencyLimit(uniqueMarkets, maxConcurrency, async (marketKey) => {
+          if (!tourCode) return { marketKey, payload: null, offers: [] }
+          try {
+            const result = await fetchLiveOddsByMarket(tourCode, marketKey)
+            if (!result.payload) {
+              await logIssue(tour, 'warning', 'MARKET_NOT_SUPPORTED', 'DataGolf returned no payload for market', {
+                marketKey
+              })
+            }
+            const rows = normalizeDataGolfArray(result.payload)
+            if (rows.length && result.offers.length === 0) {
+              await logIssue(tour, 'warning', 'ODDS_BOOK_NOT_ALLOWED', 'Odds feed returned data but no allowed books remained after filtering', {
+                marketKey
+              })
+            }
+            return { marketKey, ...result }
+          } catch (error) {
+            await logIssue(tour, 'warning', 'ODDS_MISSING', 'Failed to fetch live odds', {
+              tour,
+              marketKey,
+              message: error?.message
+            })
+            return { marketKey, payload: null, offers: [] }
+          }
         })
-        return { marketKey, payload: null, offers: [] }
-      }
-    })
+      : uniqueMarkets.map(marketKey => ({ marketKey, payload: null, offers: [] }))
 
     const oddsByMarket = new Map()
     for (const result of oddsResults) {
@@ -661,23 +745,6 @@ export const createLiveTrackingService = ({
     }
 
     const allowedBooks = getAllowedBooks()
-
-    const { scoringRows, inPlayPayload, statsPayload } = await fetchLiveScoring(tourCode)
-
-    const scoringIndex = new Map()
-    for (const row of scoringRows) {
-      const id = resolvePlayerId(row)
-      if (!id) continue
-      scoringIndex.set(String(id), row)
-    }
-
-    if (!scoringRows.length) {
-      await logIssue(tour, 'warning', 'STATS_MISSING', 'Live scoring feeds returned no rows', {
-        tour,
-        hasInPlayPayload: Boolean(inPlayPayload),
-        hasStatsPayload: Boolean(statsPayload)
-      })
-    }
 
     const rows = []
 
@@ -692,6 +759,8 @@ export const createLiveTrackingService = ({
 
       const scoringRow = dgPlayerId ? scoringIndex.get(dgPlayerId) : null
       const scoring = scoringRow ? extractScoringFields(scoringRow) : null
+      const probs = scoringRow ? extractProbabilities(scoringRow) : null
+      const marketProb = getMarketRelevantProb(pick.marketKey, probs)
 
       if (dgPlayerId && !scoringRow) {
         await logIssue(tour, 'info', 'PLAYER_NOT_FOUND_IN_LIVE_FEED', 'Player missing from live feed', {
@@ -827,6 +896,14 @@ export const createLiveTrackingService = ({
         ev: pick.ev,
         confidence: pick.confidence1To5,
         betOutcome,
+        // Live model probabilities from DataGolf
+        winProb: probs?.winProb ?? null,
+        top5Prob: probs?.top5Prob ?? null,
+        top10Prob: probs?.top10Prob ?? null,
+        top20Prob: probs?.top20Prob ?? null,
+        makeCutProb: probs?.makeCutProb ?? null,
+        marketProb: marketProb?.marketProb ?? null,
+        marketProbLabel: marketProb?.marketProbLabel ?? null,
         dataIssues: []
       })
     }
@@ -883,7 +960,10 @@ export const createLiveTrackingService = ({
         tourEventId: tourEvent.id,
         runKey: tourEvent.run?.runKey,
         picksFromDb: picks.length,
-        rowsReturned: rows.length
+        rowsReturned: rows.length,
+        expectedEventId: expectedEventId || null,
+        liveEventId: liveEventId || null,
+        eventMatches
       }
     }
 
