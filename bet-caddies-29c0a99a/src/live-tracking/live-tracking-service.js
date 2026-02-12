@@ -6,7 +6,7 @@ import { logger } from '../observability/logger.js'
 import { prisma } from '../db/client.js'
 
 // Debug version - used to verify deployment. Updated: 2026-02-09T10:00:00Z
-const LIVE_TRACKING_VERSION = 'v2.3.0-event-validation-audit-fixes'
+const LIVE_TRACKING_VERSION = 'v2.4.0-same-book-odds-one-per-player'
 
 const DEFAULT_TTL_MS = Number(process.env.LIVE_TRACKING_CACHE_TTL_MS || 300000)
 const DEFAULT_CONCURRENCY = Number(process.env.LIVE_TRACKING_MAX_CONCURRENCY || 3)
@@ -283,8 +283,16 @@ export const computeOddsMovement = (baseline, current) => {
   }
 }
 
-const selectBestOffer = (offers = []) => {
+const selectBestOffer = (offers = [], preferredBook = null) => {
   if (!offers.length) return null
+  // If we have a preferred book (the baseline bookmaker), try to match it first
+  // This ensures we compare apples-to-apples (same bookmaker baseline vs current)
+  if (preferredBook) {
+    const normalizedPref = preferredBook.toLowerCase().trim()
+    const sameBookOffer = offers.find(o => o.book && o.book.toLowerCase().trim() === normalizedPref)
+    if (sameBookOffer) return sameBookOffer
+  }
+  // Fallback: best odds from any book
   return offers.reduce((best, offer) => {
     if (!best) return offer
     return offer.oddsDecimal > best.oddsDecimal ? offer : best
@@ -530,20 +538,39 @@ export const createLiveTrackingService = ({
 
     // Deduplicate picks by selection+marketKey (keep highest confidence from latest run)
     const seenPickKeys = new Set()
-    const picks = []
+    const dedupedByMarket = []
     for (const pick of allPicks) {
       const key = `${pick.selection}:${pick.marketKey}`
       if (!seenPickKeys.has(key)) {
         seenPickKeys.add(key)
-        picks.push(pick)
+        dedupedByMarket.push(pick)
       }
     }
+
+    // One bet per player rule: keep only the best pick per player (highest edge)
+    // This prevents duplicate rows like Asaji TOP_5 + Asaji TOP_20
+    const playerBestPick = new Map()
+    for (const pick of dedupedByMarket) {
+      const playerKey = pick.dgPlayerId ? String(pick.dgPlayerId) : pick.selection.toLowerCase()
+      const existing = playerBestPick.get(playerKey)
+      if (!existing) {
+        playerBestPick.set(playerKey, pick)
+      } else {
+        // Keep the pick with highest edge, then highest confidence, then highest odds
+        const pickScore = (p) => (p.edge || 0) * 1000 + (p.confidence1To5 || 0) * 10 + (p.bestOdds || 0) * 0.01
+        if (pickScore(pick) > pickScore(existing)) {
+          playerBestPick.set(playerKey, pick)
+        }
+      }
+    }
+    const picks = Array.from(playerBestPick.values())
 
     logger.info('Live tracking: found picks for event', {
       tour,
       dgEventId,
       completedTourEventIds: completedIds,
       totalPicksBeforeDedup: allPicks.length,
+      afterMarketDedup: dedupedByMarket.length,
       pickCount: picks.length,
       markets: [...new Set(picks.map(p => p.marketKey))]
     })
@@ -793,7 +820,11 @@ export const createLiveTrackingService = ({
         }
       }
 
-      const bestOffer = selectBestOffer(playerOffers)
+      const baselineOdds = Number.isFinite(pick.bestOdds) ? pick.bestOdds : null
+      const baselineBook = pick.bestBookmaker || null
+
+      // Prefer same bookmaker as baseline for apples-to-apples comparison
+      const bestOffer = selectBestOffer(playerOffers, baselineBook)
       if (!bestOffer) {
         await logIssue(tour, 'warning', 'ODDS_MISSING', 'No live odds for player/market from allowed books', {
           dgPlayerId,
@@ -815,9 +846,6 @@ export const createLiveTrackingService = ({
           marketKey: pick.marketKey
         })
       }
-
-      const baselineOdds = Number.isFinite(pick.bestOdds) ? pick.bestOdds : null
-      const baselineBook = pick.bestBookmaker || null
       let baselineCapturedAt = pick.createdAt?.toISOString?.() || pick.createdAt || null
 
       let baselineFallback = null

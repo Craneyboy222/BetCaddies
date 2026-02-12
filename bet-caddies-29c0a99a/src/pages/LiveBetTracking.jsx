@@ -58,37 +58,36 @@ const formatDate = (dateStr) => {
 const MovementIndicator = ({ movement, baseline, current }) => {
   if (!movement) return <span className="text-slate-500">—</span>
   const direction = movement.direction
-  const pct = formatPct(movement.pctChange)
   const delta = formatDelta(movement.deltaDecimal)
   const crossBook = movement.crossBook
 
   // For bettors: odds going DOWN means the player's chances improved (good for you if you bet early)
   // Odds going UP means player's chances got worse (bad for your bet)
-  
+
   if (direction === 'DOWN') {
-    // Odds shortened (went down) = player more likely to win = GOOD for your bet
     return (
       <div className="flex flex-col items-start">
-        <div className="flex items-center gap-1 text-emerald-400 font-semibold">
+        <div className={`flex items-center gap-1 font-semibold ${crossBook ? 'text-slate-400' : 'text-emerald-400'}`}>
           <ArrowDown className="w-4 h-4" />
           <span>{delta}</span>
         </div>
-        <span className="text-xs text-emerald-400/80">✓ Looking good</span>
-        {crossBook && <span className="text-xs text-slate-500">cross-book</span>}
+        <span className={`text-xs ${crossBook ? 'text-slate-500' : 'text-emerald-400/80'}`}>
+          {crossBook ? 'Diff. book' : '✓ Looking good'}
+        </span>
       </div>
     )
   }
 
   if (direction === 'UP') {
-    // Odds drifted (went up) = player less likely to win = BAD for your bet
     return (
       <div className="flex flex-col items-start">
-        <div className="flex items-center gap-1 text-rose-400 font-semibold">
+        <div className={`flex items-center gap-1 font-semibold ${crossBook ? 'text-slate-400' : 'text-rose-400'}`}>
           <ArrowUp className="w-4 h-4" />
           <span>{delta}</span>
         </div>
-        <span className="text-xs text-rose-400/80">Drifting</span>
-        {crossBook && <span className="text-xs text-slate-500">cross-book</span>}
+        <span className={`text-xs ${crossBook ? 'text-slate-500' : 'text-rose-400/80'}`}>
+          {crossBook ? 'Diff. book' : 'Drifting'}
+        </span>
       </div>
     )
   }
