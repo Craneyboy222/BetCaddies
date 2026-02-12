@@ -1101,7 +1101,10 @@ app.get('/api/bets/latest', optionalAuth, async (req, res) => {
         if (confB !== confA) return confB - confA
         const edgeA = a.edge ?? 0
         const edgeB = b.edge ?? 0
-        return edgeB - edgeA
+        if (edgeB !== edgeA) return edgeB - edgeA
+        const oddsA = a.bestOdds ?? 0
+        const oddsB = b.bestOdds ?? 0
+        return oddsB - oddsA
       })
       featured.push(...tierBets.slice(0, 3))
     }
@@ -1253,35 +1256,8 @@ app.get('/api/bets/tier/:tier', optionalAuth, async (req, res) => {
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     })
 
-    // Select top 5 picks with VARIETY in bet types (marketKey)
-    // Ensure we don't have all picks of the same type (e.g., all MC or all Top 20)
-    const selectedPicks = []
-    const usedMarketKeys = new Map() // Track count per market key
-    
-    for (const bet of sortedBets) {
-      if (selectedPicks.length >= TOP_PICKS_LIMIT) break
-      
-      const marketKey = bet.marketKey || 'unknown'
-      const currentCount = usedMarketKeys.get(marketKey) || 0
-      
-      // Allow max 2 picks per market type to ensure variety
-      // But if we can't fill 5 picks, we'll relax this constraint
-      if (currentCount < 2) {
-        selectedPicks.push(bet)
-        usedMarketKeys.set(marketKey, currentCount + 1)
-      }
-    }
-    
-    // If we couldn't fill 5 picks with variety, fill remaining with best available
-    if (selectedPicks.length < TOP_PICKS_LIMIT) {
-      const selectedIds = new Set(selectedPicks.map(b => b.id))
-      for (const bet of sortedBets) {
-        if (selectedPicks.length >= TOP_PICKS_LIMIT) break
-        if (!selectedIds.has(bet.id)) {
-          selectedPicks.push(bet)
-        }
-      }
-    }
+    // Take straight top 5 by quality ranking (consistent with admin top 10)
+    const selectedPicks = sortedBets.slice(0, TOP_PICKS_LIMIT)
 
     // Load player stats for all runs
     const runIds = [...new Set(selectedPicks.map(b => b.run?.id).filter(Boolean))]
@@ -3179,12 +3155,17 @@ app.get('/api/live-tracking/event/:dgEventId', optionalAuth, async (req, res) =>
 
     const limitedRows = []
     for (const [tier, rows] of Object.entries(tierBuckets)) {
-      // Sort by edge desc, then confidence desc within each tier
+      // Sort by confidence desc, edge desc, odds desc (matches admin ranking)
       rows.sort((a, b) => {
+        const confA = a.confidence ?? 0
+        const confB = b.confidence ?? 0
+        if (confB !== confA) return confB - confA
         const edgeA = a.edge ?? 0
         const edgeB = b.edge ?? 0
         if (edgeB !== edgeA) return edgeB - edgeA
-        return (b.confidence ?? 0) - (a.confidence ?? 0)
+        const oddsA = a.baselineOddsDecimal ?? 0
+        const oddsB = b.baselineOddsDecimal ?? 0
+        return oddsB - oddsA
       })
       const top5 = rows.slice(0, 5)
       const locked = !canAccessTier(userLevel, tier)
@@ -4068,7 +4049,7 @@ app.get('/api/entities/golf-bets', authRequired, adminOnly, async (req, res) => 
       tournament_name: bet.tourEvent?.eventName || null,
       odds_display_best: bet.bestOdds?.toString() || '',
       odds_decimal_best: bet.bestOdds,
-      edge: bet.edge || null,
+      edge: bet.edge ?? null,
       created_date: bet.createdAt?.toISOString?.() || bet.createdAt
     }))
     res.json({ data: formatted })
