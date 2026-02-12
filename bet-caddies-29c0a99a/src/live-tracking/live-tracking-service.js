@@ -531,40 +531,22 @@ export const createLiveTrackingService = ({
     })
 
     // Deduplicate picks by selection+marketKey (keep highest confidence from latest run)
+    // Same player can appear with different markets (e.g., TOP_5 and TOP_20 in different tiers)
     const seenPickKeys = new Set()
-    const dedupedByMarket = []
+    const picks = []
     for (const pick of allPicks) {
       const key = `${pick.selection}:${pick.marketKey}`
       if (!seenPickKeys.has(key)) {
         seenPickKeys.add(key)
-        dedupedByMarket.push(pick)
+        picks.push(pick)
       }
     }
-
-    // One bet per player rule: keep only the best pick per player (highest edge)
-    // This prevents duplicate rows like Asaji TOP_5 + Asaji TOP_20
-    const playerBestPick = new Map()
-    for (const pick of dedupedByMarket) {
-      const playerKey = pick.dgPlayerId ? String(pick.dgPlayerId) : pick.selection.toLowerCase()
-      const existing = playerBestPick.get(playerKey)
-      if (!existing) {
-        playerBestPick.set(playerKey, pick)
-      } else {
-        // Keep the pick with highest edge, then highest confidence, then highest odds
-        const pickScore = (p) => (p.edge || 0) * 1000 + (p.confidence1To5 || 0) * 10 + (p.bestOdds || 0) * 0.01
-        if (pickScore(pick) > pickScore(existing)) {
-          playerBestPick.set(playerKey, pick)
-        }
-      }
-    }
-    const picks = Array.from(playerBestPick.values())
 
     logger.info('Live tracking: found picks for event', {
       tour,
       dgEventId,
       completedTourEventIds: completedIds,
       totalPicksBeforeDedup: allPicks.length,
-      afterMarketDedup: dedupedByMarket.length,
       pickCount: picks.length,
       markets: [...new Set(picks.map(p => p.marketKey))]
     })

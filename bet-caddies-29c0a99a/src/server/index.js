@@ -3160,24 +3160,32 @@ app.get('/api/live-tracking/event/:dgEventId', optionalAuth, async (req, res) =>
     const tour = String(req.query?.tour || '')
     if (!tour) return res.status(400).json({ error: 'Missing tour query parameter' })
 
-    const response = await liveTrackingService.getEventTracking({ dgEventId, tour })
+    const cached = await liveTrackingService.getEventTracking({ dgEventId, tour })
 
     // Apply access locking + limit to top 5 per tier
+    // IMPORTANT: Clone rows to avoid mutating the cached response object
     const email = req.user?.email
     const isAdmin = req.user?.role === 'admin'
     const userLevel = isAdmin ? 'eagle' : (email ? await getUserAccessLevel(email) : 'free')
 
     // Group rows by tier, take top 5 per tier (sorted by edge desc)
+    const allRows = (cached.rows || []).map(r => ({ ...r }))
     const tierBuckets = {}
-    for (const row of (response.rows || [])) {
-      const tier = row.tier || 'PAR'
+    for (const row of allRows) {
+      const tier = (row.tier || 'PAR').toUpperCase()
       if (!tierBuckets[tier]) tierBuckets[tier] = []
       tierBuckets[tier].push(row)
     }
 
     const limitedRows = []
     for (const [tier, rows] of Object.entries(tierBuckets)) {
-      // Already sorted by quality from getTrackedPlayersForEvent
+      // Sort by edge desc, then confidence desc within each tier
+      rows.sort((a, b) => {
+        const edgeA = a.edge ?? 0
+        const edgeB = b.edge ?? 0
+        if (edgeB !== edgeA) return edgeB - edgeA
+        return (b.confidence ?? 0) - (a.confidence ?? 0)
+      })
       const top5 = rows.slice(0, 5)
       const locked = !canAccessTier(userLevel, tier)
       for (const row of top5) {
@@ -3194,9 +3202,19 @@ app.get('/api/live-tracking/event/:dgEventId', optionalAuth, async (req, res) =>
       limitedRows.push(...top5)
     }
 
-    response.rows = limitedRows
-    response.userLevel = userLevel
-    res.json(response)
+    // Return cloned response with limited rows
+    res.json({
+      ...cached,
+      rows: limitedRows,
+      userLevel,
+      _debug: {
+        ...cached._debug,
+        totalRowsBeforeLimit: allRows.length,
+        tiersFound: Object.keys(tierBuckets),
+        rowsPerTier: Object.fromEntries(Object.entries(tierBuckets).map(([k, v]) => [k, v.length])),
+        limitedTo: limitedRows.length
+      }
+    })
   } catch (error) {
     logger.error('Error fetching live tracking event', { error: error.message })
     res.status(500).json({ error: 'Failed to load live tracking event' })
@@ -4001,9 +4019,26 @@ app.get('/api/entities/research-runs', authRequired, adminOnly, async (req, res)
 
 app.get('/api/entities/golf-bets', authRequired, adminOnly, async (req, res) => {
   try {
+    // Only show current week's bets (past bets auto-archived for Results page)
+    const now = new Date()
+    const dayOfWeek = now.getDay()
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+    const startOfWeek = new Date(now)
+    startOfWeek.setDate(now.getDate() + diffToMonday)
+    startOfWeek.setHours(0, 0, 0, 0)
+    const endOfWeek = new Date(startOfWeek)
+    endOfWeek.setDate(startOfWeek.getDate() + 6)
+    endOfWeek.setHours(23, 59, 59, 999)
+
     const bets = await prisma.betRecommendation.findMany({
+      where: {
+        run: { status: 'completed' },
+        tourEvent: {
+          endDate: { gte: startOfWeek, lte: endOfWeek }
+        }
+      },
       orderBy: { createdAt: 'desc' },
-      take: 100,
+      take: 200,
       include: {
         run: true,
         tourEvent: true,
