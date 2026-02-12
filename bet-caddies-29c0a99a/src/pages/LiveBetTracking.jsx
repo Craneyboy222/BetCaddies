@@ -55,25 +55,19 @@ const formatDate = (dateStr) => {
   return date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
 }
 
-const MovementIndicator = ({ movement, baseline, current }) => {
+const MovementIndicator = ({ movement }) => {
   if (!movement) return <span className="text-slate-500">—</span>
   const direction = movement.direction
   const delta = formatDelta(movement.deltaDecimal)
-  const crossBook = movement.crossBook
-
-  // For bettors: odds going DOWN means the player's chances improved (good for you if you bet early)
-  // Odds going UP means player's chances got worse (bad for your bet)
 
   if (direction === 'DOWN') {
     return (
       <div className="flex flex-col items-start">
-        <div className={`flex items-center gap-1 font-semibold ${crossBook ? 'text-slate-400' : 'text-emerald-400'}`}>
+        <div className="flex items-center gap-1 font-semibold text-emerald-400">
           <ArrowDown className="w-4 h-4" />
           <span>{delta}</span>
         </div>
-        <span className={`text-xs ${crossBook ? 'text-slate-500' : 'text-emerald-400/80'}`}>
-          {crossBook ? 'Diff. book' : '✓ Looking good'}
-        </span>
+        <span className="text-xs text-emerald-400/80">✓ Looking good</span>
       </div>
     )
   }
@@ -81,13 +75,11 @@ const MovementIndicator = ({ movement, baseline, current }) => {
   if (direction === 'UP') {
     return (
       <div className="flex flex-col items-start">
-        <div className={`flex items-center gap-1 font-semibold ${crossBook ? 'text-slate-400' : 'text-rose-400'}`}>
+        <div className="flex items-center gap-1 font-semibold text-rose-400">
           <ArrowUp className="w-4 h-4" />
           <span>{delta}</span>
         </div>
-        <span className={`text-xs ${crossBook ? 'text-slate-500' : 'text-rose-400/80'}`}>
-          {crossBook ? 'Diff. book' : 'Drifting'}
-        </span>
+        <span className="text-xs text-rose-400/80">Drifting</span>
       </div>
     )
   }
@@ -370,12 +362,15 @@ const LiveEventTable = ({ rows, status }) => {
         <tbody>
           {activeBets.map((row, idx) => {
             const isWin = row.betOutcome === 'won'
-            const rowClass = isWin 
-              ? 'border-b border-emerald-500/50 bg-emerald-500/10' 
+            const oddsReduced = row.oddsMovement?.direction === 'DOWN'
+            const rowClass = isWin
+              ? 'border-b border-emerald-500/50 bg-emerald-500/10'
+              : oddsReduced
+              ? 'border-b border-emerald-500/30 bg-emerald-500/5'
               : 'border-b border-slate-800 hover:bg-slate-800/50'
             return (
             <tr key={`${row.dgPlayerId || row.playerName}-${row.market}-${idx}`} className={rowClass}>
-              <td className={`py-3 font-medium sticky left-0 ${isWin ? 'text-emerald-300 bg-emerald-500/10' : 'text-white bg-slate-900'}`}>
+              <td className={`py-3 font-medium sticky left-0 ${isWin ? 'text-emerald-300 bg-emerald-500/10' : oddsReduced ? 'text-emerald-200 bg-emerald-500/5' : 'text-white bg-slate-900'}`}>
                 {isWin && '🏆 '}{row.playerName}
               </td>
               <td className={row.position != null && row.position <= 10 ? 'text-emerald-400 font-bold' : ''}>
@@ -415,11 +410,7 @@ const LiveEventTable = ({ rows, status }) => {
                 ) : '—'}
               </td>
               <td>
-                <MovementIndicator 
-                  movement={row.oddsMovement} 
-                  baseline={row.baselineOddsDecimal}
-                  current={row.currentOddsDecimal}
-                />
+                <MovementIndicator movement={row.oddsMovement} />
               </td>
               <td>
                 <BetOutcomeBadge outcome={row.betOutcome} playerStatus={row.playerStatus} />
