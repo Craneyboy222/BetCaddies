@@ -32,7 +32,7 @@ function MembershipEditForm({ membership, onSave, onCancel }) {
     enabled: membership.enabled !== false,
     badges: membership.badges ? JSON.stringify(membership.badges, null, 2) : '[]',
     stripe_price_id: membership.stripe_price_id || '',
-    highlight: membership.highlight || false
+    popular: membership.popular || false
   });
 
   return (
@@ -113,7 +113,7 @@ function MembershipEditForm({ membership, onSave, onCancel }) {
         </div>
         <div className="flex items-center justify-between bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2">
           <span className="text-sm text-slate-300">Highlight</span>
-          <Switch checked={!!form.highlight} onCheckedChange={(v) => setForm({ ...form, highlight: v })} />
+          <Switch checked={!!form.popular} onCheckedChange={(v) => setForm({ ...form, popular: v })} />
         </div>
       </div>
       <div className="flex justify-end gap-3 pt-2">
@@ -133,7 +133,7 @@ function MembershipEditForm({ membership, onSave, onCancel }) {
               enabled: form.enabled,
               badges,
               stripe_price_id: form.stripe_price_id || undefined,
-              highlight: form.highlight
+              popular: form.popular
             });
           }}
           className="bg-emerald-500 hover:bg-emerald-600"
