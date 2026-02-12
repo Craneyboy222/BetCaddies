@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { api } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
-import { ArrowDown, ArrowUp, Minus, Calendar, Clock, Trophy, TrendingUp } from 'lucide-react'
+import { ArrowDown, ArrowUp, Minus, Calendar, Clock, Trophy, TrendingUp, Lock } from 'lucide-react'
 
 const TOUR_LABELS = {
   PGA: 'PGA',
@@ -183,6 +184,19 @@ const ProbabilityCell = ({ row }) => {
         </div>
       )}
     </div>
+  )
+}
+
+const LockedUpgradeButton = () => {
+  const navigate = useNavigate()
+  return (
+    <Button
+      size="sm"
+      onClick={() => navigate('/membership')}
+      className="bg-amber-500/20 text-amber-400 border border-amber-500/50 hover:bg-amber-500/30 text-xs"
+    >
+      <Lock className="w-3 h-3 mr-1" /> Upgrade
+    </Button>
   )
 }
 
@@ -369,7 +383,23 @@ const LiveEventTable = ({ rows, status }) => {
               ? 'border-b border-emerald-500/30 bg-emerald-500/5'
               : 'border-b border-slate-800 hover:bg-slate-800/50'
             return (
-            <tr key={`${row.dgPlayerId || row.playerName}-${row.market}-${idx}`} className={rowClass}>
+            <tr key={`${row.dgPlayerId || row.playerName}-${row.market}-${idx}`} className={row.locked ? 'border-b border-slate-800 opacity-60' : rowClass}>
+              {row.locked ? (
+                <>
+                  <td className="py-3 sticky left-0 bg-slate-900" colSpan="11">
+                    <div className="flex items-center gap-3">
+                      <Lock className="w-4 h-4 text-amber-400" />
+                      <span className="text-slate-500 font-medium blur-sm select-none">Hidden Player</span>
+                      <TierBadge tier={row.tier} />
+                      <span className="text-amber-400 text-xs font-semibold">BET LOCKED</span>
+                    </div>
+                  </td>
+                  <td colSpan="6" className="text-right py-3">
+                    <LockedUpgradeButton />
+                  </td>
+                </>
+              ) : (
+              <>
               <td className={`py-3 font-medium sticky left-0 ${isWin ? 'text-emerald-300 bg-emerald-500/10' : oddsReduced ? 'text-emerald-200 bg-emerald-500/5' : 'text-white bg-slate-900'}`}>
                 {isWin && '🏆 '}{row.playerName}
               </td>
@@ -419,6 +449,8 @@ const LiveEventTable = ({ rows, status }) => {
                 <ProbabilityCell row={row} />
               </td>
               <td className="text-emerald-400">{formatEdge(row.edge) || '—'}</td>
+              </>
+              )}
             </tr>
           )})}
         </tbody>
