@@ -135,7 +135,19 @@ async function getPayPalConfig() {
   }
 }
 
+// PayPal OAuth token cache — avoids ~300ms round-trip on every request
+let _paypalTokenCache = null
+
+export function clearPayPalTokenCache() {
+  _paypalTokenCache = null
+}
+
 async function getPayPalAccessToken() {
+  // Return cached token if still valid (5-minute safety buffer before expiry)
+  if (_paypalTokenCache && _paypalTokenCache.expiresAt > Date.now() + 300_000) {
+    return { token: _paypalTokenCache.token, baseUrl: _paypalTokenCache.baseUrl }
+  }
+
   const cfg = await getPayPalConfig()
   if (!cfg.clientId || !cfg.clientSecret) throw new Error('PayPal is not configured')
 
@@ -158,6 +170,14 @@ async function getPayPalAccessToken() {
   }
 
   const data = await res.json()
+  const expiresIn = data.expires_in || 3600 // PayPal tokens typically expire in ~9 hours
+
+  _paypalTokenCache = {
+    token: data.access_token,
+    baseUrl,
+    expiresAt: Date.now() + (expiresIn * 1000)
+  }
+
   return { token: data.access_token, baseUrl }
 }
 

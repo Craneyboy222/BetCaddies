@@ -187,10 +187,55 @@ const getMarketRelevantProb = (market, probs) => {
 }
 
 /**
- * Determine the outcome of a bet based on market type and scoring data.
- * Returns: 'won', 'lost', 'pending', or null (insufficient data)
+ * Determine FRL (First Round Leader) outcome by comparing a player's R1 score
+ * against all players' R1 scores.
+ * Returns: 'won', 'lost', 'push', 'pending', or null
  */
-export const determineBetOutcome = (market, scoring, eventStatus) => {
+export const determineFrlOutcome = (playerScoring, allPlayersScoring, eventStatus) => {
+  if (!playerScoring || !allPlayersScoring || !Array.isArray(allPlayersScoring)) return null
+
+  const playerR1 = playerScoring.r1
+  const playerStatus = playerScoring.status
+
+  // Player WD/DQ before completing R1
+  if ((playerStatus === 'WD' || playerStatus === 'DQ') && playerR1 == null) return 'lost'
+
+  // Collect all valid R1 scores (exclude players who WD/DQ before completing R1)
+  const validR1Scores = allPlayersScoring
+    .filter(p => {
+      if (p.r1 == null) return false
+      return true // Include WD/DQ players if they completed R1
+    })
+    .map(p => p.r1)
+
+  // If fewer than half the field has R1 scores, round isn't complete yet
+  if (validR1Scores.length < allPlayersScoring.length * 0.5) {
+    return 'pending'
+  }
+
+  // Player didn't post an R1 score
+  if (playerR1 == null) return 'lost'
+
+  const minR1 = Math.min(...validR1Scores)
+
+  if (playerR1 > minR1) return 'lost'
+
+  // Player has the lowest (best) R1 score — check for ties
+  const playersAtMin = validR1Scores.filter(s => s === minR1).length
+  if (playersAtMin === 1) return 'won'
+
+  // Dead heat — multiple players tied for the lead after R1
+  return 'push'
+}
+
+/**
+ * Determine the outcome of a bet based on market type and scoring data.
+ * Returns: 'won', 'lost', 'pending', 'push', or null (insufficient data)
+ *
+ * For FRL market, pass optional allPlayersScoring array to enable settlement.
+ * Without it, FRL returns null (backward compatible).
+ */
+export const determineBetOutcome = (market, scoring, eventStatus, allPlayersScoring = null) => {
   if (!market) return null
   
   const marketKey = market.toLowerCase()
@@ -258,11 +303,12 @@ export const determineBetOutcome = (market, scoring, eventStatus) => {
     return 'pending'
   }
   
-  // For FRL (first round leader)
-  // NOTE: FRL outcome requires comparing R1 scores across ALL players,
-  // which we can't do here with single-player data. Return null (unknown)
-  // so the UI shows "In Play" rather than an incorrect won/lost.
+  // For FRL (first round leader) — requires full field R1 data
   if (marketKey === 'frl') {
+    if (allPlayersScoring) {
+      return determineFrlOutcome(scoring, allPlayersScoring, eventStatus)
+    }
+    // No field data available — can't determine outcome
     return null
   }
   
