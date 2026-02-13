@@ -909,3 +909,38 @@ model EmailSend {
   @@index([status, createdAt])
   @@map("email_sends")
 }
+
+// ── V3 Engine Foundation ────────────────────────────────────────
+
+model PlayerFormSnapshot {
+  id                  String   @id @default(cuid())
+  playerId            String
+  dgPlayerId          String?
+  snapshotDate        DateTime
+  shortTermJson       Json
+  mediumTermJson      Json
+  longTermJson        Json?
+  formTrajectorySlope Float?
+  weeksSinceLastEvent Float?
+  volatilityEstimate  Float?
+  createdAt           DateTime @default(now())
+
+  @@index([playerId, snapshotDate])
+  @@index([dgPlayerId])
+  @@map("player_form_snapshots")
+}
+
+model CalibrationModel {
+  id           String   @id @default(cuid())
+  marketKey    String
+  tour         String?
+  modelVersion String
+  binsJson     Json
+  brierScore   Float?
+  sampleCount  Int
+  trainedAt    DateTime @default(now())
+  isActive     Boolean  @default(true)
+
+  @@index([marketKey, tour, isActive])
+  @@map("calibration_models")
+}

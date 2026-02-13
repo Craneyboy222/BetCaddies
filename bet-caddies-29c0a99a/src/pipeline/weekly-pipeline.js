@@ -30,6 +30,7 @@ import {
   invLogit
 } from '../engine/v2/odds/odds-utils.js'
 
+const V3_ENABLED = process.env.V3_ENGINE_ENABLED === 'true'
 const TIME_ZONE = process.env.TIMEZONE || 'Europe/London'
 const ARTIFACT_DIR = path.join(process.cwd(), 'logs', 'artifacts')
 
@@ -1103,6 +1104,17 @@ export class WeeklyPipeline {
 
     const recommendations = []
 
+    // V3: Load isotonic calibrators once before event loop
+    let v3Calibrators = null
+    if (V3_ENABLED) {
+      try {
+        const { loadCalibrators } = await import('../engine/v3/calibration/isotonic.js')
+        v3Calibrators = await loadCalibrators(prisma)
+      } catch (err) {
+        logger.warn('V3 calibrator loading failed — using V2 calibration', { error: err.message })
+      }
+    }
+
     for (const event of tourEvents) {
       const storedMarkets = await prisma.oddsMarket.findMany({
         where: {
@@ -1249,14 +1261,57 @@ export class WeeklyPipeline {
       }
       const courseProfile = buildCourseProfile({ event, historicalRounds })
 
-      const playerParams = buildPlayerParams({
-        players: eventPlayers,
-        skillRatings,
-        tour: event.tour,
-        courseProfile,
-        decompositions,
-        approachSkill
-      })
+      // V3: Fetch weather and form data when V3 engine is enabled
+      let weatherRounds = null
+      let formSnapshots = null
+      if (V3_ENABLED) {
+        try {
+          const { fetchWeatherForEvent } = await import('../services/weather-service.js')
+          if (event.courseLat && event.courseLng && event.startDate) {
+            weatherRounds = await fetchWeatherForEvent(
+              event.courseLat, event.courseLng, event.startDate,
+              event.tour === 'LIV' ? 3 : 4
+            )
+          }
+        } catch (err) {
+          logger.warn('V3 weather fetch skipped', { error: err.message })
+        }
+        try {
+          const { computeFormSnapshots } = await import('../engine/v3/form-calculator.js')
+          const dgIds = eventPlayers.map(p => p.dgId || p.dg_id).filter(Boolean)
+          if (dgIds.length > 0) {
+            formSnapshots = await computeFormSnapshots(dgIds, prisma)
+          }
+        } catch (err) {
+          logger.warn('V3 form computation skipped', { error: err.message })
+        }
+      }
+
+      // Build player params: V3 uses full decomposition + form, V2 uses approach-only
+      let playerParams
+      if (V3_ENABLED) {
+        const { buildPlayerParamsV3 } = await import('../engine/v3/player-params-v3.js')
+        playerParams = buildPlayerParamsV3({
+          players: eventPlayers,
+          skillRatings,
+          tour: event.tour,
+          courseProfile,
+          decompositions,
+          approachSkill,
+          formSnapshots,
+          weatherRounds
+        })
+      } else {
+        playerParams = buildPlayerParams({
+          players: eventPlayers,
+          skillRatings,
+          tour: event.tour,
+          courseProfile,
+          decompositions,
+          approachSkill
+        })
+      }
+
       // Phase 3.3: Compute field strength from DG rankings (ratio of top-50 players present)
       const top50Count = playerParams.filter(p => dgRankingsIndex.has(p.key) && dgRankingsIndex.get(p.key) <= 50).length
       const fieldStrengthScale = top50Count > 0 ? Math.min(1.0, top50Count / 25) : null
@@ -1265,16 +1320,33 @@ export class WeeklyPipeline {
       const MATCHUP_MARKET_KEYS = new Set(['tournament_matchups', 'round_matchups', '3_balls'])
       const hasMatchupMarkets = eventOdds.markets.some(m => MATCHUP_MARKET_KEYS.has(m.marketKey))
 
-      const simResults = simulateTournament({
-        players: playerParams,
-        tour: event.tour,
-        rounds: event.tour === 'LIV' ? 3 : 4,
-        simCount: this.simCount,
-        seed: this.simSeed,
-        cutRules: this.cutRules,
-        fieldStrengthScale,
-        exportScores: hasMatchupMarkets
-      })
+      // Run simulation: V3 adds weather-adjusted volatility + higher sim count
+      let simResults
+      if (V3_ENABLED) {
+        const { simulateTournamentV3 } = await import('../engine/v3/enhanced-sim.js')
+        simResults = simulateTournamentV3({
+          players: playerParams,
+          tour: event.tour,
+          rounds: event.tour === 'LIV' ? 3 : 4,
+          simCount: this.simCount,
+          seed: this.simSeed,
+          cutRules: this.cutRules,
+          fieldStrengthScale,
+          exportScores: hasMatchupMarkets,
+          weatherRounds
+        })
+      } else {
+        simResults = simulateTournament({
+          players: playerParams,
+          tour: event.tour,
+          rounds: event.tour === 'LIV' ? 3 : 4,
+          simCount: this.simCount,
+          seed: this.simSeed,
+          cutRules: this.cutRules,
+          fieldStrengthScale,
+          exportScores: hasMatchupMarkets
+        })
+      }
       const simScoresForMatchups = simResults.simScores || null
       const simProbabilities = simResults.probabilities
       const modelAvailable = simProbabilities && simProbabilities.size > 0
@@ -1504,10 +1576,17 @@ export class WeeklyPipeline {
           // eliminating any edge the head-to-head simulation finds).
           const mktProbForBlend = isMatchupMarket ? null : (normalizedImplied.get(selectionKey) || null)
           const blended = isMatchupMarket ? null : this.blendProbabilities({ sim: simProb, dg: dgProb, mkt: mktProbForBlend })
+          // V3: Use isotonic calibration when available, fall back to V2 logit-shift
+          const calibrateFn = (prob, mktKey, tourCode) => {
+            if (V3_ENABLED && v3Calibrators?.[mktKey]?.calibrate) {
+              return v3Calibrators[mktKey].calibrate(prob)
+            }
+            return applyCalibration(prob, mktKey, tourCode)
+          }
           const fairProb = validateProbability(
             Number.isFinite(blended)
-              ? applyCalibration(blended, market.marketKey, event.tour)
-              : applyCalibration(simProb, market.marketKey, event.tour),
+              ? calibrateFn(blended, market.marketKey, event.tour)
+              : calibrateFn(simProb, market.marketKey, event.tour),
             {
               label: 'fair_probability',
               context: { selectionKey, marketKey: market.marketKey, event: event.eventName },
