@@ -18,7 +18,8 @@ import {
   Menu,
   X,
   LogOut,
-  LogIn
+  LogIn,
+  BarChart3
 } from 'lucide-react';
 
 const navItems = [
@@ -159,6 +160,16 @@ export default function Layout({ children, currentPageName }) {
               Results
             </Link>
             <Link
+              to={createPageUrl('Performance')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                isActive('Performance')
+                  ? 'bg-emerald-500/20 text-emerald-400'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              Performance
+            </Link>
+            <Link
               to={createPageUrl('Memberships')}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 isActive('Memberships')
@@ -272,6 +283,18 @@ export default function Layout({ children, currentPageName }) {
               >
                 <Target className="w-5 h-5" />
                 Results
+              </Link>
+              <Link
+                to={createPageUrl('Performance')}
+                onClick={() => setMobileMenuOpen(false)}
+                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+                  isActive('Performance')
+                    ? 'bg-emerald-500/20 text-emerald-400'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                }`}
+              >
+                <BarChart3 className="w-5 h-5" />
+                Performance
               </Link>
               {isAdmin && (
                 <Link

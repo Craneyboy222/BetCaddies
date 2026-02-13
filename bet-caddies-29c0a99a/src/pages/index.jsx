@@ -25,6 +25,8 @@ import MyBets from "./MyBets";
 
 import ParBets from "./ParBets";
 
+import Performance from "./Performance";
+
 import Profile from "./Profile";
 
 import Results from "./Results";
@@ -57,9 +59,11 @@ const PAGES = {
     MyBets: MyBets,
     
     ParBets: ParBets,
-    
+
+    Performance: Performance,
+
     Profile: Profile,
-    
+
     Results: Results,
     
 }
@@ -111,9 +115,11 @@ function PagesContent() {
                 <Route path="/MyBets" element={<MyBets />} />
                 
                 <Route path="/ParBets" element={<ParBets />} />
-                
+
+                <Route path="/Performance" element={<Performance />} />
+
                 <Route path="/Profile" element={<Profile />} />
-                
+
                 <Route path="/Results" element={<Results />} />
                 
             </Routes>
