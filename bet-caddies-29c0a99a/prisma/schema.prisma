@@ -336,9 +336,27 @@ model User {
   createdAt            DateTime  @default(now())
   disabledAt           DateTime?
   disabledReason       String?
+  emailVerified        Boolean   @default(false)
+  emailVerifyToken     String?
+  emailVerifyExpires   DateTime?
   subscriptions        MembershipSubscription[]
+  refreshTokens        RefreshToken[]
 
   @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
 }
 
 model SiteContent {

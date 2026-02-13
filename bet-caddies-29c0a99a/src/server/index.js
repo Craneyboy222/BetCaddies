@@ -33,6 +33,15 @@ import {
   getStripeConfig,
   getPayPalConfig
 } from '../services/payment-service.js'
+import { validateEnvironment } from './env-validation.js'
+import { requestLogger } from './middleware/request-logger.js'
+import { strongPassword, checkLockout, recordFailedLogin, clearLoginAttempts } from './middleware/password-policy.js'
+import { publicLimiter } from './middleware/public-rate-limit.js'
+import { signAccessToken, createRefreshToken, rotateRefreshToken, revokeRefreshToken, revokeAllUserTokens } from './services/token-service.js'
+import { encrypt } from './services/crypto-service.js'
+
+// --- Phase 1: Validate environment before anything else ---
+validateEnvironment()
 
 // Initialize player stats service for real form/course fit data
 const playerStatsService = createPlayerStatsService(prisma)
@@ -153,9 +162,7 @@ const requireR2 = () => {
   return true
 }
 
-if (!JWT_SECRET) {
-  logger.warn('JWT_SECRET is not set. Auth will fail until configured.')
-}
+// JWT_SECRET is guaranteed by env-validation — no need for runtime warning
 
 const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
@@ -190,6 +197,18 @@ const jsonParser = express.json({ limit: '1mb' })
 app.use((req, res, next) => {
   if (req.originalUrl === '/api/stripe/webhook') return next()
   return jsonParser(req, res, next)
+})
+
+// Request logging for all routes
+app.use(requestLogger())
+
+// Public rate limiter: applies to all non-admin, non-webhook API routes
+app.use('/api', (req, res, next) => {
+  // Skip rate limiting for admin routes (they have authRequired) and webhooks
+  if (req.path.startsWith('/admin') || req.path.startsWith('/stripe/webhook') || req.path.startsWith('/cron/')) {
+    return next()
+  }
+  return publicLimiter(req, res, next)
 })
 
 const upload = multer({
@@ -3764,7 +3783,7 @@ app.post(
   authLimiter,
   validateBody(z.object({
     email: z.string().email(),
-    password: z.string().min(8),
+    password: strongPassword,
     full_name: z.string().optional()
   })),
   async (req, res) => {
@@ -3779,28 +3798,37 @@ app.post(
 
       const hashedPassword = await bcrypt.default.hash(password, 10)
 
+      // Generate email verification token
+      const emailVerifyToken = crypto.randomBytes(32).toString('hex')
+      const emailVerifyExpires = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+
       const user = await prisma.user.create({
         data: {
           email,
           password: hashedPassword,
           fullName: full_name || null,
-          role: 'user'
+          role: 'user',
+          emailVerified: false,
+          emailVerifyToken,
+          emailVerifyExpires
         }
       })
 
-      const token = jwt.sign(
-        { sub: user.id, email: user.email, role: user.role },
-        JWT_SECRET,
-        { expiresIn: '12h' }
-      )
+      const accessToken = signAccessToken(user)
+      const refreshToken = await createRefreshToken(user.id)
+
+      // TODO: Send verification email with token link
+      logger.info('User registered, verification token created', { email, userId: user.id })
 
       return res.json({
-        token,
+        token: accessToken,
+        refreshToken: refreshToken.token,
         user: {
           id: user.id,
           email: user.email,
           name: user.fullName || user.email,
-          role: user.role
+          role: user.role,
+          emailVerified: false
         }
       })
     } catch (error) {
@@ -3815,14 +3843,25 @@ app.post(
   authLimiter,
   validateBody(z.object({
     email: z.string().email(),
-    password: z.string().min(8)
+    password: z.string().min(1)
   })),
   async (req, res) => {
   try {
     const { email, password } = req.body
+    const ip = req.ip || '0.0.0.0'
+
+    // Check lockout before any password comparison
+    const lockout = checkLockout(ip, email)
+    if (lockout.locked) {
+      return res.status(429).json({
+        error: 'Too many failed login attempts. Please try again later.',
+        retryAfterSeconds: lockout.retryAfterSeconds
+      })
+    }
 
     // Check admin login first
     if (ADMIN_EMAIL && ADMIN_PASSWORD && email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+      clearLoginAttempts(ip, email)
       const adminUser = { id: 'admin', email: ADMIN_EMAIL, role: 'admin' }
       const token = signAdminToken(adminUser)
       return res.json({
@@ -3833,31 +3872,147 @@ app.post(
 
     // Check user login
     const user = await prisma.user.findUnique({ where: { email } })
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' })
+    if (!user) {
+      recordFailedLogin(ip, email)
+      return res.status(401).json({ error: 'Invalid credentials' })
+    }
     if (user.disabledAt) return res.status(403).json({ error: 'Account is disabled' })
 
     const bcrypt = await import('bcrypt')
     const passwordValid = await bcrypt.default.compare(password, user.password)
-    if (!passwordValid) return res.status(401).json({ error: 'Invalid credentials' })
+    if (!passwordValid) {
+      recordFailedLogin(ip, email)
+      return res.status(401).json({ error: 'Invalid credentials' })
+    }
 
-    const token = jwt.sign(
-      { sub: user.id, email: user.email, role: user.role },
-      JWT_SECRET,
-      { expiresIn: '12h' }
-    )
+    // Successful login — clear lockout
+    clearLoginAttempts(ip, email)
+
+    const accessToken = signAccessToken(user)
+    const refreshToken = await createRefreshToken(user.id)
 
     return res.json({
-      token,
+      token: accessToken,
+      refreshToken: refreshToken.token,
       user: {
         id: user.id,
         email: user.email,
         name: user.fullName || user.email,
-        role: user.role
+        role: user.role,
+        emailVerified: user.emailVerified || false
       }
     })
   } catch (error) {
     logger.error('Auth login failed', { error: error.message })
     return res.status(500).json({ error: 'Failed to login' })
+  }
+})
+
+// Refresh access token using refresh token
+app.post(
+  '/api/auth/refresh',
+  authLimiter,
+  validateBody(z.object({ refreshToken: z.string().min(1) })),
+  async (req, res) => {
+    try {
+      const result = await rotateRefreshToken(req.body.refreshToken)
+      if (!result) {
+        return res.status(401).json({ error: 'Invalid or expired refresh token' })
+      }
+      return res.json({
+        token: result.accessToken,
+        refreshToken: result.refreshToken,
+        user: result.user
+      })
+    } catch (error) {
+      logger.error('Token refresh failed', { error: error.message })
+      return res.status(500).json({ error: 'Failed to refresh token' })
+    }
+  }
+)
+
+// Logout — revoke refresh token
+app.post(
+  '/api/auth/logout',
+  validateBody(z.object({ refreshToken: z.string().min(1) })),
+  async (req, res) => {
+    try {
+      await revokeRefreshToken(req.body.refreshToken)
+      return res.json({ success: true })
+    } catch (error) {
+      logger.error('Logout failed', { error: error.message })
+      return res.status(500).json({ error: 'Failed to logout' })
+    }
+  }
+)
+
+// Logout all sessions — revoke all refresh tokens for user
+app.post('/api/auth/logout-all', authRequired, async (req, res) => {
+  try {
+    await revokeAllUserTokens(req.user.sub)
+    return res.json({ success: true })
+  } catch (error) {
+    logger.error('Logout all failed', { error: error.message })
+    return res.status(500).json({ error: 'Failed to logout all sessions' })
+  }
+})
+
+// Email verification
+app.post(
+  '/api/auth/verify-email',
+  validateBody(z.object({ token: z.string().min(1) })),
+  async (req, res) => {
+    try {
+      const user = await prisma.user.findFirst({
+        where: {
+          emailVerifyToken: req.body.token,
+          emailVerifyExpires: { gt: new Date() }
+        }
+      })
+
+      if (!user) {
+        return res.status(400).json({ error: 'Invalid or expired verification token' })
+      }
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          emailVerified: true,
+          emailVerifyToken: null,
+          emailVerifyExpires: null
+        }
+      })
+
+      return res.json({ success: true, email: user.email })
+    } catch (error) {
+      logger.error('Email verification failed', { error: error.message })
+      return res.status(500).json({ error: 'Failed to verify email' })
+    }
+  }
+)
+
+// Resend verification email
+app.post('/api/auth/resend-verification', authRequired, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.sub } })
+    if (!user) return res.status(404).json({ error: 'User not found' })
+    if (user.emailVerified) return res.json({ success: true, message: 'Email already verified' })
+
+    const emailVerifyToken = crypto.randomBytes(32).toString('hex')
+    const emailVerifyExpires = new Date(Date.now() + 24 * 60 * 60 * 1000)
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { emailVerifyToken, emailVerifyExpires }
+    })
+
+    // TODO: Send verification email
+    logger.info('Verification email resent', { email: user.email })
+
+    return res.json({ success: true })
+  } catch (error) {
+    logger.error('Resend verification failed', { error: error.message })
+    return res.status(500).json({ error: 'Failed to resend verification email' })
   }
 })
 
@@ -6175,8 +6330,8 @@ app.put(
         enabled: typeof enabled === 'boolean' ? enabled : undefined,
         mode: mode ?? undefined,
         publicKey: public_key !== undefined ? public_key : undefined,
-        secretKey: secret_key !== undefined ? secret_key : undefined,
-        webhookSecret: webhook_secret !== undefined ? webhook_secret : undefined,
+        secretKey: secret_key !== undefined ? (secret_key ? encrypt(secret_key) : secret_key) : undefined,
+        webhookSecret: webhook_secret !== undefined ? (webhook_secret ? encrypt(webhook_secret) : webhook_secret) : undefined,
         additionalConfig: additional_config !== undefined ? additional_config : undefined,
         updatedBy: req.user?.email || null
       }
