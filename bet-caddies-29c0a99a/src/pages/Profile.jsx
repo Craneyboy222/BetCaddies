@@ -4,12 +4,13 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '../utils';
 import { motion } from 'framer-motion';
-import { 
-  User, 
-  Settings, 
-  Bell, 
-  Shield, 
-  LogOut, 
+import {
+  User,
+  Settings,
+  Bell,
+  BellOff,
+  Shield,
+  LogOut,
   Check,
   ChevronRight,
   Target,
@@ -26,12 +27,103 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import { subscribeToPush, unsubscribeFromPush } from '@/components/NotificationPrompt';
 
 const tours = [
   { id: 'PGA', name: 'PGA Tour' },
   { id: 'DPWT', name: 'DP World Tour' },
   { id: 'LIV', name: 'LIV Golf' }
 ];
+
+function NotificationSettings({ user, updateMutation }) {
+  const [pushSupported] = useState(
+    typeof Notification !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window
+  );
+  const [pushPermission, setPushPermission] = useState(
+    typeof Notification !== 'undefined' ? Notification.permission : 'denied'
+  );
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+
+  useEffect(() => {
+    if (!pushSupported) return;
+    navigator.serviceWorker.ready.then((reg) => {
+      reg.pushManager.getSubscription().then((sub) => {
+        setPushSubscribed(!!sub);
+      });
+    });
+  }, [pushSupported]);
+
+  const handlePushToggle = async (enabled) => {
+    setPushLoading(true);
+    try {
+      if (enabled) {
+        const perm = await Notification.requestPermission();
+        setPushPermission(perm);
+        if (perm === 'granted') {
+          await subscribeToPush();
+          setPushSubscribed(true);
+        }
+      } else {
+        await unsubscribeFromPush();
+        setPushSubscribed(false);
+      }
+      updateMutation.mutate({ notifications_enabled: enabled });
+    } catch (err) {
+      console.error('Push toggle failed:', err);
+    } finally {
+      setPushLoading(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.2 }}
+      className="bg-slate-800/30 rounded-2xl border border-slate-700/50 p-5"
+    >
+      <div className="flex items-center gap-2 mb-4">
+        <Bell className="w-5 h-5 text-emerald-400" />
+        <h2 className="text-lg font-semibold text-white">Notifications</h2>
+      </div>
+      <div className="space-y-4">
+        {/* Browser Push Notifications */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-white">Push Notifications</div>
+            <div className="text-sm text-slate-400">
+              {!pushSupported
+                ? 'Not supported on this browser'
+                : pushPermission === 'denied'
+                ? 'Blocked — enable in browser settings'
+                : pushSubscribed
+                ? 'Receiving new picks & results alerts'
+                : 'Get instant alerts for new picks'}
+            </div>
+          </div>
+          <Switch
+            checked={pushSubscribed}
+            onCheckedChange={handlePushToggle}
+            disabled={!pushSupported || pushPermission === 'denied' || pushLoading}
+          />
+        </div>
+
+        {/* Email Notifications */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-white">Email Updates</div>
+            <div className="text-sm text-slate-400">Weekly digest of picks</div>
+          </div>
+          <Switch
+            checked={user.email_notifications !== false}
+            onCheckedChange={(v) => updateMutation.mutate({ email_notifications: v })}
+          />
+        </div>
+      </div>
+    </motion.div>
+  );
+}
 
 export default function Profile() {
   const [user, setUser] = useState(null);
@@ -179,39 +271,10 @@ export default function Profile() {
         </motion.div>
 
         {/* Notifications */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="bg-slate-800/30 rounded-2xl border border-slate-700/50 p-5"
-        >
-          <div className="flex items-center gap-2 mb-4">
-            <Bell className="w-5 h-5 text-emerald-400" />
-            <h2 className="text-lg font-semibold text-white">Notifications</h2>
-          </div>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-white">Push Notifications</div>
-                <div className="text-sm text-slate-400">Get notified about new picks</div>
-              </div>
-              <Switch
-                checked={user.notifications_enabled !== false}
-                onCheckedChange={(v) => updateMutation.mutate({ notifications_enabled: v })}
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-white">Email Updates</div>
-                <div className="text-sm text-slate-400">Weekly digest of picks</div>
-              </div>
-              <Switch
-                checked={user.email_notifications !== false}
-                onCheckedChange={(v) => updateMutation.mutate({ email_notifications: v })}
-              />
-            </div>
-          </div>
-        </motion.div>
+        <NotificationSettings
+          user={user}
+          updateMutation={updateMutation}
+        />
 
         {/* Admin Link */}
         {user.role === 'admin' && (

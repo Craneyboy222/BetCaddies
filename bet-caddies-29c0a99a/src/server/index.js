@@ -6921,6 +6921,117 @@ async function processDunning() {
   }
 }
 
+// ── Push Notifications API ────────────────────────────────────────────
+
+import {
+  getVapidPublicKey,
+  saveSubscription as savePushSubscription,
+  removeSubscription as removePushSubscription,
+  broadcastNotification,
+} from '../services/push-notification-service.js'
+
+// Get VAPID public key (public — no auth required)
+app.get('/api/push/vapid-public-key', (req, res) => {
+  const key = getVapidPublicKey()
+  if (!key) {
+    return res.status(503).json({ error: 'Push notifications not configured' })
+  }
+  res.json({ publicKey: key })
+})
+
+// Subscribe to push notifications
+app.post('/api/push/subscribe', async (req, res) => {
+  try {
+    const { subscription, userId } = req.body
+    if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+      return res.status(400).json({ error: 'Invalid push subscription' })
+    }
+
+    // Try to extract userId from auth header if not provided
+    let resolvedUserId = userId || null
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (token && JWT_SECRET && !resolvedUserId) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET)
+        resolvedUserId = decoded.sub || decoded.userId || null
+      } catch {
+        // Not logged in — that's fine, anonymous subscription
+      }
+    }
+
+    await savePushSubscription({
+      endpoint: subscription.endpoint,
+      keys: subscription.keys,
+      userId: resolvedUserId,
+      userAgent: req.headers['user-agent'] || null,
+    })
+
+    res.json({ success: true })
+  } catch (error) {
+    logger.error('Push subscribe failed', { error: error.message })
+    res.status(500).json({ error: 'Failed to save subscription' })
+  }
+})
+
+// Unsubscribe from push notifications
+app.post('/api/push/unsubscribe', async (req, res) => {
+  try {
+    const { endpoint } = req.body
+    if (!endpoint) {
+      return res.status(400).json({ error: 'Missing endpoint' })
+    }
+    await removePushSubscription(endpoint)
+    res.json({ success: true })
+  } catch (error) {
+    logger.error('Push unsubscribe failed', { error: error.message })
+    res.status(500).json({ error: 'Failed to remove subscription' })
+  }
+})
+
+// Admin: Get push subscription stats
+app.get('/api/admin/push/stats', authRequired, adminOnly, async (req, res) => {
+  try {
+    const total = await prisma.pushSubscription.count()
+    const withUser = await prisma.pushSubscription.count({ where: { userId: { not: null } } })
+    res.json({ data: { total, withUser, anonymous: total - withUser } })
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get push stats' })
+  }
+})
+
+// Admin: Send broadcast notification
+app.post('/api/admin/push/broadcast', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { title, body, url, tag } = req.body
+    if (!title || !body) {
+      return res.status(400).json({ error: 'Title and body are required' })
+    }
+    const result = await broadcastNotification({ title, body, url, tag })
+    res.json({ data: result })
+  } catch (error) {
+    logger.error('Push broadcast failed', { error: error.message })
+    res.status(500).json({ error: 'Failed to send broadcast' })
+  }
+})
+
+// Admin: Send test notification to admin
+app.post('/api/admin/push/test', authRequired, adminOnly, async (req, res) => {
+  try {
+    const { title, body } = req.body
+    const result = await broadcastNotification({
+      title: title || 'Test Notification',
+      body: body || 'This is a test push notification from BetCaddies.',
+      url: '/',
+      tag: 'test',
+    })
+    res.json({ data: result })
+  } catch (error) {
+    logger.error('Push test failed', { error: error.message })
+    res.status(500).json({ error: 'Failed to send test notification' })
+  }
+})
+
 // Sentry error handler — captures unhandled Express errors before our custom handler
 if (process.env.SENTRY_DSN) {
   Sentry.setupExpressErrorHandler(app)

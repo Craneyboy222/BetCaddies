@@ -24,6 +24,7 @@ import {
   Share2,
   Webhook,
   HeartPulse,
+  Bell,
   ChevronRight
 } from 'lucide-react';
 
@@ -76,6 +77,7 @@ const NAV_GROUPS = [
     items: [
       { key: 'issues', label: 'Data Issues', icon: AlertTriangle },
       { key: 'audit', label: 'Audit Log', icon: Activity },
+      { key: 'push', label: 'Push Notifications', icon: Bell },
       { key: 'emails', label: 'Email', icon: Mail },
       { key: 'webhooks', label: 'Webhooks', icon: Webhook },
       { key: 'health', label: 'System Health', icon: HeartPulse },
