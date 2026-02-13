@@ -1,0 +1,46 @@
+{
+  "name": "BetCaddies - Golf Betting Intelligence",
+  "short_name": "BetCaddies",
+  "description": "AI-powered golf betting picks across PGA, DPWT, LIV, and KFT tours with real-time tracking.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#10b981",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/brand/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["sports", "entertainment"],
+  "shortcuts": [
+    {
+      "name": "Par Bets",
+      "short_name": "Par",
+      "url": "/ParBets",
+      "description": "View today's Par tier picks"
+    },
+    {
+      "name": "Live Tracking",
+      "short_name": "Live",
+      "url": "/LiveBetTracking",
+      "description": "Track bets in real time"
+    },
+    {
+      "name": "Results",
+      "short_name": "Results",
+      "url": "/Results",
+      "description": "View settled results"
+    }
+  ]
+}

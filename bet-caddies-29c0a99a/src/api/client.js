@@ -668,6 +668,55 @@ export class BetCaddiesApi {
     }
   }
 
+  players = {
+    list: async () => {
+      const response = await this.client.get('/api/players')
+      return response.data || []
+    },
+    get: async (slug) => {
+      const response = await this.client.get(`/api/players/${encodeURIComponent(slug)}`)
+      return response.data || null
+    },
+  }
+
+  courses = {
+    list: async () => {
+      const response = await this.client.get('/api/courses')
+      return response.data || []
+    },
+    get: async (slug) => {
+      const response = await this.client.get(`/api/courses/${encodeURIComponent(slug)}`)
+      return response.data || null
+    },
+  }
+
+  push = {
+    getVapidKey: async () => {
+      const response = await this.client.get('/api/push/vapid-public-key')
+      return response.publicKey || null
+    },
+    subscribe: async (subscription) => {
+      const response = await this.client.post('/api/push/subscribe', { subscription })
+      return response
+    },
+    unsubscribe: async (endpoint) => {
+      const response = await this.client.post('/api/push/unsubscribe', { endpoint })
+      return response
+    },
+    stats: async () => {
+      const response = await this.client.get('/api/admin/push/stats')
+      return response.data || response
+    },
+    broadcast: async ({ title, body, url, tag }) => {
+      const response = await this.client.post('/api/admin/push/broadcast', { title, body, url, tag })
+      return response.data || response
+    },
+    test: async ({ title, body }) => {
+      const response = await this.client.post('/api/admin/push/test', { title, body })
+      return response.data || response
+    },
+  }
+
   functions = {
     invoke: async (functionName, params) => {
       if (functionName === 'weeklyResearchPipeline') {

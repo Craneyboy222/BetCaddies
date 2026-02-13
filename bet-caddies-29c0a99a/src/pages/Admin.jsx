@@ -31,6 +31,7 @@ import EmailAdmin from '@/components/admin/EmailAdmin';
 import ScheduledPublishAdmin from '@/components/admin/ScheduledPublishAdmin';
 import WebhooksAdmin from '@/components/admin/WebhooksAdmin';
 import SystemHealthDashboard from '@/components/admin/SystemHealthDashboard';
+import PushNotificationsAdmin from '@/components/admin/PushNotificationsAdmin';
 
 const TAB_COMPONENTS = {
   analytics: AnalyticsDashboard,
@@ -56,6 +57,7 @@ const TAB_COMPONENTS = {
   emails: EmailAdmin,
   webhooks: WebhooksAdmin,
   health: SystemHealthDashboard,
+  push: PushNotificationsAdmin,
 };
 
 export default function Admin() {
