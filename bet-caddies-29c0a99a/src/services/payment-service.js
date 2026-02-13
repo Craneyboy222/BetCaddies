@@ -6,6 +6,7 @@
 import Stripe from 'stripe'
 import { prisma } from '../db/client.js'
 import { logger } from '../observability/logger.js'
+import { decrypt } from '../server/services/crypto-service.js'
 
 // ── helpers ────────────────────────────────────────────────────────────────
 const ACCESS_LEVELS = ['free', 'birdie', 'eagle']
@@ -43,7 +44,13 @@ async function loadProviderSettings(provider) {
   if (!_settingsCache || now - _settingsCacheAt > SETTINGS_TTL) {
     try {
       const rows = await prisma.paymentSettings.findMany()
-      _settingsCache = new Map(rows.map(r => [r.provider, r]))
+      // Decrypt sensitive fields transparently
+      const decrypted = rows.map(r => ({
+        ...r,
+        secretKey: r.secretKey ? decrypt(r.secretKey) : null,
+        webhookSecret: r.webhookSecret ? decrypt(r.webhookSecret) : null
+      }))
+      _settingsCache = new Map(decrypted.map(r => [r.provider, r]))
       _settingsCacheAt = now
     } catch {
       _settingsCache = _settingsCache || new Map()
