@@ -6,10 +6,21 @@ import { logger } from '../observability/logger.js'
 // Generate once with: npx web-push generate-vapid-keys
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || ''
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || ''
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@betcaddies.com'
+// VAPID subject must be a mailto: URL or https: URL
+const rawSubject = process.env.VAPID_SUBJECT || 'mailto:admin@betcaddies.com'
+const VAPID_SUBJECT = rawSubject.startsWith('mailto:') || rawSubject.startsWith('https://')
+  ? rawSubject
+  : `mailto:${rawSubject}`
 
+let pushConfigured = false
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+    pushConfigured = true
+    logger.info('Push notifications configured successfully')
+  } catch (err) {
+    logger.error('Failed to configure push notifications — server will continue without push', { error: err.message })
+  }
 }
 
 /**
@@ -85,8 +96,8 @@ async function sendToSubscription(subscription, payload) {
  * Send a notification to all subscribers
  */
 export async function broadcastNotification({ title, body, icon, badge, url, tag, data }) {
-  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-    logger.warn('Push notifications not configured — VAPID keys missing')
+  if (!pushConfigured) {
+    logger.warn('Push notifications not configured — VAPID keys missing or invalid')
     return { sent: 0, failed: 0 }
   }
 
