@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, betc-optimal-engine]
+  pull_request:
+    branches: [main, betc-optimal-engine]
+
+jobs:
+  lint-test-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test with coverage
+        run: npx vitest run --coverage --reporter=verbose
+        env:
+          DATABASE_URL: 'postgresql://test:test@localhost:5432/test'
+          JWT_SECRET: 'ci-test-secret-do-not-use-in-production-min32chars'
+          LOG_LEVEL: error
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14

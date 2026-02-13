@@ -39,6 +39,9 @@ import { strongPassword, checkLockout, recordFailedLogin, clearLoginAttempts } f
 import { publicLimiter } from './middleware/public-rate-limit.js'
 import { signAccessToken, createRefreshToken, rotateRefreshToken, revokeRefreshToken, revokeAllUserTokens } from './services/token-service.js'
 import { encrypt } from './services/crypto-service.js'
+import { requestId as requestIdMiddleware } from './middleware/request-id.js'
+import { errorHandler } from './middleware/error-handler.js'
+import { AppError, Errors } from './lib/app-error.js'
 
 // --- Phase 1: Validate environment before anything else ---
 validateEnvironment()
@@ -78,6 +81,9 @@ const app = express()
 const PORT = process.env.PORT || 3000
 
 app.set('trust proxy', 1)
+
+// Assign unique request ID to every request (first middleware)
+app.use(requestIdMiddleware())
 
 const summarizeDatabaseUrl = (raw) => {
   if (!raw) return { configured: false }
@@ -401,7 +407,9 @@ const validateBody = (schema) => (req, res, next) => {
   if (!result.success) {
     return res.status(400).json({
       error: 'Invalid request body',
-      details: result.error.flatten()
+      code: 'VALIDATION_ERROR',
+      details: result.error.flatten(),
+      requestId: req.id
     })
   }
   req.body = result.data
@@ -6852,6 +6860,9 @@ async function processDunning() {
     logger.error('Dunning process failed:', { error: error.message })
   }
 }
+
+// Global error handler — must be registered AFTER all routes
+app.use(errorHandler())
 
 // Start server with robust error handling
 const HOST = process.env.HOST || '0.0.0.0';
