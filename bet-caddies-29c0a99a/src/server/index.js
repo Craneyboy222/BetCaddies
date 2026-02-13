@@ -42,6 +42,7 @@ import { encrypt } from './services/crypto-service.js'
 import { requestId as requestIdMiddleware } from './middleware/request-id.js'
 import { errorHandler } from './middleware/error-handler.js'
 import { AppError, Errors } from './lib/app-error.js'
+import { processEmailQueue } from './workers/email-worker.js'
 
 // --- Phase 1: Validate environment before anything else ---
 validateEnvironment()
@@ -802,6 +803,15 @@ if (cronEnabled) {
       logger.error('Scheduled pipeline run failed (Tuesday)', { error: error.message })
     }
   }, { timezone: 'Europe/London' })
+
+  // Every 2 minutes - Process email queue
+  cron.schedule('*/2 * * * *', async () => {
+    try {
+      await processEmailQueue()
+    } catch (error) {
+      logger.error('Email queue processing failed', { error: error.message })
+    }
+  })
 
   // Monday 7am GMT - Generate weekly recap for the previous week
   cron.schedule('0 7 * * 1', async () => {
