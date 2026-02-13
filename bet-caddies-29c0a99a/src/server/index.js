@@ -830,6 +830,43 @@ if (cronEnabled) {
     }
   })
 
+  // Tuesday 12pm GMT - Auto-generate weekly HIO Challenge
+  // Runs after Monday discovery + Tuesday odds pipeline, giving fresh field/event data
+  cron.schedule('0 12 * * 2', async () => {
+    try {
+      logger.info('Starting TUESDAY auto-generation of HIO Challenge')
+      const { createOrUpdateWeeklyChallenge } = await import('../services/hio-question-generator.js')
+      const challenge = await createOrUpdateWeeklyChallenge()
+      if (challenge) {
+        logger.info('Auto-generated weekly HIO Challenge', {
+          challengeId: challenge.id,
+          questionCount: challenge.questions?.length || 0,
+          tournaments: challenge.tournamentNames
+        })
+
+        // Broadcast push notification about new challenge
+        try {
+          const { broadcastNotification } = await import('../services/push-notification-service.js')
+          const tournaments = Array.isArray(challenge.tournamentNames) ? challenge.tournamentNames.join(', ') : ''
+          await broadcastNotification({
+            title: 'New HIO Challenge Is Live!',
+            body: tournaments
+              ? `This week's Hole-In-One Challenge for ${tournaments} is ready. Enter now for free!`
+              : 'This week\'s Hole-In-One Challenge is ready. Enter now for free!',
+            url: '/HIOChallenge',
+            tag: 'hio-new-challenge'
+          })
+        } catch (pushErr) {
+          logger.error('Failed to send HIO new challenge push', { error: pushErr.message })
+        }
+      } else {
+        logger.info('Skipped HIO Challenge generation (no events found)')
+      }
+    } catch (error) {
+      logger.error('Scheduled HIO Challenge generation failed', { error: error.message })
+    }
+  }, { timezone: 'Europe/London' })
+
   // Monday 7am GMT - Generate weekly recap for the previous week
   cron.schedule('0 7 * * 1', async () => {
     try {
@@ -3670,6 +3707,34 @@ app.post(
   }
 )
 
+// Public: HIO Challenge leaderboard
+app.get('/api/hio/leaderboard', async (req, res) => {
+  try {
+    const { getLeaderboard } = await import('../services/hio-question-generator.js')
+    const limit = Math.min(parseInt(req.query?.limit) || 50, 100)
+    const leaderboard = await getLeaderboard(limit)
+    res.json({ data: leaderboard })
+  } catch (error) {
+    logger.error('Error fetching HIO leaderboard:', error)
+    res.status(500).json({ error: 'Failed to fetch leaderboard' })
+  }
+})
+
+// User: HIO Challenge personal history
+app.get('/api/hio/my-history', authRequired, async (req, res) => {
+  try {
+    const email = req.user?.email
+    if (!email) return res.status(400).json({ error: 'Missing user email' })
+
+    const { getUserHistory } = await import('../services/hio-question-generator.js')
+    const history = await getUserHistory(email)
+    res.json({ data: history })
+  } catch (error) {
+    logger.error('Error fetching HIO history:', error)
+    res.status(500).json({ error: 'Failed to fetch history' })
+  }
+})
+
 // User: update own profile/preferences
 app.put(
   '/api/users/me',
@@ -5041,6 +5106,57 @@ app.post(
   }
 )
 
+// Admin: Regenerate multiple HIO questions by index
+app.post(
+  '/api/entities/hio-challenges/:id/regenerate-questions',
+  authRequired,
+  adminOnly,
+  validateBody(z.object({
+    indices: z.array(z.number().int().min(0)).min(1).max(10)
+  })),
+  async (req, res) => {
+    try {
+      const { id } = req.params
+      const { indices } = req.body
+      const { generateQuestionsForIndices } = await import('../services/hio-question-generator.js')
+
+      const challenge = await prisma.hIOChallenge.findUnique({ where: { id } })
+      if (!challenge) return res.status(404).json({ error: 'Challenge not found' })
+
+      const questions = challenge.questions || []
+      const invalidIndices = indices.filter(i => i >= questions.length)
+      if (invalidIndices.length > 0) {
+        return res.status(400).json({ error: `Invalid question indices: ${invalidIndices.join(', ')}` })
+      }
+
+      const updatedQuestions = await generateQuestionsForIndices(questions, indices)
+      const updated = await prisma.hIOChallenge.update({
+        where: { id },
+        data: { questions: updatedQuestions }
+      })
+
+      await writeAuditLog({
+        req,
+        action: 'hio_challenge.regenerate_questions',
+        entityType: 'HIOChallenge',
+        entityId: id,
+        beforeJson: { indices },
+        afterJson: { regeneratedCount: indices.length }
+      })
+
+      res.json({
+        data: {
+          id: updated.id,
+          questions: updated.questions
+        }
+      })
+    } catch (error) {
+      logger.error('Failed to regenerate HIO questions', { error: error?.message })
+      res.status(500).json({ error: 'Failed to regenerate questions' })
+    }
+  }
+)
+
 app.put(
   '/api/entities/hio-challenges/:id',
   authRequired,
@@ -5132,41 +5248,12 @@ app.get('/api/entities/hio-entries', authRequired, adminOnly, async (req, res) =
 app.post('/api/entities/hio-challenges/:id/calculate-scores', authRequired, adminOnly, async (req, res) => {
   try {
     const { id } = req.params
-    const challenge = await prisma.hIOChallenge.findUnique({ where: { id } })
-    if (!challenge) return res.status(404).json({ error: 'HIO challenge not found' })
+    const { calculateAndSettleChallenge } = await import('../services/hio-question-generator.js')
 
-    const questions = Array.isArray(challenge.questions) ? challenge.questions : []
-    const entries = await prisma.hIOEntry.findMany({ where: { challengeId: id } })
-
-    const scoringResult = await prisma.$transaction(async (tx) => {
-      let count = 0
-      let perfectCount = 0
-      for (const entry of entries) {
-        const answers = Array.isArray(entry.answers) ? entry.answers : []
-        let score = 0
-        for (let i = 0; i < Math.min(questions.length, answers.length); i++) {
-          const correct = questions?.[i]?.correct_answer
-          if (correct && answers[i] === correct) score++
-        }
-        const isPerfect = score === 10
-        if (isPerfect) perfectCount++
-        await tx.hIOEntry.update({
-          where: { id: entry.id },
-          data: { score, isPerfect }
-        })
-        count++
-      }
-
-      await tx.hIOChallenge.update({
-        where: { id },
-        data: {
-          perfectScores: perfectCount,
-          status: 'settled'
-        }
-      })
-
-      return { updatedCount: count, perfectCount }
-    })
+    const scoringResult = await calculateAndSettleChallenge(id)
+    if (!scoringResult) {
+      return res.status(400).json({ error: 'Cannot settle — not all correct answers have been set' })
+    }
 
     await writeAuditLog({
       req,

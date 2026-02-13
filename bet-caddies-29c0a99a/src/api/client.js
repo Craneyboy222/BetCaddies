@@ -297,6 +297,14 @@ export class BetCaddiesApi {
         })
         return response.data || response
       }
+    },
+    leaderboard: async (limit = 50) => {
+      const response = await this.client.get(`/api/hio/leaderboard?limit=${limit}`)
+      return response.data || []
+    },
+    myHistory: async () => {
+      const response = await this.client.get('/api/hio/my-history')
+      return response.data || []
     }
   }
 
@@ -613,6 +621,12 @@ export class BetCaddiesApi {
       regenerateQuestion: async (id, index) => {
         const response = await this.client.post(`/api/entities/hio-challenges/${id}/regenerate-question`, {
           index
+        })
+        return response.data || response
+      },
+      regenerateQuestions: async (id, indices) => {
+        const response = await this.client.post(`/api/entities/hio-challenges/${id}/regenerate-questions`, {
+          indices
         })
         return response.data || response
       }
