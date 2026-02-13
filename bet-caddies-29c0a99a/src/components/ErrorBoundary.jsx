@@ -1,4 +1,5 @@
 import React from 'react'
+import * as Sentry from '@sentry/react'
 
 /**
  * React Error Boundary — catches component tree crashes and renders a fallback UI.
@@ -25,7 +26,9 @@ class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, errorInfo) {
     console.error('[ErrorBoundary] Caught error:', error, errorInfo)
-    // Future: send to Sentry or other error tracking
+    Sentry.captureException(error, {
+      contexts: { react: { componentStack: errorInfo?.componentStack } }
+    })
   }
 
   handleReset = () => {

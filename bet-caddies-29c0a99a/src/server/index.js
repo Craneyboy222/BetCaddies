@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node'
 import express from 'express'
 import cors from 'cors'
 import fs from 'fs';
@@ -43,9 +44,21 @@ import { requestId as requestIdMiddleware } from './middleware/request-id.js'
 import { errorHandler } from './middleware/error-handler.js'
 import { AppError, Errors } from './lib/app-error.js'
 import { processEmailQueue } from './workers/email-worker.js'
+import { parsePagination, paginatedResponse } from './lib/pagination.js'
+import { httpsRedirect } from './middleware/https-redirect.js'
 
 // --- Phase 1: Validate environment before anything else ---
 validateEnvironment()
+
+// --- Phase 4A: Sentry backend initialization (must run before Express app creation) ---
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: 0.1,
+  })
+  console.log('Sentry backend initialized')
+}
 
 // Initialize player stats service for real form/course fit data
 const playerStatsService = createPlayerStatsService(prisma)
@@ -217,6 +230,9 @@ app.use('/api', (req, res, next) => {
   }
   return publicLimiter(req, res, next)
 })
+
+// HTTPS redirect — production only, skips health checks
+app.use(httpsRedirect())
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -2722,11 +2738,16 @@ app.post('/api/admin/email-templates/:id/test-send', authRequired, adminOnly, as
 
 app.get('/api/admin/email-sends', authRequired, adminOnly, async (req, res) => {
   try {
-    const sends = await prisma.emailSend.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 100
-    })
-    res.json({ data: sends })
+    const pg = parsePagination(req.query, 100)
+    const [sends, total] = await Promise.all([
+      prisma.emailSend.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip: pg.skip,
+        take: pg.take,
+      }),
+      pg.paginated ? prisma.emailSend.count() : Promise.resolve(0),
+    ])
+    res.json(paginatedResponse(sends, total, pg))
   } catch (error) {
     logger.error('Error fetching email sends', { error: error.message })
     res.status(500).json({ error: 'Failed to fetch email sends' })
@@ -4135,22 +4156,25 @@ app.post(
 
 app.get('/api/entities/research-runs', authRequired, adminOnly, async (req, res) => {
   try {
-    const runs = await prisma.run.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-      include: {
-        _count: { select: { betRecommendations: true } },
-        dataIssues: {
-          where: { severity: 'error' },
-          orderBy: { createdAt: 'desc' },
-          take: 5
+    const pg = parsePagination(req.query, 20)
+    const [runs, total] = await Promise.all([
+      prisma.run.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip: pg.skip,
+        take: pg.take,
+        include: {
+          _count: { select: { betRecommendations: true } },
+          dataIssues: {
+            where: { severity: 'error' },
+            orderBy: { createdAt: 'desc' },
+            take: 5
+          }
         }
-      }
-    })
+      }),
+      pg.paginated ? prisma.run.count() : Promise.resolve(0),
+    ])
 
     const formatted = runs.map(run => {
-      // Prefer the most actionable error (non-generic pipeline step) when available.
-      // We still include the generic pipeline error as a fallback.
       const mostActionableIssue = run.dataIssues?.find((i) => i.step !== 'pipeline') || run.dataIssues?.[0] || null
 
       return {
@@ -4164,7 +4188,7 @@ app.get('/api/entities/research-runs', authRequired, adminOnly, async (req, res)
       }
     })
 
-    res.json({ data: formatted })
+    res.json(paginatedResponse(formatted, total, pg))
   } catch (error) {
     logger.error('Error fetching research runs:', error)
     res.status(500).json({ error: 'Failed to fetch research runs' })
@@ -4184,21 +4208,23 @@ app.get('/api/entities/golf-bets', authRequired, adminOnly, async (req, res) => 
     endOfWeek.setDate(startOfWeek.getDate() + 6)
     endOfWeek.setHours(23, 59, 59, 999)
 
-    const bets = await prisma.betRecommendation.findMany({
-      where: {
-        run: { status: 'completed' },
-        tourEvent: {
-          endDate: { gte: startOfWeek, lte: endOfWeek }
-        }
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 200,
-      include: {
-        run: true,
-        tourEvent: true,
-        override: true
-      }
-    })
+    const where = {
+      run: { status: 'completed' },
+      tourEvent: { endDate: { gte: startOfWeek, lte: endOfWeek } }
+    }
+
+    const pg = parsePagination(req.query, 200)
+    const [bets, total] = await Promise.all([
+      prisma.betRecommendation.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: pg.skip,
+        take: pg.take,
+        include: { run: true, tourEvent: true, override: true }
+      }),
+      pg.paginated ? prisma.betRecommendation.count({ where }) : Promise.resolve(0),
+    ])
+
     const formatted = bets.map(bet => ({
       id: bet.id,
       selection_name: bet.override?.selectionName || bet.selection,
@@ -4225,7 +4251,7 @@ app.get('/api/entities/golf-bets', authRequired, adminOnly, async (req, res) => 
       edge: bet.edge ?? null,
       created_date: bet.createdAt?.toISOString?.() || bet.createdAt
     }))
-    res.json({ data: formatted })
+    res.json(paginatedResponse(formatted, total, pg))
   } catch (error) {
     logger.error('Error fetching golf bets:', error)
     res.status(500).json({ error: 'Failed to fetch golf bets' })
@@ -4402,15 +4428,20 @@ app.post('/api/admin/archive-old-bets', authRequired, adminOnly, async (req, res
 
 app.get('/api/entities/tour-events', authRequired, adminOnly, async (req, res) => {
   try {
-    const events = await prisma.tourEvent.findMany({
-      orderBy: { startDate: 'desc' },
-      take: 50,
-      include: {
-        run: {
-          select: { runKey: true, status: true, createdAt: true }
+    const pg = parsePagination(req.query, 50)
+    const [events, total] = await Promise.all([
+      prisma.tourEvent.findMany({
+        orderBy: { startDate: 'desc' },
+        skip: pg.skip,
+        take: pg.take,
+        include: {
+          run: {
+            select: { runKey: true, status: true, createdAt: true }
+          }
         }
-      }
-    })
+      }),
+      pg.paginated ? prisma.tourEvent.count() : Promise.resolve(0),
+    ])
 
     const formatted = events.map(ev => ({
       id: ev.id,
@@ -4427,7 +4458,7 @@ app.get('/api/entities/tour-events', authRequired, adminOnly, async (req, res) =
       created_date: ev.createdAt?.toISOString?.() || ev.createdAt
     }))
 
-    res.json({ data: formatted })
+    res.json(paginatedResponse(formatted, total, pg))
   } catch (error) {
     logger.error('Error fetching tour events:', error)
     res.status(500).json({ error: 'Failed to fetch tour events' })
@@ -4505,14 +4536,19 @@ app.delete('/api/entities/tour-events/:id', authRequired, adminOnly, async (req,
 
 app.get('/api/entities/odds-events', authRequired, adminOnly, async (req, res) => {
   try {
-    const events = await prisma.oddsEvent.findMany({
-      orderBy: { fetchedAt: 'desc' },
-      take: 50,
-      include: {
-        tourEvent: true,
-        _count: { select: { oddsMarkets: true } }
-      }
-    })
+    const pg = parsePagination(req.query, 50)
+    const [events, total] = await Promise.all([
+      prisma.oddsEvent.findMany({
+        orderBy: { fetchedAt: 'desc' },
+        skip: pg.skip,
+        take: pg.take,
+        include: {
+          tourEvent: true,
+          _count: { select: { oddsMarkets: true } }
+        }
+      }),
+      pg.paginated ? prisma.oddsEvent.count() : Promise.resolve(0),
+    ])
 
     const formatted = events.map(ev => ({
       id: ev.id,
@@ -4524,7 +4560,7 @@ app.get('/api/entities/odds-events', authRequired, adminOnly, async (req, res) =
       markets_count: ev._count?.oddsMarkets ?? 0
     }))
 
-    res.json({ data: formatted })
+    res.json(paginatedResponse(formatted, total, pg))
   } catch (error) {
     logger.error('Error fetching odds events:', error)
     res.status(500).json({ error: 'Failed to fetch odds events' })
@@ -4826,23 +4862,27 @@ app.get('/api/entities/data-quality-issues', authRequired, adminOnly, async (req
 // Admin: HIO challenges
 app.get('/api/entities/hio-challenges', authRequired, adminOnly, async (req, res) => {
   try {
-    const challenges = await prisma.hIOChallenge.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 20
-    })
-    res.json({
-      data: challenges.map(c => ({
-        id: c.id,
-        status: c.status,
-        prize_description: c.prizeDescription,
-        tournament_names: c.tournamentNames,
-        questions: c.questions,
-        total_entries: c.totalEntries,
-        perfect_scores: c.perfectScores,
-        created_at: c.createdAt?.toISOString?.() || c.createdAt,
-        updated_at: c.updatedAt?.toISOString?.() || c.updatedAt
-      }))
-    })
+    const pg = parsePagination(req.query, 20)
+    const [challenges, total] = await Promise.all([
+      prisma.hIOChallenge.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip: pg.skip,
+        take: pg.take,
+      }),
+      pg.paginated ? prisma.hIOChallenge.count() : Promise.resolve(0),
+    ])
+    const formatted = challenges.map(c => ({
+      id: c.id,
+      status: c.status,
+      prize_description: c.prizeDescription,
+      tournament_names: c.tournamentNames,
+      questions: c.questions,
+      total_entries: c.totalEntries,
+      perfect_scores: c.perfectScores,
+      created_at: c.createdAt?.toISOString?.() || c.createdAt,
+      updated_at: c.updatedAt?.toISOString?.() || c.updatedAt
+    }))
+    res.json(paginatedResponse(formatted, total, pg))
   } catch (error) {
     logger.error('Failed to fetch HIO challenges', { error: error?.message })
     res.status(500).json({ error: 'Failed to fetch HIO challenges' })
@@ -5166,10 +5206,15 @@ app.put(
 
 app.get('/api/entities/users', authRequired, adminOnly, async (req, res) => {
   try {
-    const users = await prisma.user.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 100
-    })
+    const pg = parsePagination(req.query, 100)
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip: pg.skip,
+        take: pg.take,
+      }),
+      pg.paginated ? prisma.user.count() : Promise.resolve(0),
+    ])
     const formatted = users.map(user => ({
       id: user.id,
       email: user.email,
@@ -5187,7 +5232,7 @@ app.get('/api/entities/users', authRequired, adminOnly, async (req, res) => {
       hio_total_points: user.hioTotalPoints,
       created_date: user.createdAt?.toISOString?.() || user.createdAt
     }))
-    res.json({ data: formatted })
+    res.json(paginatedResponse(formatted, total, pg))
   } catch (error) {
     logger.error('Error fetching users:', error)
     res.status(500).json({ error: 'Failed to fetch users' })
@@ -5982,10 +6027,15 @@ app.get('/api/entities/audit-logs', authRequired, adminOnly, async (req, res) =>
 
 app.get('/api/entities/membership-packages', authRequired, adminOnly, async (req, res) => {
   try {
-    const memberships = await prisma.membershipPackage.findMany({
-      orderBy: { price: 'asc' },
-      take: 50
-    })
+    const pg = parsePagination(req.query, 50)
+    const [memberships, total] = await Promise.all([
+      prisma.membershipPackage.findMany({
+        orderBy: { price: 'asc' },
+        skip: pg.skip,
+        take: pg.take,
+      }),
+      pg.paginated ? prisma.membershipPackage.count() : Promise.resolve(0),
+    ])
     const formatted = memberships.map(pkg => ({
       id: pkg.id,
       name: pkg.name,
@@ -6001,7 +6051,7 @@ app.get('/api/entities/membership-packages', authRequired, adminOnly, async (req
       trial_days: pkg.trialDays,
       popular: pkg.popular
     }))
-    res.json({ data: formatted })
+    res.json(paginatedResponse(formatted, total, pg))
   } catch (error) {
     logger.error('Error fetching membership packages:', error)
     res.status(500).json({ error: 'Failed to fetch membership packages' })
@@ -6869,6 +6919,11 @@ async function processDunning() {
   } catch (error) {
     logger.error('Dunning process failed:', { error: error.message })
   }
+}
+
+// Sentry error handler — captures unhandled Express errors before our custom handler
+if (process.env.SENTRY_DSN) {
+  Sentry.setupExpressErrorHandler(app)
 }
 
 // Global error handler — must be registered AFTER all routes
