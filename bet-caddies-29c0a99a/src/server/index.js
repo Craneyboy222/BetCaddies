@@ -6921,6 +6921,307 @@ async function processDunning() {
   }
 }
 
+// ── Player & Course Deep Dive API ────────────────────────────────────
+
+// Helper: create a URL-safe slug from a name
+function nameToSlug(name) {
+  return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+}
+
+// GET /api/players — list all players with basic info
+app.get('/api/players', async (req, res) => {
+  try {
+    const players = await prisma.player.findMany({
+      orderBy: { canonicalName: 'asc' },
+      select: { id: true, canonicalName: true, country: true, dgId: true, tourIds: true }
+    })
+    const data = players.map(p => ({
+      id: p.id,
+      name: p.canonicalName,
+      slug: nameToSlug(p.canonicalName),
+      country: p.country,
+      dgId: p.dgId,
+      tours: p.tourIds || []
+    }))
+    res.json({ data })
+  } catch (error) {
+    logger.error('Failed to list players', { error: error.message })
+    res.status(500).json({ error: 'Failed to list players' })
+  }
+})
+
+// GET /api/players/:slug — full player deep dive
+app.get('/api/players/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params
+
+    // Find player by matching slug against canonical name
+    const allPlayers = await prisma.player.findMany({
+      select: { id: true, canonicalName: true, country: true, dgId: true, tourIds: true, aliases: true }
+    })
+    const player = allPlayers.find(p => nameToSlug(p.canonicalName) === slug)
+    if (!player) {
+      return res.status(404).json({ error: 'Player not found' })
+    }
+
+    // Get latest completed run for current stats
+    const latestRun = await prisma.run.findFirst({
+      where: { status: 'completed' },
+      orderBy: { completedAt: 'desc' },
+      select: { id: true }
+    })
+
+    // Load current form stats from latest run
+    let form = null
+    let courseFit = null
+    if (latestRun && player.dgId) {
+      const stats = await playerStatsService.loadStatsForRun(latestRun.id)
+      const playerData = playerStatsService.getPlayerStats(stats, player.dgId)
+      if (playerData.hasData) {
+        form = playerData.form
+        courseFit = playerData.courseFit
+      }
+    }
+
+    // Get historical rounds for this player
+    const historicalRounds = await prisma.historicalRound.findMany({
+      where: { playerId: player.id },
+      orderBy: [{ year: 'desc' }, { round: 'asc' }],
+      take: 100,
+      select: { tour: true, eventId: true, year: true, round: true, statsJson: true, strokesGainedJson: true }
+    })
+
+    // Get all bet recommendations featuring this player (by dgPlayerId or selection name)
+    const pickHistory = await prisma.betRecommendation.findMany({
+      where: {
+        OR: [
+          ...(player.dgId ? [{ dgPlayerId: player.dgId }] : []),
+          { selection: player.canonicalName }
+        ]
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: {
+        tourEvent: { select: { tour: true, eventName: true, courseName: true, startDate: true } },
+        override: { select: { status: true } }
+      }
+    })
+
+    // Format pick history
+    const picks = pickHistory
+      .filter(p => p.override?.status !== 'archived')
+      .map(p => ({
+        id: p.id,
+        tier: p.tier,
+        marketKey: p.marketKey,
+        bestOdds: p.bestOdds,
+        bestBookmaker: p.bestBookmaker,
+        confidence: p.confidence1To5,
+        edge: p.edge,
+        tour: p.tourEvent?.tour,
+        event: p.tourEvent?.eventName,
+        course: p.tourEvent?.courseName,
+        date: p.tourEvent?.startDate,
+      }))
+
+    // Get tournaments this player has been in (field entries)
+    const fieldEntries = await prisma.fieldEntry.findMany({
+      where: { playerId: player.id },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+      include: {
+        tourEvent: { select: { tour: true, eventName: true, courseName: true, startDate: true, endDate: true } }
+      }
+    })
+
+    const tournaments = fieldEntries.map(fe => ({
+      tour: fe.tourEvent?.tour,
+      event: fe.tourEvent?.eventName,
+      course: fe.tourEvent?.courseName,
+      startDate: fe.tourEvent?.startDate,
+    }))
+
+    // Build response
+    res.json({
+      data: {
+        id: player.id,
+        name: player.canonicalName,
+        slug,
+        country: player.country,
+        dgId: player.dgId,
+        tours: player.tourIds || [],
+        aliases: player.aliases || [],
+        form: form ? {
+          sgTotal: form.sgTotal,
+          sgApp: form.sgApp,
+          sgPutt: form.sgPutt,
+          sgOtt: form.sgOtt,
+          sgArg: form.sgArg,
+          formLabel: form.formLabel,
+          formIndicator: form.formIndicator,
+          formScore: form.formScore,
+          dgRank: form.dgRank,
+          owgrRank: form.owgrRank,
+        } : null,
+        courseFit: courseFit ? {
+          courseFitScore: courseFit.courseFitScore,
+          totalFitAdjustment: courseFit.totalFitAdjustment,
+          components: courseFit.components,
+        } : null,
+        historicalRounds: historicalRounds.map(hr => ({
+          tour: hr.tour,
+          eventId: hr.eventId,
+          year: hr.year,
+          round: hr.round,
+          stats: hr.statsJson,
+          strokesGained: hr.strokesGainedJson,
+        })),
+        pickHistory: picks,
+        recentTournaments: tournaments,
+        totalPicks: picks.length,
+        totalWins: picks.filter(p => p.edge > 0).length,
+      }
+    })
+  } catch (error) {
+    logger.error('Failed to get player details', { error: error.message, slug: req.params.slug })
+    res.status(500).json({ error: 'Failed to get player details' })
+  }
+})
+
+// GET /api/courses — list all courses
+app.get('/api/courses', async (req, res) => {
+  try {
+    const courses = await prisma.course.findMany({
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, par: true, yardage: true, typeTags: true, lat: true, lng: true }
+    })
+    const data = courses.map(c => ({
+      id: c.id,
+      name: c.name,
+      slug: nameToSlug(c.name),
+      par: c.par,
+      yardage: c.yardage,
+      typeTags: c.typeTags || [],
+      lat: c.lat,
+      lng: c.lng,
+    }))
+    res.json({ data })
+  } catch (error) {
+    logger.error('Failed to list courses', { error: error.message })
+    res.status(500).json({ error: 'Failed to list courses' })
+  }
+})
+
+// GET /api/courses/:slug — full course deep dive
+app.get('/api/courses/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params
+
+    // Find course by slug
+    const allCourses = await prisma.course.findMany()
+    const course = allCourses.find(c => nameToSlug(c.name) === slug)
+    if (!course) {
+      return res.status(404).json({ error: 'Course not found' })
+    }
+
+    // Find all tour events at this course
+    const events = await prisma.tourEvent.findMany({
+      where: { courseName: course.name },
+      orderBy: { startDate: 'desc' },
+      take: 20,
+      include: {
+        betRecommendations: {
+          take: 30,
+          orderBy: [{ confidence1To5: 'desc' }, { edge: 'desc' }],
+          include: { override: { select: { status: true, tierOverride: true, selectionName: true } } }
+        },
+        run: { select: { status: true } }
+      }
+    })
+
+    // Get historical rounds at this course (via tour events)
+    const eventIds = events.map(e => e.id)
+    const historicalRounds = await prisma.historicalRound.findMany({
+      where: { eventId: { in: events.map(e => e.dgEventId).filter(Boolean) } },
+      orderBy: [{ year: 'desc' }, { round: 'asc' }],
+      take: 200,
+    })
+
+    // Compute course scoring averages from historical data
+    const scores = historicalRounds
+      .map(hr => {
+        const s = hr.statsJson
+        return s?.total_score ?? s?.score ?? s?.total ?? null
+      })
+      .filter(s => s != null && s > 0)
+    const avgScore = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length) : null
+    const scoringRange = scores.length > 0
+      ? { low: Math.min(...scores), high: Math.max(...scores) }
+      : null
+
+    // Format events with picks
+    const formattedEvents = events
+      .filter(e => e.run?.status === 'completed')
+      .map(e => ({
+        id: e.id,
+        tour: e.tour,
+        eventName: e.eventName,
+        startDate: e.startDate,
+        endDate: e.endDate,
+        location: e.location,
+        picks: e.betRecommendations
+          .filter(b => b.override?.status !== 'archived')
+          .map(b => ({
+            id: b.id,
+            tier: b.override?.tierOverride || b.tier,
+            selection: b.override?.selectionName || b.selection,
+            bestOdds: b.bestOdds,
+            bestBookmaker: b.bestBookmaker,
+            confidence: b.confidence1To5,
+            edge: b.edge,
+            marketKey: b.marketKey,
+          }))
+      }))
+
+    // Get weather forecasts for this course
+    const weatherForecasts = await prisma.weatherForecast.findMany({
+      where: { tourEventId: { in: eventIds } },
+      orderBy: { fetchedAt: 'desc' },
+      take: 5,
+      select: { forecastJson: true, provider: true, fetchedAt: true }
+    })
+
+    res.json({
+      data: {
+        id: course.id,
+        name: course.name,
+        slug,
+        par: course.par,
+        yardage: course.yardage,
+        typeTags: course.typeTags || [],
+        lat: course.lat,
+        lng: course.lng,
+        notes: course.notes,
+        scoringStats: {
+          avgScore,
+          scoringRange,
+          roundsAnalyzed: scores.length,
+        },
+        events: formattedEvents,
+        weather: weatherForecasts.map(w => ({
+          forecast: w.forecastJson,
+          provider: w.provider,
+          fetchedAt: w.fetchedAt,
+        })),
+        totalEvents: formattedEvents.length,
+      }
+    })
+  } catch (error) {
+    logger.error('Failed to get course details', { error: error.message, slug: req.params.slug })
+    res.status(500).json({ error: 'Failed to get course details' })
+  }
+})
+
 // ── Push Notifications API ────────────────────────────────────────────
 
 import {

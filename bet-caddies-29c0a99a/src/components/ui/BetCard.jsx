@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, ChevronUp, Zap, TrendingUp, TrendingDown, Minus, Cloud, Sun, Wind, Droplets, Plus, ExternalLink, Check, Users, Star, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 
 const tourColors = {
   PGA: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
@@ -216,7 +216,12 @@ export default function BetCard({ bet, onAddBet, onPlaceBet, isAdded = false, pr
 
         {/* Player Name */}
         <h3 className="text-2xl font-bold text-white mb-1">
-          {bet.selection_name}
+          <Link
+            to={`/player/${(bet.selection_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`}
+            className="hover:text-emerald-400 transition-colors"
+          >
+            {bet.selection_name}
+          </Link>
         </h3>
 
         {/* Matchup opponent */}

@@ -668,6 +668,28 @@ export class BetCaddiesApi {
     }
   }
 
+  players = {
+    list: async () => {
+      const response = await this.client.get('/api/players')
+      return response.data || []
+    },
+    get: async (slug) => {
+      const response = await this.client.get(`/api/players/${encodeURIComponent(slug)}`)
+      return response.data || null
+    },
+  }
+
+  courses = {
+    list: async () => {
+      const response = await this.client.get('/api/courses')
+      return response.data || []
+    },
+    get: async (slug) => {
+      const response = await this.client.get(`/api/courses/${encodeURIComponent(slug)}`)
+      return response.data || null
+    },
+  }
+
   push = {
     getVapidKey: async () => {
       const response = await this.client.get('/api/push/vapid-public-key')

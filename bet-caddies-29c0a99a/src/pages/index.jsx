@@ -29,6 +29,9 @@ import Profile from "./Profile";
 
 import Results from "./Results";
 
+import PlayerPage from "./PlayerPage";
+import CoursePage from "./CoursePage";
+
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 
 const PAGES = {
@@ -115,7 +118,10 @@ function PagesContent() {
                 <Route path="/Profile" element={<Profile />} />
                 
                 <Route path="/Results" element={<Results />} />
-                
+
+                <Route path="/player/:slug" element={<PlayerPage />} />
+                <Route path="/course/:slug" element={<CoursePage />} />
+
             </Routes>
         </Layout>
     );
