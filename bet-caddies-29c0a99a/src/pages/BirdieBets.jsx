@@ -6,7 +6,8 @@ import { motion } from 'framer-motion';
 import { Zap, SlidersHorizontal } from 'lucide-react';
 import BetCard from '@/components/ui/BetCard';
 import TourFilter from '@/components/ui/TourFilter';
-import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import BetGridSkeleton from '@/components/ui/skeletons/BetGridSkeleton';
+import SEOHead from '@/components/SEOHead';
 import EmptyState from '@/components/ui/EmptyState';
 import ContentGate from '@/components/ui/ContentGate';
 import {
@@ -53,6 +54,8 @@ export default function BirdieBets() {
 
 
   return (
+    <>
+    <SEOHead title="Birdie Bets — Medium Risk Golf Picks" description="Golf betting picks at 6/1 to 10/1 odds. Balanced risk-reward selections backed by edge analysis and course fit data." path="/BirdieBets" />
     <ContentGate resourceType="page" resourceId="birdie-bets" blur>
     <div className="max-w-7xl mx-auto px-4 py-8">
       <motion.div
@@ -94,7 +97,7 @@ export default function BirdieBets() {
       </div>
 
       {isLoading ? (
-        <LoadingSpinner text="Loading Birdie Bets..." />
+        <BetGridSkeleton />
       ) : filteredBets.length === 0 ? (
         <EmptyState
           icon={Zap}
@@ -131,5 +134,6 @@ export default function BirdieBets() {
       )}
     </div>
     </ContentGate>
+    </>
   );
 }

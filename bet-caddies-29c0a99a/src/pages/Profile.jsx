@@ -26,6 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import SEOHead from '@/components/SEOHead';
 
 const tours = [
   { id: 'PGA', name: 'PGA Tour' },
@@ -84,7 +85,9 @@ export default function Profile() {
   if (!user) return null;
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
+    <>
+      <SEOHead title="Profile Settings" description="Customize your BetCaddies experience. Set your preferred tours, risk level, and notification preferences." path="/Profile" />
+      <div className="max-w-2xl mx-auto px-4 py-8">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -272,5 +275,6 @@ export default function Profile() {
         </motion.div>
       </div>
     </div>
+    </>
   );
 }

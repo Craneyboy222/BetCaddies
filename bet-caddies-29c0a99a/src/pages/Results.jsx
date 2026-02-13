@@ -31,7 +31,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import ResultsSkeleton from '@/components/ui/skeletons/ResultsSkeleton';
+import SEOHead from '@/components/SEOHead';
 import EmptyState from '@/components/ui/EmptyState';
 
 const categoryIcons = {
@@ -139,6 +140,8 @@ export default function Results() {
   const levelLabels = { free: 'Free', pro: 'Pro', elite: 'Elite' };
 
   return (
+    <>
+      <SEOHead title="Results — Historical Picks" description="Transparent track record of all BetCaddies golf betting picks. Win rates, P&L, and detailed results by category and tour." path="/Results" />
     <div className="max-w-6xl mx-auto px-4 py-8">
       {/* Header */}
       <motion.div
@@ -176,7 +179,7 @@ export default function Results() {
       </div>
 
       {isLoading ? (
-        <LoadingSpinner text="Loading picks..." />
+        <ResultsSkeleton />
       ) : error ? (
         <EmptyState
           icon={BarChart3}
@@ -553,5 +556,6 @@ export default function Results() {
         </div>
       </motion.div>
     </div>
+    </>
   );
 }

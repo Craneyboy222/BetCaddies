@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import LoadingSpinner from '@/components/ui/LoadingSpinner'
+import LiveTrackingSkeleton from '@/components/ui/skeletons/LiveTrackingSkeleton'
+import SEOHead from '@/components/SEOHead'
 import { ArrowDown, ArrowUp, Minus, Calendar, Clock, Trophy, TrendingUp, Lock } from 'lucide-react'
 
 const TOUR_LABELS = {
@@ -495,7 +496,7 @@ export default function LiveBetTracking() {
   const { data: activeResponse, isLoading: activeLoading } = useQuery({
     queryKey: ['liveTrackingActive'],
     queryFn: () => api.liveTracking.active(),
-    refetchInterval: 300000
+    refetchInterval: 120000
   })
 
   const activeEvents = useMemo(() => {
@@ -513,7 +514,7 @@ export default function LiveBetTracking() {
     queryKey: ['liveTrackingEvent', selectedEvent?.dgEventId, selectedEvent?.tour],
     enabled: Boolean(selectedEvent?.dgEventId && selectedEvent?.tour),
     queryFn: () => api.liveTracking.event(selectedEvent.dgEventId, selectedEvent.tour),
-    refetchInterval: selectedEvent?.status === 'live' ? 300000 : 600000
+    refetchInterval: selectedEvent?.status === 'live' ? 60000 : 300000
   })
 
   const rows = eventResponse?.rows || []
@@ -521,6 +522,8 @@ export default function LiveBetTracking() {
   const eventIssues = eventResponse?.dataIssues || []
 
   return (
+    <>
+    <SEOHead title="Live Bet Tracking" description="Track BetCaddies recommended picks in real time. Live tournament positions, odds movement, and bet outcomes." path="/LiveBetTracking" />
     <div className="max-w-7xl mx-auto px-4 py-12">
       <div className="flex flex-col gap-2 mb-8">
         <h1 className="text-3xl font-bold text-white">Live Bet Tracking</h1>
@@ -530,7 +533,7 @@ export default function LiveBetTracking() {
       </div>
 
       {activeLoading ? (
-        <LoadingSpinner text="Loading tournaments..." />
+        <LiveTrackingSkeleton />
       ) : activeEvents.length === 0 ? (
         <div className="bg-slate-800/30 border border-slate-700/50 rounded-xl p-6 text-center">
           <Trophy className="w-12 h-12 text-slate-600 mx-auto mb-4" />
@@ -593,7 +596,7 @@ export default function LiveBetTracking() {
             </div>
 
             {eventLoading ? (
-              <LoadingSpinner text="Loading tracker..." />
+              <LiveTrackingSkeleton />
             ) : rows.length === 0 ? (
               <div className="text-slate-300 text-center py-8">
                 <TrendingUp className="w-10 h-10 text-slate-600 mx-auto mb-3" />
@@ -637,5 +640,6 @@ export default function LiveBetTracking() {
         </div>
       )}
     </div>
+    </>
   )
 }

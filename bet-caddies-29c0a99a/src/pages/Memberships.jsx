@@ -6,7 +6,8 @@ import { motion } from 'framer-motion';
 import { Crown, Check, Star, ArrowRight, CreditCard, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import MembershipsSkeleton from '@/components/ui/skeletons/MembershipsSkeleton';
+import SEOHead from '@/components/SEOHead';
 import CmsBlocks from '@/components/CmsBlocks';
 
 export default function Memberships() {
@@ -114,12 +115,14 @@ export default function Memberships() {
 
   const levelLabels = { free: 'Free', pro: 'Pro', elite: 'Elite' };
 
-  if (isLoading) return <LoadingSpinner text="Loading packages..." />;
+  if (isLoading) return <MembershipsSkeleton />;
 
   const hasMultipleBillingPeriods = packages.some(p => p.billing_period === 'monthly') &&
     packages.some(p => p.billing_period === 'yearly');
 
   return (
+    <>
+      <SEOHead title="Membership Plans" description="Unlock premium golf betting picks, detailed AI analysis, and exclusive features. Plans starting from just a few pounds per month." path="/Memberships" />
     <div className="max-w-7xl mx-auto px-4 py-12">
       {/* Header */}
       <motion.div
@@ -342,5 +345,6 @@ export default function Memberships() {
         <p>All prices in GBP. Cancel anytime. No hidden fees.</p>
       </div>
     </div>
+    </>
   );
 }

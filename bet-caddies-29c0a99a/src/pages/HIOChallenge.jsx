@@ -24,6 +24,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import SEOHead from '@/components/SEOHead';
 
 export default function HIOChallenge() {
   const [user, setUser] = useState(null);
@@ -133,7 +134,9 @@ export default function HIOChallenge() {
   if (isLoading) return <LoadingSpinner text="Loading challenge..." />;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
+    <>
+      <SEOHead title="Hole-in-One Challenge" description="Enter the BetCaddies Hole-in-One Challenge for a chance to win prizes." path="/HIOChallenge" />
+      <div className="max-w-4xl mx-auto px-4 py-8">
       {/* Hero Section */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -435,5 +438,6 @@ export default function HIOChallenge() {
         </DialogContent>
       </Dialog>
     </div>
+    </>
   );
 }

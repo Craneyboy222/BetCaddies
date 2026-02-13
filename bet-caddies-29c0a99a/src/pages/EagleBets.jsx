@@ -6,7 +6,8 @@ import { motion } from 'framer-motion';
 import { Trophy, SlidersHorizontal } from 'lucide-react';
 import BetCard from '@/components/ui/BetCard';
 import TourFilter from '@/components/ui/TourFilter';
-import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import BetGridSkeleton from '@/components/ui/skeletons/BetGridSkeleton';
+import SEOHead from '@/components/SEOHead';
 import EmptyState from '@/components/ui/EmptyState';
 import ContentGate from '@/components/ui/ContentGate';
 import {
@@ -53,6 +54,8 @@ export default function EagleBets() {
 
 
   return (
+    <>
+    <SEOHead title="Eagle Bets — High Reward Golf Picks" description="Premium golf bets at 11/1 odds and above. Higher risk, higher reward picks with detailed AI analysis." path="/EagleBets" />
     <ContentGate resourceType="page" resourceId="eagle-bets" blur>
     <div className="max-w-7xl mx-auto px-4 py-8">
       <motion.div
@@ -94,7 +97,7 @@ export default function EagleBets() {
       </div>
 
       {isLoading ? (
-        <LoadingSpinner text="Loading Eagle Bets..." />
+        <BetGridSkeleton />
       ) : filteredBets.length === 0 ? (
         <EmptyState
           icon={Trophy}
@@ -131,5 +134,6 @@ export default function EagleBets() {
       )}
     </div>
     </ContentGate>
+    </>
   );
 }

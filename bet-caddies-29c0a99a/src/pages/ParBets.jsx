@@ -6,7 +6,8 @@ import { motion } from 'framer-motion';
 import { Target, SlidersHorizontal } from 'lucide-react';
 import BetCard from '@/components/ui/BetCard';
 import TourFilter from '@/components/ui/TourFilter';
-import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import BetGridSkeleton from '@/components/ui/skeletons/BetGridSkeleton';
+import SEOHead from '@/components/SEOHead';
 import EmptyState from '@/components/ui/EmptyState';
 import {
   Select,
@@ -53,6 +54,8 @@ export default function ParBets() {
 
 
   return (
+    <>
+    <SEOHead title="Par Bets — Low Risk Golf Picks" description="Curated golf bets at 5/1 odds and under. Our highest-confidence, lowest-risk selections across all major tours." path="/ParBets" />
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Header */}
       <motion.div
@@ -96,7 +99,7 @@ export default function ParBets() {
 
       {/* Bets Grid */}
       {isLoading ? (
-        <LoadingSpinner text="Loading Par Bets..." />
+        <BetGridSkeleton />
       ) : filteredBets.length === 0 ? (
         <EmptyState
           icon={Target}
@@ -133,5 +136,6 @@ export default function ParBets() {
         </div>
       )}
     </div>
+    </>
   );
 }

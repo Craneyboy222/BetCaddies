@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import EmptyState from '@/components/ui/EmptyState';
 import { useTrackedBets } from '@/hooks/useTrackedBets';
+import SEOHead from '@/components/SEOHead';
 
 const marketColors = {
   'Outright Winner': 'bg-purple-500/20 text-purple-300 border-purple-500/30',
@@ -24,7 +25,9 @@ export default function MyBets() {
   const { trackedBets, toggleTrack, clearAll } = useTrackedBets();
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8">
+    <>
+      <SEOHead title="My Bets" description="Your personal bet tracker. View and manage your saved golf betting selections." path="/MyBets" />
+      <div className="max-w-5xl mx-auto px-4 py-8">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -115,5 +118,6 @@ export default function MyBets() {
         </div>
       )}
     </div>
+    </>
   );
 }

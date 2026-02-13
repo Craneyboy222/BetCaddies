@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import SEOHead from '@/components/SEOHead';
 
 export default function Account() {
   const [user, setUser] = useState(null);
@@ -65,7 +66,9 @@ export default function Account() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-8">
+    <>
+      <SEOHead title="My Account" description="Manage your BetCaddies account, subscription, and billing." path="/Account" />
+      <div className="max-w-3xl mx-auto px-4 py-8">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
@@ -199,5 +202,6 @@ export default function Account() {
         </div>
       </motion.div>
     </div>
+    </>
   );
 }

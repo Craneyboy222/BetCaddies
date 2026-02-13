@@ -18,7 +18,8 @@ import {
 import { Button } from '@/components/ui/button';
 import BetCard from '@/components/ui/BetCard';
 import TourFilter from '@/components/ui/TourFilter';
-import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import HomeSkeleton from '@/components/ui/skeletons/HomeSkeleton';
+import SEOHead from '@/components/SEOHead';
 import EmptyState from '@/components/ui/EmptyState';
 import CmsBlocks from '@/components/CmsBlocks';
 
@@ -139,6 +140,8 @@ export default function Home() {
   const currentWeek = bets[0]?.run_id?.replace('weekly_', '') || 'This Week';
 
   return (
+    <>
+      <SEOHead description="AI-powered golf betting picks across PGA, DPWT, LIV, and KFT tours. Data-driven selections with transparent analysis and live tracking." path="/" />
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Hero Section */}
       <motion.div
@@ -218,7 +221,7 @@ export default function Home() {
         </div>
 
         {betsLoading ? (
-          <LoadingSpinner text="Loading picks..." />
+          <HomeSkeleton />
         ) : featuredBets.length === 0 ? (
           <EmptyState
             icon={Target}
@@ -326,5 +329,6 @@ export default function Home() {
         </p>
       </div>
     </div>
+    </>
   );
 }

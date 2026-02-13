@@ -45,6 +45,7 @@ import { errorHandler } from './middleware/error-handler.js'
 import { AppError, Errors } from './lib/app-error.js'
 import { processEmailQueue } from './workers/email-worker.js'
 import { parsePagination, paginatedResponse } from './lib/pagination.js'
+import { sanitizeText, sanitizeHtml, sanitizeJson } from './lib/sanitize.js'
 import { httpsRedirect } from './middleware/https-redirect.js'
 
 // --- Phase 1: Validate environment before anything else ---
@@ -2669,11 +2670,11 @@ app.post('/api/admin/email-templates', authRequired, adminOnly, async (req, res)
 
     const template = await prisma.emailTemplate.create({
       data: {
-        slug,
-        name,
-        subject,
-        bodyHtml,
-        bodyText: bodyText || null,
+        slug: sanitizeText(slug),
+        name: sanitizeText(name),
+        subject: sanitizeText(subject),
+        bodyHtml: sanitizeHtml(bodyHtml),
+        bodyText: bodyText ? sanitizeText(bodyText) : null,
         variables: variables || null,
         enabled: enabled !== false
       }
@@ -2688,9 +2689,15 @@ app.post('/api/admin/email-templates', authRequired, adminOnly, async (req, res)
 app.put('/api/admin/email-templates/:id', authRequired, adminOnly, async (req, res) => {
   try {
     const { id } = req.params
+    const data = { ...req.body }
+    if (data.name) data.name = sanitizeText(data.name)
+    if (data.subject) data.subject = sanitizeText(data.subject)
+    if (data.bodyHtml) data.bodyHtml = sanitizeHtml(data.bodyHtml)
+    if (data.bodyText) data.bodyText = sanitizeText(data.bodyText)
+    if (data.slug) data.slug = sanitizeText(data.slug)
     const template = await prisma.emailTemplate.update({
       where: { id },
-      data: req.body
+      data
     })
     res.json(template)
   } catch (error) {
@@ -5466,10 +5473,11 @@ app.put(
     try {
       const { key } = req.params
       const before = await prisma.siteContent.findUnique({ where: { key } })
+      const sanitizedJson = sanitizeJson(req.body.json)
       const updated = await prisma.siteContent.upsert({
         where: { key },
-        create: { key, json: req.body.json },
-        update: { json: req.body.json }
+        create: { key, json: sanitizedJson },
+        update: { json: sanitizedJson }
       })
 
       await writeAuditLog({
@@ -5572,11 +5580,11 @@ app.post(
       const created = await prisma.page.create({
         data: {
           slug,
-          title,
+          title: sanitizeText(title),
           status: status || 'draft',
           templateKey: template_key || null,
-          blocks: blocks ?? [],
-          seo: seo ?? null,
+          blocks: blocks ? sanitizeJson(blocks) : [],
+          seo: seo ? sanitizeJson(seo) : null,
           publishedAt: status === 'published' ? new Date() : null
         }
       })
@@ -5639,11 +5647,11 @@ app.put(
         where: { id },
         data: {
           slug: req.body.slug ?? before.slug,
-          title: req.body.title ?? before.title,
+          title: req.body.title ? sanitizeText(req.body.title) : before.title,
           status: nextStatus,
           templateKey: req.body.template_key ?? before.templateKey,
-          blocks: req.body.blocks ?? before.blocks,
-          seo: req.body.seo ?? before.seo,
+          blocks: req.body.blocks ? sanitizeJson(req.body.blocks) : before.blocks,
+          seo: req.body.seo ? sanitizeJson(req.body.seo) : before.seo,
           publishedAt
         }
       })

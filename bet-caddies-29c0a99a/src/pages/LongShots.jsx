@@ -6,7 +6,8 @@ import { motion } from 'framer-motion';
 import { Sparkles, SlidersHorizontal } from 'lucide-react';
 import BetCard from '@/components/ui/BetCard';
 import TourFilter from '@/components/ui/TourFilter';
-import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import BetGridSkeleton from '@/components/ui/skeletons/BetGridSkeleton';
+import SEOHead from '@/components/SEOHead';
 import EmptyState from '@/components/ui/EmptyState';
 import ContentGate from '@/components/ui/ContentGate';
 import {
@@ -53,6 +54,8 @@ export default function LongShots() {
 
 
   return (
+    <>
+    <SEOHead title="Long Shots — 60/1+ Golf Bets" description="Extreme longshot golf picks at 60/1 and above. Data-backed speculative selections for the biggest potential payouts." path="/LongShots" />
     <ContentGate resourceType="page" resourceId="long-shots" blur>
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Header */}
@@ -97,7 +100,7 @@ export default function LongShots() {
 
       {/* Bets Grid */}
       {isLoading ? (
-        <LoadingSpinner text="Loading Long Shots..." />
+        <BetGridSkeleton />
       ) : filteredBets.length === 0 ? (
         <EmptyState
           icon={Sparkles}
@@ -135,5 +138,6 @@ export default function LongShots() {
       )}
     </div>
     </ContentGate>
+    </>
   );
 }

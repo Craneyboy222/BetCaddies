@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import CmsBlocks from '@/components/CmsBlocks';
+import SEOHead from '@/components/SEOHead';
 
 const tours = [
   { id: 'PGA', name: 'PGA Tour', description: 'Premier US tour' },
@@ -121,7 +122,9 @@ export default function Join() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-12">
+    <>
+      <SEOHead title="Join BetCaddies" description="Create your BetCaddies account and start receiving AI-powered golf betting picks every week." path="/Join" />
+      <div className="min-h-screen flex items-center justify-center px-4 py-12">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -336,5 +339,6 @@ export default function Join() {
         )}
       </motion.div>
     </div>
+    </>
   );
 }
