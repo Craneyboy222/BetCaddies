@@ -45,12 +45,25 @@ const formatProb = (value) => {
   return `${pct.toFixed(1)}%`
 }
 
-const getProbColor = (prob) => {
-  if (prob == null) return 'text-slate-500'
-  if (prob >= 0.5) return 'text-emerald-400'
-  if (prob >= 0.25) return 'text-emerald-300'
-  if (prob >= 0.1) return 'text-amber-400'
-  return 'text-slate-400'
+const CASHOUT_STAKE = 10
+const CASHOUT_MARGIN = 0.95 // 5% bookmaker haircut
+
+const estimateCashOut = (baseline, current) => {
+  if (!Number.isFinite(baseline) || !Number.isFinite(current) || baseline <= 1 || current <= 1) return null
+  return CASHOUT_STAKE * (baseline / current) * CASHOUT_MARGIN
+}
+
+const formatCashOut = (value) => {
+  if (!Number.isFinite(value)) return null
+  return `£${value.toFixed(2)}`
+}
+
+const getCashOutColor = (cashOut) => {
+  if (!Number.isFinite(cashOut)) return 'text-slate-500'
+  if (cashOut >= CASHOUT_STAKE * 1.2) return 'text-emerald-400'
+  if (cashOut >= CASHOUT_STAKE) return 'text-emerald-300'
+  if (cashOut >= CASHOUT_STAKE * 0.8) return 'text-amber-400'
+  return 'text-rose-400'
 }
 
 const formatDate = (dateStr) => {
@@ -173,26 +186,22 @@ const BetOutcomeBadge = ({ outcome, playerStatus, onTrack }) => {
   )
 }
 
-const ProbabilityCell = ({ row }) => {
-  const mProb = row.marketProb
-  const wProb = row.winProb
-  const label = row.marketProbLabel
+const CashOutCell = ({ row }) => {
+  const cashOut = estimateCashOut(row.baselineOddsDecimal, row.currentOddsDecimal)
+  if (cashOut == null) return <span className="text-slate-600">—</span>
 
-  if (mProb == null && wProb == null) return <span className="text-slate-600">—</span>
+  const pl = cashOut - CASHOUT_STAKE
+  const plSign = pl >= 0 ? '+' : ''
+  const plColor = pl >= 0 ? 'text-emerald-400' : 'text-rose-400'
 
   return (
     <div className="flex flex-col items-start gap-0.5">
-      {mProb != null && (
-        <div className={`font-semibold ${getProbColor(mProb)}`}>
-          {formatProb(mProb)}
-          <span className="text-[10px] text-slate-500 ml-1">{label}</span>
-        </div>
-      )}
-      {wProb != null && mProb !== wProb && (
-        <div className="text-[10px] text-slate-500">
-          {formatProb(wProb)} win
-        </div>
-      )}
+      <span className={`font-semibold ${getCashOutColor(cashOut)}`}>
+        {formatCashOut(cashOut)}
+      </span>
+      <span className={`text-[10px] ${plColor}`}>
+        {plSign}£{pl.toFixed(2)}
+      </span>
     </div>
   )
 }
@@ -374,7 +383,7 @@ const LiveEventTable = ({ rows, status }) => {
             <th>Now</th>
             <th>Movement</th>
             <th>Result</th>
-            <th>Model Prob</th>
+            <th>Est. Cash Out</th>
             <th>Edge</th>
           </tr>
           <tr className="text-[10px] text-slate-500">
@@ -393,7 +402,7 @@ const LiveEventTable = ({ rows, status }) => {
             <th className="text-slate-500 font-normal">Current</th>
             <th></th>
             <th></th>
-            <th className="text-slate-500 font-normal">Live DG</th>
+            <th className="text-slate-500 font-normal">£10 stake</th>
             <th></th>
           </tr>
         </thead>
@@ -474,7 +483,7 @@ const LiveEventTable = ({ rows, status }) => {
                 <BetOutcomeBadge outcome={row.betOutcome} playerStatus={row.playerStatus} onTrack={onTrack} />
               </td>
               <td>
-                <ProbabilityCell row={row} />
+                <CashOutCell row={row} />
               </td>
               <td className="text-emerald-400">{formatEdge(row.edge) || '—'}</td>
               </>
