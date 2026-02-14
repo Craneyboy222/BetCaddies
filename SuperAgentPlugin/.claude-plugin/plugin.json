@@ -1,0 +1,13 @@
+{
+  "name": "ai-super-agent",
+  "version": "1.0.0",
+  "description": "The supreme meta-agent orchestrator. Dynamically scales from lightweight single-pass execution for simple tasks to full synthetic-plan-simulate-optimize-verify pipeline for complex enterprise builds. Creates skills on the fly. Routes subtasks to optimal models. Orchestrates parallel agents. Self-optimizes through adaptive execution. This is the agent's operating system.",
+  "author": {
+    "name": "BetCaddies",
+    "email": "dev@betcaddies.com"
+  },
+  "commands": ["./commands/"],
+  "agents": ["./agents/"],
+  "skills": ["./skills/"],
+  "mcpServers": {}
+}

@@ -1,0 +1,17 @@
+{
+  "description": "AI Super Agent auto-activation hooks. The skill activates on every user prompt unless bypass signals are detected.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/classify-complexity.sh",
+            "description": "Classify task complexity and set pipeline configuration. Outputs SIMPLE/MEDIUM/COMPLEX/META/BYPASS to guide the agent's pipeline activation depth."
+          }
+        ]
+      }
+    ]
+  }
+}
