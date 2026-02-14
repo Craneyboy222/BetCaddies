@@ -32,7 +32,8 @@ import {
   capturePayPalOrder,
   getStripeClient,
   getStripeConfig,
-  getPayPalConfig
+  getPayPalConfig,
+  getSquareConfig
 } from '../services/payment-service.js'
 import { validateEnvironment } from './env-validation.js'
 import { requestLogger } from './middleware/request-logger.js'
@@ -226,7 +227,7 @@ app.use(requestLogger())
 // Public rate limiter: applies to all non-admin, non-webhook API routes
 app.use('/api', (req, res, next) => {
   // Skip rate limiting for admin routes (they have authRequired) and webhooks
-  if (req.path.startsWith('/admin') || req.path.startsWith('/stripe/webhook') || req.path.startsWith('/cron/')) {
+  if (req.path.startsWith('/admin') || req.path.startsWith('/stripe/webhook') || req.path.startsWith('/square/webhook') || req.path.startsWith('/cron/')) {
     return next()
   }
   return publicLimiter(req, res, next)
@@ -3577,6 +3578,112 @@ app.post('/api/paypal/capture-order', authRequired, async (req, res) => {
   }
 })
 
+// Square: webhook for payment completion
+app.post('/api/square/webhook', express.json(), async (req, res) => {
+  try {
+    const { type, data } = req.body || {}
+
+    // Verify webhook signature if configured
+    const squareCfg = await getSquareConfig()
+    if (squareCfg.webhookSignatureKey) {
+      const signature = req.headers['x-square-hmacsha256-signature']
+      if (!signature) {
+        logger.warn('Square webhook missing signature header')
+        return res.status(400).json({ error: 'Missing signature' })
+      }
+      const { createHmac } = await import('crypto')
+      const body = JSON.stringify(req.body)
+      const notificationUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+      const hmac = createHmac('sha256', squareCfg.webhookSignatureKey)
+        .update(notificationUrl + body)
+        .digest('base64')
+      if (hmac !== signature) {
+        logger.warn('Square webhook signature mismatch')
+        return res.status(401).json({ error: 'Invalid signature' })
+      }
+    }
+
+    if (type === 'payment.completed') {
+      const payment = data?.object?.payment
+      if (!payment) return res.status(200).json({ received: true })
+
+      const orderId = payment.order_id
+      const amountMoney = payment.amount_money
+      const metadata = payment.note ? (() => { try { return JSON.parse(payment.note) } catch { return null } })() : null
+
+      // Try to retrieve order metadata from Square
+      let orderMetadata = metadata
+      if (!orderMetadata && orderId && squareCfg.accessToken) {
+        const baseUrl = squareCfg.mode === 'live' ? 'https://connect.squareup.com' : 'https://connect.squareupsandbox.com'
+        try {
+          const orderRes = await fetch(`${baseUrl}/v2/orders/${orderId}`, {
+            headers: {
+              Authorization: `Bearer ${squareCfg.accessToken}`,
+              'Square-Version': '2024-01-18'
+            }
+          })
+          if (orderRes.ok) {
+            const orderData = await orderRes.json()
+            orderMetadata = orderData?.order?.metadata || null
+          }
+        } catch (e) {
+          logger.warn('Failed to fetch Square order metadata', { orderId, error: e.message })
+        }
+      }
+
+      const packageId = orderMetadata?.package_id
+      const userEmail = orderMetadata?.user_email
+
+      if (packageId && userEmail) {
+        await upsertMembershipSubscription({
+          userEmail,
+          packageId,
+          stripeCustomerId: null,
+          stripeSubscriptionId: null,
+          stripePriceId: null,
+          status: 'active',
+          currentPeriodEnd: null,
+          cancelAtPeriodEnd: false
+        })
+
+        const sub = await prisma.membershipSubscription.findFirst({
+          where: { userEmail, packageId, status: 'active' },
+          orderBy: { createdDate: 'desc' }
+        })
+        if (sub) {
+          await prisma.membershipSubscription.update({
+            where: { id: sub.id },
+            data: { paymentProvider: 'square' }
+          })
+        }
+
+        // Create invoice record
+        await prisma.invoice.create({
+          data: {
+            subscriptionId: sub?.id || null,
+            userEmail,
+            amount: amountMoney ? amountMoney.amount / 100 : 0,
+            currency: (amountMoney?.currency || 'GBP').toLowerCase(),
+            status: 'paid',
+            paymentProvider: 'square',
+            providerInvoiceId: payment.id || orderId,
+            description: `Square payment for ${sub?.packageName || 'membership'}`
+          }
+        })
+
+        logger.info('Square webhook: subscription activated', { userEmail, packageId })
+      } else {
+        logger.warn('Square webhook: payment completed but missing package/email metadata', { orderId })
+      }
+    }
+
+    res.status(200).json({ received: true })
+  } catch (error) {
+    logger.error('Square webhook processing failed', { error: error.message })
+    res.status(500).json({ error: 'Webhook processing failed' })
+  }
+})
+
 // Public: active Hole In One challenge
 app.get('/api/hio/challenge/active', async (req, res) => {
   try {
@@ -6482,7 +6589,7 @@ app.put(
   async (req, res) => {
     try {
       const { provider } = req.params
-      const validProviders = ['stripe', 'paypal', 'apple_pay', 'google_pay']
+      const validProviders = ['stripe', 'paypal', 'square', 'apple_pay', 'google_pay']
       if (!validProviders.includes(provider)) {
         return res.status(400).json({ error: `Invalid provider: ${provider}` })
       }
@@ -6577,6 +6684,33 @@ app.post('/api/admin/payment-settings/test', authRequired, adminOnly, async (req
           return res.json({ success: false, error: `Auth failed: ${tokenRes.status} ${text}` })
         }
         return res.json({ success: true, message: `PayPal ${cfg.mode} connection successful` })
+      } catch (e) {
+        return res.json({ success: false, error: e.message })
+      }
+    }
+
+    if (provider === 'square') {
+      const cfg = await getSquareConfig()
+      if (!cfg.accessToken || !cfg.locationId) {
+        return res.json({ success: false, error: 'Square not configured (missing access token or location ID)' })
+      }
+      try {
+        const baseUrl = cfg.mode === 'live'
+          ? 'https://connect.squareup.com'
+          : 'https://connect.squareupsandbox.com'
+        const locRes = await fetch(`${baseUrl}/v2/locations/${cfg.locationId}`, {
+          headers: {
+            Authorization: `Bearer ${cfg.accessToken}`,
+            'Square-Version': '2024-01-18'
+          }
+        })
+        if (!locRes.ok) {
+          const text = await locRes.text()
+          return res.json({ success: false, error: `Square API failed: ${locRes.status} ${text}` })
+        }
+        const locData = await locRes.json()
+        const locName = locData?.location?.name || 'Unknown'
+        return res.json({ success: true, message: `Square ${cfg.mode} connection successful (location: ${locName})` })
       } catch (e) {
         return res.json({ success: false, error: e.message })
       }

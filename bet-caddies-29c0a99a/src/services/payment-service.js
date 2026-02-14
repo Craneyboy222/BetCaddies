@@ -1,6 +1,6 @@
 /**
  * Unified Payment Service
- * Routes checkout to the appropriate provider (Stripe / PayPal)
+ * Routes checkout to the appropriate provider (Stripe / PayPal / Square)
  * Provider credentials can come from env vars OR from DB (PaymentSettings table)
  */
 import Stripe from 'stripe'
@@ -253,10 +253,98 @@ export async function capturePayPalOrder(orderId) {
   return await res.json()
 }
 
+// ── Square ────────────────────────────────────────────────────────────────
+async function getSquareConfig() {
+  const dbSettings = await loadProviderSettings('square')
+  return {
+    accessToken: dbSettings?.secretKey || process.env.SQUARE_ACCESS_TOKEN || null,
+    locationId: dbSettings?.publicKey || process.env.SQUARE_LOCATION_ID || null,
+    webhookSignatureKey: dbSettings?.webhookSecret || process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || null,
+    mode: dbSettings?.mode || process.env.SQUARE_MODE || 'sandbox',
+    enabled: dbSettings ? dbSettings.enabled : !!(process.env.SQUARE_ACCESS_TOKEN && process.env.SQUARE_LOCATION_ID),
+    successUrl: dbSettings?.additionalConfig?.successUrl || process.env.SQUARE_SUCCESS_URL || null,
+    cancelUrl: dbSettings?.additionalConfig?.cancelUrl || process.env.SQUARE_CANCEL_URL || null
+  }
+}
+
+function getSquareBaseUrl(mode) {
+  return mode === 'live'
+    ? 'https://connect.squareup.com'
+    : 'https://connect.squareupsandbox.com'
+}
+
+export async function createSquareCheckout({ pkg, email, successUrl, cancelUrl }) {
+  const cfg = await getSquareConfig()
+  if (!cfg.enabled || !cfg.accessToken) throw new Error('Square is not configured')
+  if (!cfg.locationId) throw new Error('Square location ID is not configured')
+
+  const baseUrl = getSquareBaseUrl(cfg.mode)
+  const finalSuccessUrl = successUrl || cfg.successUrl
+  const finalCancelUrl = cancelUrl || cfg.cancelUrl
+  if (!finalSuccessUrl || !finalCancelUrl) throw new Error('Square success/cancel URLs not configured')
+
+  const idempotencyKey = `bc-${pkg.id}-${email}-${Date.now()}`
+
+  const payload = {
+    idempotency_key: idempotencyKey,
+    order: {
+      location_id: cfg.locationId,
+      line_items: [{
+        name: `${pkg.name} - ${pkg.billingPeriod}`,
+        quantity: '1',
+        base_price_money: {
+          amount: Math.round(pkg.price * 100), // Square uses smallest currency unit (pence)
+          currency: 'GBP'
+        }
+      }],
+      metadata: {
+        package_id: pkg.id,
+        user_email: email,
+        billing_period: pkg.billingPeriod
+      }
+    },
+    checkout_options: {
+      redirect_url: finalSuccessUrl,
+      merchant_support_email: 'support@betcaddies.com'
+    },
+    pre_populated_data: {
+      buyer_email: email
+    }
+  }
+
+  const res = await fetch(`${baseUrl}/v2/online-checkout/payment-links`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${cfg.accessToken}`,
+      'Square-Version': '2024-01-18'
+    },
+    body: JSON.stringify(payload)
+  })
+
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Square checkout creation failed: ${res.status} ${text}`)
+  }
+
+  const data = await res.json()
+  const checkoutUrl = data.payment_link?.url
+  if (!checkoutUrl) throw new Error('Square payment link missing URL')
+
+  return {
+    url: checkoutUrl,
+    provider: 'square',
+    orderId: data.payment_link?.order_id || null
+  }
+}
+
 // ── Unified checkout ───────────────────────────────────────────────────────
 export async function createCheckout({ provider, pkg, email, successUrl, cancelUrl }) {
   if (provider === 'paypal') {
     return createPayPalCheckout({ pkg, email, successUrl, cancelUrl })
+  }
+  if (provider === 'square') {
+    return createSquareCheckout({ pkg, email, successUrl, cancelUrl })
   }
   // Default to Stripe
   return createStripeCheckout({ pkg, email, successUrl, cancelUrl })
@@ -266,6 +354,7 @@ export async function createCheckout({ provider, pkg, email, successUrl, cancelU
 export async function getAvailableProviders() {
   const stripeConfig = await getStripeConfig()
   const paypalConfig = await getPayPalConfig()
+  const squareConfig = await getSquareConfig()
 
   const providers = []
   if (stripeConfig.enabled && stripeConfig.secretKey) {
@@ -273,6 +362,9 @@ export async function getAvailableProviders() {
   }
   if (paypalConfig.enabled && paypalConfig.clientId) {
     providers.push({ id: 'paypal', name: 'PayPal', enabled: true, modes: ['paypal'] })
+  }
+  if (squareConfig.enabled && squareConfig.accessToken) {
+    providers.push({ id: 'square', name: 'Square', enabled: true, modes: ['card'] })
   }
 
   return providers
@@ -299,4 +391,4 @@ export async function getUserAccessLevel(emailOrUserId) {
 }
 
 // Re-export for convenience
-export { getStripeClient, getStripeConfig, getPayPalConfig, getPayPalAccessToken }
+export { getStripeClient, getStripeConfig, getPayPalConfig, getPayPalAccessToken, getSquareConfig }

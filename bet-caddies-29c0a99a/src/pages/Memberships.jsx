@@ -84,7 +84,7 @@ export default function Memberships() {
       return;
     }
 
-    if (!pkg?.stripe_price_id && selectedProvider === 'stripe') {
+    if (selectedProvider === 'stripe' && !pkg?.stripe_price_id) {
       alert('Checkout is not configured for this package yet.');
       return;
     }

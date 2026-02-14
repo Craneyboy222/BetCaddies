@@ -37,6 +37,20 @@ const PROVIDERS = [
       { key: 'webhook_secret', label: 'Webhook ID', placeholder: 'WH-...' }
     ],
     configFields: []
+  },
+  {
+    id: 'square',
+    name: 'Square',
+    description: 'Credit/debit cards via Square',
+    fields: [
+      { key: 'public_key', label: 'Location ID', placeholder: 'L...' },
+      { key: 'secret_key', label: 'Access Token', placeholder: 'EAAAl...' },
+      { key: 'webhook_secret', label: 'Webhook Signature Key', placeholder: 'your-signature-key' }
+    ],
+    configFields: [
+      { key: 'successUrl', label: 'Success URL', placeholder: 'https://yoursite.com/memberships?success=true' },
+      { key: 'cancelUrl', label: 'Cancel URL', placeholder: 'https://yoursite.com/memberships?cancelled=true' }
+    ]
   }
 ];
 
@@ -273,7 +287,7 @@ export default function PaymentSettingsAdmin() {
       <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg p-4 text-sm text-slate-400">
         <Shield className="w-4 h-4 inline mr-1 text-amber-400" />
         API keys are stored securely in the database. Secret keys are never displayed after saving.
-        You can also set keys via environment variables (STRIPE_SECRET_KEY, PAYPAL_CLIENT_ID, etc.)
+        You can also set keys via environment variables (STRIPE_SECRET_KEY, PAYPAL_CLIENT_ID, SQUARE_ACCESS_TOKEN, etc.)
         which will be used as fallbacks.
       </div>
     </div>
