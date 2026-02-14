@@ -40,7 +40,9 @@ const formatEdge = (value) => {
 
 const formatProb = (value) => {
   if (value == null || !Number.isFinite(value)) return null
-  return `${(value * 100).toFixed(1)}%`
+  const pct = value * 100
+  if (value > 0 && pct < 0.1) return '< 0.1%'
+  return `${pct.toFixed(1)}%`
 }
 
 const getProbColor = (prob) => {
@@ -122,7 +124,7 @@ const TierBadge = ({ tier }) => {
   )
 }
 
-const BetOutcomeBadge = ({ outcome, playerStatus }) => {
+const BetOutcomeBadge = ({ outcome, playerStatus, onTrack }) => {
   if (outcome === 'won') {
     return (
       <Badge className="bg-emerald-500/30 text-emerald-300 border border-emerald-500/50 font-semibold animate-pulse">
@@ -159,6 +161,13 @@ const BetOutcomeBadge = ({ outcome, playerStatus }) => {
     )
   }
   // Pending
+  if (onTrack) {
+    return (
+      <Badge className="bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-xs">
+        On Track
+      </Badge>
+    )
+  }
   return (
     <span className="text-slate-500 text-xs">In Play</span>
   )
@@ -263,6 +272,19 @@ const RoundScore = ({ score }) => {
   return <span>{score}</span>
 }
 
+// Determine if a player's current position is "on track" for their bet market
+const isOnTrackForMarket = (row) => {
+  const pos = row.position
+  if (pos == null) return false
+  const market = (row.market || '').toLowerCase()
+  if (market === 'win' || market === 'frl') return pos <= 3
+  if (market === 'top_5' || market === 'top5') return pos <= 5
+  if (market === 'top_10' || market === 'top10') return pos <= 10
+  if (market === 'top_20' || market === 'top20') return pos <= 20
+  if (market === 'make_cut') return pos <= 65
+  return false
+}
+
 const LiveEventTable = ({ rows, status }) => {
   // Separate active bets from definitively lost bets
   // A bet is definitively lost if the player missed the cut (or WD/DQ) and the bet requires placement
@@ -325,9 +347,10 @@ const LiveEventTable = ({ rows, status }) => {
       {/* Legend for non-bettors */}
       <div className="mb-4 p-3 bg-slate-800/50 rounded-lg text-xs text-slate-400">
         <span className="font-semibold text-white">Quick Guide:</span>{' '}
-        <span className="text-emerald-400">↓ Green = Good</span> (odds dropped, your pick is doing well) •{' '}
+        <span className="text-emerald-400">↓ Green = Good</span> (odds dropped or in a winning position) •{' '}
         <span className="text-rose-400">↑ Red = Drifting</span> (odds rising, player losing ground) •{' '}
-        <span className="text-emerald-300">🏆 WON = Bet Settled</span>
+        <span className="text-emerald-300">🏆 WON = Bet Settled</span> •{' '}
+        <span className="text-amber-500">* = Cross-book odds</span> (different bookmaker)
       </div>
       
       {activeBets.length === 0 && eliminatedBets.length > 0 ? (
@@ -378,9 +401,11 @@ const LiveEventTable = ({ rows, status }) => {
           {activeBets.map((row, idx) => {
             const isWin = row.betOutcome === 'won'
             const oddsReduced = row.oddsMovement?.direction === 'DOWN'
+            const onTrack = isOnTrackForMarket(row)
+            const doingWell = oddsReduced || onTrack
             const rowClass = isWin
               ? 'border-b border-emerald-500/50 bg-emerald-500/10'
-              : oddsReduced
+              : doingWell
               ? 'border-b border-emerald-500/30 bg-emerald-500/5'
               : 'border-b border-slate-800 hover:bg-slate-800/50'
             return (
@@ -401,7 +426,7 @@ const LiveEventTable = ({ rows, status }) => {
                 </>
               ) : (
               <>
-              <td className={`py-3 font-medium sticky left-0 ${isWin ? 'text-emerald-300 bg-emerald-500/10' : oddsReduced ? 'text-emerald-200 bg-emerald-500/5' : 'text-white bg-slate-900'}`}>
+              <td className={`py-3 font-medium sticky left-0 ${isWin ? 'text-emerald-300 bg-emerald-500/10' : doingWell ? 'text-emerald-200 bg-emerald-500/5' : 'text-white bg-slate-900'}`}>
                 {isWin && '🏆 '}{row.playerName}
               </td>
               <td className={row.position != null && row.position <= 10 ? 'text-emerald-400 font-bold' : ''}>
@@ -436,7 +461,9 @@ const LiveEventTable = ({ rows, status }) => {
                 {row.currentOddsDecimal ? (
                   <div className="flex flex-col">
                     <span className="font-mono">{row.currentOddsDecimal.toFixed(2)}</span>
-                    <span className="text-xs text-slate-500">{row.currentBook || ''}</span>
+                    <span className={`text-xs ${row.oddsMovement?.crossBook ? 'text-amber-500' : 'text-slate-500'}`}>
+                      {row.currentBook || ''}{row.oddsMovement?.crossBook ? ' *' : ''}
+                    </span>
                   </div>
                 ) : '—'}
               </td>
@@ -444,7 +471,7 @@ const LiveEventTable = ({ rows, status }) => {
                 <MovementIndicator movement={row.oddsMovement} />
               </td>
               <td>
-                <BetOutcomeBadge outcome={row.betOutcome} playerStatus={row.playerStatus} />
+                <BetOutcomeBadge outcome={row.betOutcome} playerStatus={row.playerStatus} onTrack={onTrack} />
               </td>
               <td>
                 <ProbabilityCell row={row} />

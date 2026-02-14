@@ -339,6 +339,17 @@ const selectSameBookOffer = (offers = [], baselineBook = null) => {
   return offers.find(o => o.book && normalizeBookKey(o.book) === normalizedBaseline) || null
 }
 
+const selectBestAvailableOffer = (offers = []) => {
+  if (!offers.length) return null
+  // Pick the offer with the lowest decimal odds (shortest price = most favorable for the bettor
+  // because lower odds means the book thinks the player is more likely to hit the market)
+  return offers.reduce((best, o) => {
+    if (!Number.isFinite(o.oddsDecimal)) return best
+    if (!best || o.oddsDecimal < best.oddsDecimal) return o
+    return best
+  }, null)
+}
+
 const getAllowedBooks = () => getAllowedBooksSet()
 
 export const createLiveTrackingService = ({
@@ -920,11 +931,21 @@ export const createLiveTrackingService = ({
       const baselineOdds = Number.isFinite(pick.bestOdds) ? pick.bestOdds : null
       const baselineBook = pick.bestBookmaker || null
 
-      // STRICT same-book matching — only compare odds from the same bookmaker
-      const bestOffer = selectSameBookOffer(playerOffers, baselineBook)
+      // Same-book matching first, then cross-book fallback
+      const sameBookOffer = selectSameBookOffer(playerOffers, baselineBook)
+      const bestOffer = sameBookOffer || selectBestAvailableOffer(playerOffers)
+      const isCrossBook = Boolean(!sameBookOffer && bestOffer)
       if (!bestOffer) {
         await logIssue(tour, 'warning', 'ODDS_MISSING', 'No live odds for player/market from allowed books', {
           dgPlayerId,
+          marketKey: pick.marketKey
+        })
+      } else if (isCrossBook) {
+        await logIssue(tour, 'info', 'ODDS_CROSS_BOOK', 'Same-book odds unavailable, using cross-book fallback', {
+          dgPlayerId,
+          selection: pick.selection,
+          baselineBook,
+          fallbackBook: bestOffer.book,
           marketKey: pick.marketKey
         })
       }
@@ -992,7 +1013,7 @@ export const createLiveTrackingService = ({
       const currentOdds = bestOffer?.oddsDecimal ?? null
       const currentBook = bestOffer?.book ?? null
       const movement = computeOddsMovement(resolvedBaselineOdds, currentOdds)
-      const crossBook = Boolean(resolvedBaselineBook && currentBook && resolvedBaselineBook !== currentBook)
+      const crossBook = isCrossBook
 
       // Determine if we have enough info to determine the event status for outcome calculation
       // We'll calculate this properly after all rows are processed
