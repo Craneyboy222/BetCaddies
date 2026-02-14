@@ -25,7 +25,13 @@ const KNOWN_BOOK_KEYS = new Set([
   'bovada',
   'betonline',
   'sugarhouse',
-  'twinspires'
+  'twinspires',
+  'paddypower',
+  'betway',
+  'ladbrokes',
+  'coral',
+  'betfred',
+  'boylesports'
 ])
 
 const NON_BOOK_KEYS = new Set([

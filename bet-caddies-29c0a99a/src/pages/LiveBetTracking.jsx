@@ -520,6 +520,8 @@ export default function LiveBetTracking() {
   const rows = eventResponse?.rows || []
   const eventStatus = eventResponse?.status || selectedEvent?.status || 'upcoming'
   const eventIssues = eventResponse?.dataIssues || []
+  const eventMismatchIssue = eventIssues.find(issue => issue.step === 'EVENT_MISMATCH')
+  const hasEventMismatch = Boolean(eventMismatchIssue)
 
   return (
     <>
@@ -594,6 +596,26 @@ export default function LiveBetTracking() {
                 </div>
               )}
             </div>
+
+            {hasEventMismatch && (
+              <div className="mb-4 p-4 bg-amber-500/10 border border-amber-500/50 rounded-lg">
+                <div className="flex items-start gap-3">
+                  <span className="text-amber-400 text-xl mt-0.5">&#9888;</span>
+                  <div>
+                    <h3 className="text-amber-300 font-semibold">Tournament Data Mismatch</h3>
+                    <p className="text-amber-200/80 text-sm mt-1">
+                      The live data feed is currently returning data for a different tournament than your picks.
+                      Scoring and odds cannot be displayed until the correct tournament goes live.
+                    </p>
+                    {eventMismatchIssue?.evidence?.liveEventId && (
+                      <p className="text-amber-200/60 text-xs mt-2">
+                        Expected: {eventMismatchIssue.evidence.expectedEventId} | Received: {eventMismatchIssue.evidence.liveEventId}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {eventLoading ? (
               <LiveTrackingSkeleton />

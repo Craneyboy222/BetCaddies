@@ -3269,9 +3269,10 @@ app.get('/api/live-tracking/event/:dgEventId', optionalAuth, async (req, res) =>
         const oddsB = b.baselineOddsDecimal ?? 0
         return oddsB - oddsA
       })
-      const top5 = rows.slice(0, 5)
+      const isFullAccess = userLevel === 'eagle' || isAdmin
+      const tierRows = isFullAccess ? rows : rows.slice(0, 5)
       const locked = !canAccessTier(userLevel, tier)
-      for (const row of top5) {
+      for (const row of tierRows) {
         if (locked) {
           row.playerName = 'Locked Player'
           row.baselineBook = null
@@ -3282,7 +3283,7 @@ app.get('/api/live-tracking/event/:dgEventId', optionalAuth, async (req, res) =>
         }
         row.locked = locked
       }
-      limitedRows.push(...top5)
+      limitedRows.push(...tierRows)
     }
 
     // Return cloned response with limited rows

@@ -624,6 +624,7 @@ export const createLiveTrackingService = ({
 
     return {
       scoringRows,
+      inPlayRows,
       inPlayPayload,
       statsPayload
     }
@@ -713,15 +714,19 @@ export const createLiveTrackingService = ({
       return response
     }
 
-    const tourCode = dataGolfClient.resolveTourCode(tour, 'odds')
-    if (!tourCode) {
+    const oddsTourCode = dataGolfClient.resolveTourCode(tour, 'odds')
+    const predsTourCode = dataGolfClient.resolveTourCode(tour, 'preds')
+    if (!oddsTourCode) {
       await logIssue(tour, 'warning', 'TOUR_NOT_SUPPORTED', 'Tour not supported for live tracking odds', { tour })
+    }
+    if (!predsTourCode) {
+      await logIssue(tour, 'warning', 'TOUR_NOT_SUPPORTED', 'Tour not supported for live tracking preds', { tour })
     }
 
     // Fetch live scoring first to validate event match
-    const { scoringRows, inPlayPayload, statsPayload } = tourCode
-      ? await fetchLiveScoring(tourCode)
-      : { scoringRows: [], inPlayPayload: null, statsPayload: null }
+    const { scoringRows, inPlayRows, inPlayPayload, statsPayload } = predsTourCode
+      ? await fetchLiveScoring(predsTourCode)
+      : { scoringRows: [], inPlayRows: [], inPlayPayload: null, statsPayload: null }
 
     // CRITICAL: Verify the live data is for the SAME tournament as our picks.
     // DataGolf endpoints return data for whatever event is currently live on the tour,
@@ -750,6 +755,31 @@ export const createLiveTrackingService = ({
       }
     }
 
+    // Separate index from in-play rows for probability extraction
+    // Stats rows don't have probability fields, so we need in-play specifically
+    const inPlayIndex = new Map()
+    if (eventMatches) {
+      for (const row of inPlayRows) {
+        const id = resolvePlayerId(row)
+        if (!id) continue
+        inPlayIndex.set(String(id), row)
+      }
+    }
+
+    // Name-based indexes for fallback when dgPlayerId is missing
+    const scoringNameIndex = new Map()
+    const inPlayNameIndex = new Map()
+    if (eventMatches) {
+      for (const row of scoringRows) {
+        const name = resolvePlayerName(row)
+        if (name) scoringNameIndex.set(name.toLowerCase(), row)
+      }
+      for (const row of inPlayRows) {
+        const name = resolvePlayerName(row)
+        if (name) inPlayNameIndex.set(name.toLowerCase(), row)
+      }
+    }
+
     if (eventMatches && !scoringRows.length) {
       await logIssue(tour, 'warning', 'STATS_MISSING', 'Live scoring feeds returned no rows', {
         tour,
@@ -763,9 +793,9 @@ export const createLiveTrackingService = ({
 
     const oddsResults = eventMatches
       ? await withConcurrencyLimit(uniqueMarkets, maxConcurrency, async (marketKey) => {
-          if (!tourCode) return { marketKey, payload: null, offers: [] }
+          if (!oddsTourCode) return { marketKey, payload: null, offers: [] }
           try {
-            const result = await fetchLiveOddsByMarket(tourCode, marketKey)
+            const result = await fetchLiveOddsByMarket(oddsTourCode, marketKey)
             if (!result.payload) {
               await logIssue(tour, 'warning', 'MARKET_NOT_SUPPORTED', 'DataGolf returned no payload for market', {
                 marketKey
@@ -807,9 +837,35 @@ export const createLiveTrackingService = ({
         })
       }
 
-      const scoringRow = dgPlayerId ? scoringIndex.get(dgPlayerId) : null
+      // Resolve scoring: dgPlayerId -> exact name -> last-name fallback
+      let scoringRow = dgPlayerId ? scoringIndex.get(dgPlayerId) : null
+      if (!scoringRow && pick.selection) {
+        const selKey = pick.selection.toLowerCase()
+        scoringRow = scoringNameIndex.get(selKey) || null
+        if (!scoringRow) {
+          const lastName = selKey.split(',')[0]?.trim()
+          if (lastName && lastName.length >= 3) {
+            for (const [name, row] of scoringNameIndex) {
+              if (name.split(',')[0]?.trim() === lastName) {
+                scoringRow = row
+                await logIssue(tour, 'warning', 'MAPPING_LOW_CONFIDENCE', 'Matched scoring by last name only', {
+                  selection: pick.selection, matchedName: resolvePlayerName(row)
+                })
+                break
+              }
+            }
+          }
+        }
+      }
       const scoring = scoringRow ? extractScoringFields(scoringRow) : null
-      const probs = scoringRow ? extractProbabilities(scoringRow) : null
+
+      // Resolve probabilities: prefer in-play feed (has prob fields), fall back to scoring row
+      let probRow = dgPlayerId ? (inPlayIndex.get(dgPlayerId) || scoringIndex.get(dgPlayerId)) : null
+      if (!probRow && pick.selection) {
+        const selKey = pick.selection.toLowerCase()
+        probRow = inPlayNameIndex.get(selKey) || scoringNameIndex.get(selKey) || null
+      }
+      const probs = probRow ? extractProbabilities(probRow) : null
       const marketProb = getMarketRelevantProb(pick.marketKey, probs)
 
       if (dgPlayerId && !scoringRow) {
@@ -840,6 +896,24 @@ export const createLiveTrackingService = ({
             selection: pick.selection,
             marketKey: pick.marketKey
           })
+        }
+      }
+
+      // Last-name fallback for odds matching
+      if (!playerOffers.length && pick.selection) {
+        const lastName = pick.selection.toLowerCase().split(',')[0]?.trim()
+        if (lastName && lastName.length >= 3) {
+          playerOffers = offers.filter((offer) => {
+            if (!offer.selectionName) return false
+            return offer.selectionName.toLowerCase().split(',')[0]?.trim() === lastName
+          })
+          if (playerOffers.length) {
+            await logIssue(tour, 'warning', 'MAPPING_LOW_CONFIDENCE', 'Matched live odds by last name only', {
+              selection: pick.selection,
+              matchedName: playerOffers[0].selectionName,
+              marketKey: pick.marketKey
+            })
+          }
         }
       }
 
@@ -886,6 +960,13 @@ export const createLiveTrackingService = ({
               capturedAt: new Date()
             }
           })
+          await logIssue(tour, 'warning', 'BASELINE_FALLBACK_CREATED',
+            'Created baseline from first live odds because pipeline bestOdds was missing', {
+              betRecommendationId: pick.id,
+              selection: pick.selection,
+              fallbackOdds: bestOffer.oddsDecimal,
+              fallbackBook: bestOffer.book
+            })
         }
       }
 
@@ -898,9 +979,14 @@ export const createLiveTrackingService = ({
       }
 
       if (!Number.isFinite(resolvedBaselineOdds)) {
-        await logIssue(tour, 'warning', 'BASELINE_MISSING', 'Baseline odds missing for recommendation', {
-          betRecommendationId: pick.id
-        })
+        await logIssue(tour, 'error', 'BASELINE_MISSING',
+          'Baseline odds missing — pipeline bestOdds is non-finite and no live fallback available', {
+            betRecommendationId: pick.id,
+            selection: pick.selection,
+            marketKey: pick.marketKey,
+            pipelineBestOdds: pick.bestOdds,
+            pipelineBestBookmaker: pick.bestBookmaker
+          })
       }
 
       const currentOdds = bestOffer?.oddsDecimal ?? null
