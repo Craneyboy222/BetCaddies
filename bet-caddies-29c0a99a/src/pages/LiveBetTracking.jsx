@@ -137,6 +137,13 @@ const BetOutcomeBadge = ({ outcome, playerStatus }) => {
       </Badge>
     )
   }
+  if (outcome === 'push') {
+    return (
+      <Badge className="bg-slate-500/20 text-slate-400 border border-slate-500/50">
+        Void
+      </Badge>
+    )
+  }
   if (playerStatus === 'MC') {
     return (
       <Badge className="bg-amber-500/20 text-amber-400 border border-amber-500/50">
@@ -264,30 +271,11 @@ const RoundScore = ({ score }) => {
 }
 
 const LiveEventTable = ({ rows, status }) => {
-  // Separate active bets from definitively lost bets
-  // A bet is definitively lost if the player missed the cut (or WD/DQ) and the bet requires placement
-  const isDefinitelyLost = (row) => {
-    if (row.betOutcome === 'lost') return true
-    const playerStatus = row.playerStatus
-    if (!playerStatus) return false
-    
-    // Player eliminated (MC, WD, DQ)
-    const isEliminated = playerStatus === 'MC' || playerStatus === 'WD' || playerStatus === 'DQ'
-    if (!isEliminated) return false
-    
-    // Check if the market requires the player to place/finish (not miss cut market)
-    const market = (row.market || '').toLowerCase()
-    const placementMarkets = ['win', 'top_5', 'top_10', 'top_20', 'top5', 'top10', 'top20', 'make_cut', 'frl']
-    return placementMarkets.some(m => market.includes(m))
-  }
-  
-  const activeBets = rows.filter(r => !isDefinitelyLost(r))
-  const eliminatedBets = rows.filter(r => isDefinitelyLost(r))
-  
-  // Calculate results summary from active bets only
+  // All bets stay in the main table — no collapsing into a hidden section
   const wins = rows.filter(r => r.betOutcome === 'won')
-  const losses = eliminatedBets
-  const pending = activeBets.filter(r => r.betOutcome === 'pending' || !r.betOutcome)
+  const losses = rows.filter(r => r.betOutcome === 'lost')
+  const pushes = rows.filter(r => r.betOutcome === 'push')
+  const pending = rows.filter(r => r.betOutcome === 'pending' || !r.betOutcome)
   
   return (
     <div className="overflow-x-auto">
@@ -330,10 +318,9 @@ const LiveEventTable = ({ rows, status }) => {
         <span className="text-emerald-300">🏆 WON = Bet Settled</span>
       </div>
       
-      {activeBets.length === 0 && eliminatedBets.length > 0 ? (
+      {rows.length === 0 ? (
         <div className="text-center py-8 text-slate-400">
-          <p className="text-lg">All bets for this event have been settled.</p>
-          <p className="text-sm mt-2">Check the eliminated bets below for the final results.</p>
+          <p className="text-lg">No bets tracked for this event.</p>
         </div>
       ) : (
       <table className="w-full text-sm text-left text-slate-200">
@@ -375,11 +362,17 @@ const LiveEventTable = ({ rows, status }) => {
           </tr>
         </thead>
         <tbody>
-          {activeBets.map((row, idx) => {
+          {rows.map((row, idx) => {
             const isWin = row.betOutcome === 'won'
+            const isLost = row.betOutcome === 'lost'
+            const isPush = row.betOutcome === 'push'
             const oddsReduced = row.oddsMovement?.direction === 'DOWN'
             const rowClass = isWin
               ? 'border-b border-emerald-500/50 bg-emerald-500/10'
+              : isLost
+              ? 'border-b border-red-500/30 bg-red-500/5 opacity-60'
+              : isPush
+              ? 'border-b border-slate-600 bg-slate-800/30 opacity-60'
               : oddsReduced
               ? 'border-b border-emerald-500/30 bg-emerald-500/5'
               : 'border-b border-slate-800 hover:bg-slate-800/50'
@@ -458,34 +451,6 @@ const LiveEventTable = ({ rows, status }) => {
       </table>
       )}
       
-      {/* Eliminated Bets - Collapsed Section */}
-      {eliminatedBets.length > 0 && (
-        <details className="mt-6">
-          <summary className="cursor-pointer text-slate-500 hover:text-slate-400 text-sm font-medium flex items-center gap-2">
-            <span className="text-red-400">✗</span>
-            Eliminated ({eliminatedBets.length} bets lost - MC/WD/DQ)
-          </summary>
-          <div className="mt-3 grid md:grid-cols-2 lg:grid-cols-3 gap-2">
-            {eliminatedBets.map((row, idx) => (
-              <div 
-                key={`eliminated-${row.dgPlayerId || row.playerName}-${row.market}-${idx}`}
-                className="bg-slate-800/20 rounded-lg border border-red-500/20 p-3 opacity-60"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="font-medium text-slate-400">{row.playerName}</span>
-                    <span className="text-red-400 text-xs ml-2">{row.playerStatus}</span>
-                  </div>
-                  <span className="text-slate-500 text-xs">@ {row.baselineOddsDecimal?.toFixed(2) || '—'}</span>
-                </div>
-                <div className="text-xs text-slate-500 mt-1">
-                  {row.market?.toUpperCase()} • Lost
-                </div>
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
     </div>
   )
 }

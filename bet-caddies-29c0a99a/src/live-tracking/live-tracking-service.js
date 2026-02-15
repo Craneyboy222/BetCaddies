@@ -234,16 +234,29 @@ export const determineFrlOutcome = (playerScoring, allPlayersScoring, eventStatu
  *
  * For FRL market, pass optional allPlayersScoring array to enable settlement.
  * Without it, FRL returns null (backward compatible).
+ *
+ * @param {string} market - Market key (e.g., 'win', 'top_5', 'make_cut')
+ * @param {object} scoring - Player scoring data
+ * @param {string} eventStatus - 'completed' | 'live' | etc.
+ * @param {Array|null} allPlayersScoring - Full field scoring (for FRL)
+ * @param {string|null} tour - Tour code (e.g., 'PGA', 'LIV')
  */
-export const determineBetOutcome = (market, scoring, eventStatus, allPlayersScoring = null) => {
+export const determineBetOutcome = (market, scoring, eventStatus, allPlayersScoring = null, tour = null) => {
   if (!market) return null
-  
+
   const marketKey = market.toLowerCase()
   const position = scoring?.position
   const status = scoring?.status
   const hasR3 = scoring?.r3 != null
   const hasR4 = scoring?.r4 != null
-  
+  const isLIV = tour === 'LIV'
+
+  // LIV Golf has no cut — make_cut and mc markets are invalid.
+  // Settle any such bets as push (void) since the concept doesn't apply.
+  if (isLIV && (marketKey === 'mc' || marketKey === 'make_cut')) {
+    return 'push'
+  }
+
   // For miss cut market
   if (marketKey === 'mc') {
     // Player missed cut (MC status) = bet WON
@@ -263,7 +276,7 @@ export const determineBetOutcome = (market, scoring, eventStatus, allPlayersScor
     }
     return 'pending'
   }
-  
+
   // For make cut market (opposite of mc)
   if (marketKey === 'make_cut') {
     if (status === 'MC') return 'lost'
@@ -277,7 +290,7 @@ export const determineBetOutcome = (market, scoring, eventStatus, allPlayersScor
     }
     return 'pending'
   }
-  
+
   // For win market
   if (marketKey === 'win') {
     if (status === 'MC' || status === 'WD' || status === 'DQ') return 'lost'
@@ -288,7 +301,7 @@ export const determineBetOutcome = (market, scoring, eventStatus, allPlayersScor
     }
     return 'pending'
   }
-  
+
   // For top N markets (top_5, top_10, top_20)
   const topNMatch = marketKey.match(/^top_?(\d+)$/)
   if (topNMatch) {
@@ -911,7 +924,7 @@ export const createLiveTrackingService = ({
       // Determine if we have enough info to determine the event status for outcome calculation
       // We'll calculate this properly after all rows are processed
       const preliminaryEventStatus = isCompleted ? 'completed' : 'live'
-      const betOutcome = determineBetOutcome(pick.marketKey, scoring, preliminaryEventStatus)
+      const betOutcome = determineBetOutcome(pick.marketKey, scoring, preliminaryEventStatus, null, tour)
 
       rows.push({
         dgPlayerId: dgPlayerId || null,
@@ -963,12 +976,11 @@ export const createLiveTrackingService = ({
     const hasLiveScoring = rows.some(r => r.position != null || r.totalToPar != null || r.playerStatus != null)
     
     // Detect tournament completion from scoring data
-    // Tournament is complete when all players with scoring data have finished round 4
+    // LIV Golf has 3 rounds (no cut), all other tours have 4 rounds
+    const finalRound = tour === 'LIV' ? 3 : 4
     const rowsWithScoring = rows.filter(r => r.currentRound != null && r.thru != null)
-    const allFinishedR4 = rowsWithScoring.length > 0 && rowsWithScoring.every(r => {
-      // Round 4 is typically the final round
-      // Player is done when in round 4 and thru=18 (or 'F' for finished)
-      const isInFinalRound = r.currentRound === 4
+    const allFinishedFinalRound = rowsWithScoring.length > 0 && rowsWithScoring.every(r => {
+      const isInFinalRound = r.currentRound === finalRound
       const hasCompletedRound = r.thru === 18 || r.thru === 'F' || r.thru === 'finished'
       return isInFinalRound && hasCompletedRound
     })
@@ -976,7 +988,7 @@ export const createLiveTrackingService = ({
     // Tournament is completed if:
     // 1. endDate has passed (isCompleted), OR
     // 2. All tracked players have completed the final round
-    const isTournamentComplete = isCompleted || allFinishedR4
+    const isTournamentComplete = isCompleted || allFinishedFinalRound
     
     // If tournament is detected as complete from scoring, re-calculate bet outcomes
     if (isTournamentComplete && !isCompleted) {
@@ -988,7 +1000,7 @@ export const createLiveTrackingService = ({
           r3: row.r3,
           r4: row.r4
         }
-        row.betOutcome = determineBetOutcome(row.market, scoring, 'completed')
+        row.betOutcome = determineBetOutcome(row.market, scoring, 'completed', null, tour)
       }
     }
     
